@@ -1,4 +1,6 @@
 # main.py
+import pandas as pd
+from pathlib import Path
 import argparse
 from pathlib import Path
 from typing import List
@@ -94,9 +96,19 @@ def main():
         global_config=backtest_cfg,
     )
 
-    runner.run()
-    print("Backtest finished.")
+    results = runner.run()  
+     # <<< ловим результаты
+         # Сохраняем в CSV
+    df = pd.DataFrame(results)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    out_path = Path(output_dir) / "backtest_results.csv"
+    df.to_csv(out_path, index=False)
+    print(f"Backtest finished. Saved to: {out_path}")
+    print(f"Backtest finished. Results count: {len(results)}")
 
+    # Для дебага — покажем первые 3 результата
+    for r in results[:3]:
+        print(r)
 
 if __name__ == "__main__":
     main()
