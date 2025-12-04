@@ -1,0 +1,19 @@
+# venv
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# Выходные данные
+output/
+logs/
+
+# Тяжёлые данные (свечки и т.п.)
+data/candles/
+data/sol_price/

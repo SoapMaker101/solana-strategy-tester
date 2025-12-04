@@ -1,0 +1,15 @@
+# config/strategies_example.yaml
+# Пример конфигурации стратегий для батч-прогона
+
+- name: RR_10_20
+  type: RR
+  params:
+    tp_pct: 10
+    sl_pct: 20
+
+- name: RRD_25_10_20
+  type: RRD
+  params:
+    drawdown_entry_pct: 25
+    tp_pct: 20
+    sl_pct: 10

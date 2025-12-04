@@ -1,0 +1,13 @@
+# config/backtest_example.yaml
+# Глобальные настройки бэктеста (будем развивать на следующих фазах)
+
+data:
+  candles_dir: "data/candles"
+  timeframe: "1m"
+
+report:
+  output_dir: "output/reports"
+
+runtime:
+  max_signals: 100000
+  parallel: false  # на будущее
