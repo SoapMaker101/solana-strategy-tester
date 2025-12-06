@@ -1,30 +1,59 @@
 # backtester/strategy/rr.py
-from typing import Dict, Any
-import pandas as pd
+from __future__ import annotations
 
-from .base import Strategy, StrategyConfig
+from typing import Any, Dict
+
+from ..models import StrategyInput, StrategyOutput
+from .base import Strategy
 
 
-class RRStrategy(Strategy):
+class DummyRRStrategy(Strategy):
     """
-    Простейший заглушечный RR (Risk-Reward) для Фазы 1.
-    Дальше заменим реальной логикой.
+    Заглушка RR: входит по первой свече после сигнала и выходит через N свечей
+    без реального TP/SL. Нужно только, чтобы проверить pipeline.
     """
 
-    def on_signal(self, signal: Dict[str, Any], price_series: pd.DataFrame) -> Dict[str, Any]:
-        # TODO: реализовать нормальный RR-алгоритм
-        return {
-            "strategy": self.config.name,
-            "type": self.config.type,
-            "signal_id": signal.get("id"),
-            "contract_address": signal.get("contract_address"),
-            "entry_time": signal.get("timestamp"),
-            "exit_time": signal.get("timestamp"),  # временная заглушка
-            "entry_price": float(price_series["close"].iloc[0]) if not price_series.empty else None,
-            "exit_price": float(price_series["close"].iloc[-1]) if not price_series.empty else None,
-            "pnl_pct": 0.0,
-            "meta": {
-                "params": self.config.params,
-                "note": "stub RR implementation (Phase 1 skeleton)",
+    def __init__(self, name: str = "RR_dummy", params: Dict[str, Any] | None = None) -> None:
+        super().__init__(name, params)
+        self.hold_candles = int(self.params.get("hold_candles", 10))
+
+    def run(self, data: StrategyInput) -> StrategyOutput:
+        candles = data.candles
+
+        if len(candles) == 0:
+            # нет данных по цене — стратегия не входит
+            return StrategyOutput(
+                entry_time=None,
+                entry_price=None,
+                exit_time=None,
+                exit_price=None,
+                pnl=0.0,
+                reason="no_entry",
+                meta={"reason_detail": "no candles"},
+            )
+
+        # Берём первую свечу после сигнала как входную
+        entry_candle = candles[0]
+        entry_price = entry_candle.close
+
+        # Свеча выхода: либо через N свечей, либо последняя
+        exit_index = min(self.hold_candles, len(candles) - 1)
+        exit_candle = candles[exit_index]
+        exit_price = exit_candle.close
+
+        # Пока что без комиссий и слippage ⇒ PnL просто в %
+        pnl_pct = (exit_price - entry_price) / entry_price
+
+        return StrategyOutput(
+            entry_time=entry_candle.timestamp,
+            entry_price=entry_price,
+            exit_time=exit_candle.timestamp,
+            exit_price=exit_price,
+            pnl=pnl_pct,
+            reason="timeout",  # формально вышли по времени
+            meta={
+                "hold_candles": self.hold_candles,
+                "entry_idx": 0,
+                "exit_idx": exit_index,
             },
-        }
+        )
