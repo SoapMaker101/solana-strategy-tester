@@ -1,27 +1,26 @@
-# backtester/signal_loader.py
+# backtester/infrastructure/signal_loader.py
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import json
 import pandas as pd
+
+from ..domain.models import Signal
 
 
 class SignalLoader(ABC):
     """
     Базовый интерфейс загрузчика сигналов.
-    BacktestRunner работает через этот абстрактный класс.
+    Application-слой работает через этот абстрактный класс.
     """
 
     @abstractmethod
-    def load_signals(self) -> pd.DataFrame:
+    def load_signals(self) -> List[Signal]:
         """
-        Должен вернуть DataFrame с колонками как минимум:
-        id, contract_address, timestamp, source, narrative
-
-        Можно добавлять свои поля (extra и т.п.).
+        Должен вернуть список Signal.
         """
         raise NotImplementedError
 
@@ -42,7 +41,7 @@ class CsvSignalLoader(SignalLoader):
     def __init__(self, path: str):
         self.path = Path(path)
 
-    def load_signals(self) -> pd.DataFrame:
+    def load_signals(self) -> List[Signal]:
         if not self.path.exists():
             raise FileNotFoundError(f"Signals file not found: {self.path}")
 
@@ -67,13 +66,20 @@ class CsvSignalLoader(SignalLoader):
                 return {}
 
             df["extra"] = df["extra_json"].apply(parse_extra)
+        else:
+            df["extra"] = [{} for _ in range(len(df))]
 
-        return df
-    
-    def load_signals_from_csv(path: str) -> pd.DataFrame:
-        """
-        Функция-обёртка для старого интерфейса.
-        Используется в runner.py: from .signal_loader import load_signals_from_csv
-        """
-        loader = CsvSignalLoader(path)
-        return loader.load_signals()
+        signals: List[Signal] = []
+        for row in df.itertuples(index=False):
+            signals.append(
+                Signal(
+                    id=str(row.id),
+                    contract_address=str(row.contract_address),
+                    timestamp=row.timestamp.to_pydatetime(),
+                    source=str(row.source),
+                    narrative=str(row.narrative),
+                    extra=getattr(row, "extra", {}) or {},
+                )
+            )
+
+        return signals

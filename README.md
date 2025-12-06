@@ -1,95 +1,275 @@
+README.md (прямо скопируй весь текст):
+
 # Solana Strategy Tester
 
-Дата обновления: **06.12.2025**
+> Snapshot as of **2025-12-06**
 
-Этот проект — модульный бэктестер для анализа стратегий торговли по сигналам на токенах Solana.  
-Архитектура построена с учётом расширяемости, пакетных прогонов и поддержки множества источников данных.
-
----
-
-## 🚀 Текущий статус (Фаза 2 завершена)
-
-### Реализовано:
-
-- Нормализованные сущности:
-  - `Signal`
-  - `Candle`
-  - `StrategyInput`
-  - `StrategyOutput`
-- Лоадеры данных:
-  - `CsvSignalLoader`
-  - `CsvPriceLoader`
-- Новый BacktestRunner:
-  - единый pipeline от сигнала до результата
-  - обработка ошибок стратегий
-  - экспорт результатов в CSV
-- Рабочие стратегии:
-  - RR (TP/SL)
-  - Runner (держим окно)
-  - RRD (заглушка)
-- Фейковые свечи для тестов.
-
-Полный отчёт о прогрессе находится в:
-docs/Project_Status_2025-12-06.md
-
-yaml
-Копировать код
+Local backtesting framework for testing trading strategies on Solana tokens based on external signals (Telegram, narrative feeds, etc.).  
+The goal: batch-test different strategies (RR, RRD, runner, etc.) on historical candles and find robust behaviour patterns.
 
 ---
 
-## 📦 Структура проекта
+## High-level idea
 
+Pipeline:
+
+1. **Signals** — incoming events like “MadApes posted token X at time T”.
+2. **Price data** — candles for token (from local CSVs for now).
+3. **Strategies** — pure Python logic that decides:
+   - enter / not enter,
+   - where to place TP / SL,
+   - when to exit.
+4. **Runner** — orchestrates:
+   - loads signals,
+   - loads candles window around each signal,
+   - runs all strategies,
+   - collects results.
+
+Current focus (Phase 2):  
+Clean architecture + stable pipeline: *signal → candles → StrategyInput → Strategy → StrategyOutput*.
+
+---
+
+## Project structure
+
+```text
 backtester/
-runner.py
-models.py
-signal_loader.py
-price_loader.py
-strategy/
-base.py
-rr_strategy.py
-rrd_strategy.py
-runner_strategy.py
-data/
-candles/
-signals/
+├── application/
+│   └── runner.py           # BacktestRunner: orchestrates signals → prices → strategies
+│
+├── domain/
+│   ├── models.py           # Signal, Candle, StrategyInput, StrategyOutput dataclasses
+│   ├── position.py         # Position model (for future position manager / reports)
+│   ├── strategy_base.py    # StrategyConfig + abstract Strategy interface
+│   ├── rr_strategy.py      # RR strategy (TP/SL on first candle after signal)
+│   ├── rrd_strategy.py     # RRD stub (Risk-Reward with Drawdown)
+│   └── runner_strategy.py  # Runner stub (hold from first to last candle in window)
+│
+├── infrastructure/
+│   ├── signal_loader.py    # CsvSignalLoader → List[Signal]
+│   ├── price_loader.py     # CsvPriceLoader  → List[Candle] from local CSV
+│   └── reporter.py         # Placeholder for future reporting / export
+│
+└── __init__.py
+
+
+Other dirs:
+
 config/
-output/reports/
+  backtest_example.yaml     # Global backtest config (window, paths)
+  strategies_example.yaml   # Strategy configs (name/type/params)
 
-yaml
-Копировать код
+data/
+  candles/
+    TESTTOKEN_1m.csv        # Fake candles for TESTTOKEN (for local testing)
 
----
+signals/
+  example_signals.csv       # Test signals for TESTTOKEN
 
-## 📈 Планы на следующие фазы
+Data contracts
+Signal
 
-### Фаза 2.5
-- Выбор реального поставщика данных (DexScreener / GMGN / Birdeye)
-- Создание `ApiPriceLoader`
-- Кэширование свечей
+Normalized signal format used across the project:
 
-### Фаза 3
-- Реализация настоящего RRD (вход по drawdown)
-- Оптимизация параметров стратегий
-- Построение отчётности (winrate, equity curve, drawdown)
+@dataclass
+class Signal:
+    id: str
+    contract_address: str
+    timestamp: datetime  # UTC
+    source: str          # e.g. "madapes"
+    narrative: str       # e.g. "memecoin"
+    extra: Dict[str, Any] = field(default_factory=dict)
 
----
 
-## 🛠 Запуск
+Loaded by CsvSignalLoader from signals/*.csv.
 
+Expected CSV columns:
+
+id
+
+contract_address
+
+timestamp (ISO8601, e.g. 2024-06-01T10:00:00Z)
+
+source
+
+narrative
+
+optional: extra_json (JSON string, parsed into extra)
+
+Candle
+
+Normalized candle format:
+
+@dataclass
+class Candle:
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+Loaded by CsvPriceLoader from:
+
+data/candles/<contract_address>_<timeframe>.csv
+
+
+Expected columns:
+
+timestamp
+
+open
+
+high
+
+low
+
+close
+
+volume
+
+Strategy API
+StrategyInput
+
+What a strategy receives:
+
+@dataclass
+class StrategyInput:
+    signal: Signal
+    candles: List[Candle]
+    global_params: Dict[str, Any]
+
+StrategyOutput
+
+What a strategy returns for one signal:
+
+@dataclass
+class StrategyOutput:
+    entry_time: Optional[datetime]
+    entry_price: Optional[float]
+    exit_time: Optional[datetime]
+    exit_price: Optional[float]
+    pnl: float
+    reason: Literal["tp", "sl", "timeout", "no_entry", "error"]
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+Base strategy
+class Strategy(ABC):
+    def __init__(self, config: StrategyConfig):
+        self.config = config
+
+    @abstractmethod
+    def on_signal(self, data: StrategyInput) -> StrategyOutput:
+        ...
+
+Implemented strategies (Phase 2)
+
+RRStrategy (domain/rr_strategy.py)
+
+Enter on first candle after signal.
+
+Exit on TP/SL or end of window.
+
+RRDStrategy (domain/rrd_strategy.py)
+
+Currently stub: behaves like runner, but marked in meta["rrd_stub"] = True.
+
+RunnerStrategy (domain/runner_strategy.py)
+
+Stub: hold from first to last candle in window.
+
+Runner
+
+BacktestRunner (application/runner.py) does:
+
+SignalLoader → List[Signal]
+
+For each signal:
+
+compute time window:
+
+start = timestamp - before_minutes
+
+end = timestamp + after_minutes
+
+PriceLoader → List[Candle]
+
+build StrategyInput
+
+run all strategies: strategy.on_signal(data)
+
+Collect results into List[Dict] with fields:
+
+signal_id
+
+contract_address
+
+strategy
+
+timestamp
+
+result (StrategyOutput)
+
+How to run
+1. Create virtualenv & install deps
+python -m venv .venv
+.\.venv\Scripts\activate   # Windows PowerShell
+pip install -r requirements.txt
+
+2. Make sure you have:
+
+signals/example_signals.csv
+
+data/candles/TESTTOKEN_1m.csv
+
+(For now fake candles are generated by a helper script like generate_fake_candles.py.)
+
+3. Run backtest
 python main.py
 
-Копировать код
 
-Результаты будут сохранены в:
+You should see output like:
 
-output/reports/backtest_results.csv
+Backtest finished. Results count: 6
+{... first result ...}
+{... second result ...}
+{... third result ...}
 
-yaml
-Копировать код
 
----
+By default it uses:
 
-## 📬 Контакты
+config/backtest_example.yaml
 
-Автор: Александр Чертушкин  
-GitHub: https://github.com/SoapMaker101
+config/strategies_example.yaml
+
+signals/example_signals.csv
+
+Next steps (roadmap)
+
+Planned phases:
+
+Phase 2.5 — data sources:
+
+DexScreener / GMGN / Axiom adapters for candles.
+
+Scripts to pre-download candles into data/candles/.
+
+Phase 3 — full RR/RRD implementation:
+
+Proper drawdown-based entry (RRD).
+
+Commission & slippage modelling.
+
+Phase 4 — Positions & portfolio:
+
+Position manager over multiple signals.
+
+XN-style global exit / portfolio-level risk.
+
+Phase 5+ — Integration with real signals:
+
+n8n / Telegram pipelines writing signals CSV/DB.
+
+Running batch backtests over large signal datasets.
