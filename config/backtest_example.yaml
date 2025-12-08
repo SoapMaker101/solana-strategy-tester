@@ -2,8 +2,12 @@
 # Глобальные настройки бэктеста (будем развивать на следующих фазах)
 
 data:
-  candles_dir: "data/candles"
+  loader: "gecko"         # "csv" или "gecko"
+  candles_dir: "data/candles/cached"
   timeframe: "1m"
+  before_minutes: 60
+  after_minutes: 360
+
 
 report:
   output_dir: "output/reports"
