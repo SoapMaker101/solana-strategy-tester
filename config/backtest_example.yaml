@@ -1,17 +1,16 @@
 # config/backtest_example.yaml
-# Глобальные настройки бэктеста (будем развивать на следующих фазах)
+# Глобальные настройки бэктеста
 
 data:
-  loader: "gecko"         # "csv" или "gecko"
+  loader: "gecko"                 # "csv" или "gecko"
   candles_dir: "data/candles/cached"
-  timeframe: "1m"
-  before_minutes: 60
-  after_minutes: 360
-
+  timeframe: "1m"                # Поддержка 1m и 15m
+  before_minutes: 60             # Сколько минут до сигнала загружать
+  after_minutes: 43200           # Сколько минут после сигнала подгружать (по умолчанию до 30 дней)
 
 report:
   output_dir: "output/reports"
 
 runtime:
   max_signals: 100000
-  parallel: false  # на будущее
+  parallel: false                # для будущего многопоточного режима

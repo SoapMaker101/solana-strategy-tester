@@ -1,15 +1,14 @@
-# backtester/infrastructure/price_loader.py
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, List
 import os
 import requests
 import pandas as pd
 
-from ..domain.models import Candle  # ← ВАЖНО!
+from ..domain.models import Candle
 
 class PriceLoader(ABC):
     @abstractmethod
@@ -57,17 +56,27 @@ class CsvPriceLoader(PriceLoader):
 
 
 class GeckoTerminalPriceLoader(PriceLoader):
-    def __init__(self, cache_dir: str = "data/candles/cached", timeframe: str = "1m"):
+    def __init__(self, cache_dir: str = "data/candles/cached", timeframe: str = "1m", max_cache_age_days: int = 2):
         self.cache_dir = Path(cache_dir)
         self.timeframe = timeframe
+        self.max_cache_age_days = max_cache_age_days
 
     def _get_cache_path(self, contract_address: str) -> Path:
         return self.cache_dir / f"{contract_address}_{self.timeframe}.csv"
 
-    def _load_from_cache(self, contract_address: str) -> Optional[List[Candle]]:
-        path = self._get_cache_path(contract_address)
+    def _is_cache_fresh(self, path: Path) -> bool:
         if not path.exists():
-            return None
+            return False
+        try:
+            df = pd.read_csv(path)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+            last_ts = df["timestamp"].max()
+            age = datetime.now(timezone.utc) - last_ts
+            return age <= timedelta(days=self.max_cache_age_days)
+        except Exception:
+            return False
+
+    def _load_from_cache(self, path: Path) -> Optional[List[Candle]]:
         try:
             df = pd.read_csv(path)
             df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
@@ -85,10 +94,9 @@ class GeckoTerminalPriceLoader(PriceLoader):
             print(f"⚠️ Failed to load cache from {path}: {e}")
             return None
 
-    def _save_to_cache(self, contract_address: str, candles: List[Candle]):
-        path = self._get_cache_path(contract_address)
+    def _save_to_cache(self, path: Path, candles: List[Candle]):
         try:
-            os.makedirs(self.cache_dir, exist_ok=True)
+            os.makedirs(path.parent, exist_ok=True)
             df = pd.DataFrame([{
                 "timestamp": c.timestamp.isoformat(),
                 "open": c.open,
@@ -98,53 +106,69 @@ class GeckoTerminalPriceLoader(PriceLoader):
                 "volume": c.volume,
             } for c in candles])
             df.to_csv(path, index=False)
-            print(f"📥 Saved {len(candles)} candles to cache: {path}")
+            print(f"📅 Saved {len(candles)} candles to cache: {path}")
         except Exception as e:
             print(f"⚠️ Failed to save cache: {e}")
 
-    def _fetch_from_api(self, contract_address: str) -> List[Candle]:
-        headers = {"User-Agent": "Mozilla/5.0 GeckoLoader"}
+    def load_prices(self, contract_address: str, start_time: Optional[datetime] = None, end_time: Optional[datetime] = None) -> List[Candle]:
+        cache_path = self._get_cache_path(contract_address)
+        candles: List[Candle] = []
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+
         try:
+            headers = {"User-Agent": "Mozilla/5.0 GeckoLoader"}
+            tf_map = {"1m": ("minute", None), "15m": ("minute", "15")}
+            tf_endpoint, aggregate = tf_map[self.timeframe]
+
             pools_url = f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/{contract_address}/pools"
-            print(f"🔍 GET {pools_url}")
             r = requests.get(pools_url, headers=headers)
             r.raise_for_status()
             pool_id = r.json()["data"][0]["attributes"]["address"]
 
-            tf_map = {"1m": "minute", "15m": "minute?aggregate=15"}
-            endpoint = tf_map[self.timeframe]
-            ohlcv_url = f"https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool_id}/ohlcv/{endpoint}?limit=1000"
-            print(f"📊 GET {ohlcv_url}")
-            res = requests.get(ohlcv_url, headers=headers)
-            res.raise_for_status()
+            before_ts = now_ts
+            seen = set()
 
-            candles_raw = res.json()["data"]["attributes"]["ohlcv_list"]
-            return [
-                Candle(
-                    timestamp=datetime.utcfromtimestamp(row[0]).replace(tzinfo=timezone.utc),
-                    open=float(row[1]),
-                    close=float(row[2]),
-                    high=float(row[3]),
-                    low=float(row[4]),
-                    volume=float(row[5]),
-                ) for row in candles_raw
-            ]
+            while True:
+                query = f"limit=1000&before_timestamp={before_ts}"
+                if aggregate:
+                    query += f"&aggregate={aggregate}"
+
+                ohlcv_url = f"https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool_id}/ohlcv/{tf_endpoint}?{query}"
+                print(f"⬅️ Fetching: {ohlcv_url}")
+                res = requests.get(ohlcv_url, headers=headers)
+                res.raise_for_status()
+
+                candles_raw = res.json()["data"]["attributes"].get("ohlcv_list", [])
+                if not candles_raw:
+                    break
+
+                batch = [
+                    Candle(
+                        timestamp=datetime.utcfromtimestamp(row[0]).replace(tzinfo=timezone.utc),
+                        open=float(row[1]),
+                        close=float(row[2]),
+                        high=float(row[3]),
+                        low=float(row[4]),
+                        volume=float(row[5]),
+                    )
+                    for row in candles_raw
+                    if row[0] not in seen
+                ]
+                seen.update(row[0] for row in candles_raw)
+
+                candles.extend(batch)
+
+                if start_time and batch[-1].timestamp <= start_time:
+                    break
+
+                before_ts = int(batch[-1].timestamp.timestamp())
+
+            candles.sort(key=lambda c: c.timestamp)
+            print(f"📦 Total candles fetched: {len(candles)}")
+            self._save_to_cache(cache_path, candles)
 
         except Exception as e:
-            print(f"❌ Error fetching candles from API for {contract_address}: {e}")
-            return []
-
-    def load_prices(self, contract_address: str, start_time=None, end_time=None) -> List[Candle]:
-        candles = self._load_from_cache(contract_address)
-        if candles:
-            print(f"✅ Loaded {len(candles)} candles from cache for {contract_address}")
-        else:
-            candles = self._fetch_from_api(contract_address)
-            if candles:
-                self._save_to_cache(contract_address, candles)
-            else:
-                print(f"⚠️ No candles fetched from API and no cache available for {contract_address}")
-                return []
+            print(f"❌ Error loading candles for {contract_address}: {e}")
 
         return [
             c for c in candles

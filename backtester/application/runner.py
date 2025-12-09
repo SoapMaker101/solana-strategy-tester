@@ -1,4 +1,3 @@
-# backtester/runner.py
 from __future__ import annotations
 
 from datetime import timedelta
@@ -52,6 +51,14 @@ class BacktestRunner:
                 start_time=start_time,
                 end_time=end_time,
             )
+
+            if candles:
+                print(f"⏱️ Candle range requested: {start_time} to {end_time}")
+                print(f"📉 Candles available: {len(candles)}")
+                if candles[0].timestamp > ts:
+                    print(f"⚠️ WARNING: Signal time {ts} is earlier than first candle {candles[0].timestamp}")
+            else:
+                print(f"⚠️ No candles found for signal at {ts}")
 
             data = StrategyInput(
                 signal=sig,

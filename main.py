@@ -1,14 +1,15 @@
 # main.py
 import argparse
+import json
 from pathlib import Path
 from typing import List
+from datetime import datetime
 
 import yaml
 
 from backtester.application.runner import BacktestRunner
 from backtester.infrastructure.signal_loader import CsvSignalLoader
-from backtester.infrastructure.price_loader import CsvPriceLoader
-
+from backtester.infrastructure.price_loader import CsvPriceLoader, GeckoTerminalPriceLoader
 from backtester.domain.strategy_base import StrategyConfig, Strategy
 from backtester.domain.rr_strategy import RRStrategy
 from backtester.domain.rrd_strategy import RRDStrategy
@@ -35,6 +36,12 @@ def parse_args():
         default="config/backtest_example.yaml",
         help="Global backtest config (YAML)",
     )
+    parser.add_argument(
+        "--json-output",
+        type=str,
+        default="output/results.json",
+        help="Optional path to save JSON output"
+    )
     return parser.parse_args()
 
 
@@ -54,23 +61,16 @@ def build_strategy(cfg: StrategyConfig) -> Strategy:
         return RRDStrategy(cfg)
     if t == "RUNNER":
         return RunnerStrategy(cfg)
-
     raise ValueError(f"Unknown strategy type: {cfg.type}")
 
 
 def load_strategies(config_path: str) -> List[Strategy]:
     data = load_yaml(config_path)
-    strategies: List[Strategy] = []
-
-    for s in data:
-        cfg = StrategyConfig(
-            name=s["name"],
-            type=s["type"],
-            params=s.get("params", {}),
-        )
-        strategies.append(build_strategy(cfg))
-
-    return strategies
+    return [build_strategy(StrategyConfig(
+        name=s["name"],
+        type=s["type"],
+        params=s.get("params", {})
+    )) for s in data]
 
 
 def main():
@@ -83,23 +83,64 @@ def main():
     timeframe = data_cfg.get("timeframe", "1m")
 
     signal_loader = CsvSignalLoader(args.signals)
-    price_loader = CsvPriceLoader(candles_dir, timeframe=timeframe)
+
+    if data_cfg.get("loader", "csv") == "gecko":
+        price_loader = GeckoTerminalPriceLoader(
+            cache_dir=candles_dir,
+            timeframe=timeframe
+        )
+    else:
+        price_loader = CsvPriceLoader(
+            candles_dir=candles_dir,
+            timeframe=timeframe
+        )
 
     strategies = load_strategies(args.strategies_config)
 
     runner = BacktestRunner(
         signal_loader=signal_loader,
         price_loader=price_loader,
-        reporter=None,          # пока не используем
+        reporter=None,
         strategies=strategies,
         global_config=backtest_cfg,
     )
 
     results = runner.run()
     print(f"Backtest finished. Results count: {len(results)}")
-    # для контроля выведем пару строк
-    for row in results[:3]:
-        print(row)
+    for row in results:
+        r = row["result"]
+        print(f"🔁 {row['strategy']} → entry: {r.entry_price}, exit: {r.exit_price}, pnl: {round(r.pnl*100, 2)}%, reason: {r.reason}")
+
+    try:
+        output_path = Path(args.json_output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
+            json.dump(
+                [
+                    {
+                        **{
+                            **row,
+                            "timestamp": row["timestamp"].isoformat() if isinstance(row["timestamp"], datetime) else row["timestamp"],
+                            "result": {
+                                "entry_time": r.entry_time.isoformat() if r.entry_time else None,
+                                "entry_price": r.entry_price,
+                                "exit_time": r.exit_time.isoformat() if r.exit_time else None,
+                                "exit_price": r.exit_price,
+                                "pnl": r.pnl,
+                                "reason": r.reason,
+                                "meta": r.meta,
+                            },
+                        }
+                    }
+                    for row in results
+                    for r in [row["result"]]
+                ],
+                f,
+                indent=2
+            )
+        print(f"📤 Saved JSON output to {output_path}")
+    except Exception as e:
+        print(f"⚠️ Failed to save JSON output: {e}")
 
 
 if __name__ == "__main__":

@@ -81,5 +81,7 @@ class CsvSignalLoader(SignalLoader):
                     extra=getattr(row, "extra", {}) or {},
                 )
             )
+        print(f"📩 Loaded {len(signals)} signals from {self.path}")
 
         return signals
+    
