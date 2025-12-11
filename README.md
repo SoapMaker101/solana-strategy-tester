@@ -1,4 +1,4 @@
-README.md (прямо скопируй весь текст):
+README.md
 
 # Solana Strategy Tester
 
