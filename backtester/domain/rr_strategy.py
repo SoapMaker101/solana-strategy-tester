@@ -3,103 +3,89 @@ from datetime import timedelta
 from typing import List
 from .models import StrategyInput, StrategyOutput, Candle
 from .strategy_base import Strategy
+from .rr_utils import apply_rr_logic, check_candle_quality, calculate_volatility_around_entry, calculate_signal_to_entry_delay
 
+# Стратегия RR (Risk/Reward) — базовая реализация трейда с TP и SL
 class RRStrategy(Strategy):
-    """
-    Реальный RR: вход по первой свече после сигнала,
-    выход по TP или SL, с возможностью дозагрузки свечей.
-    """
-
     def __init__(self, config) -> None:
         super().__init__(config)
+        # Установка параметров TP и SL из конфигурации (в долях, например 0.1 = 10%)
         self.tp_pct = float(config.params.get("tp_pct", 10)) / 100.0
         self.sl_pct = float(config.params.get("sl_pct", 10)) / 100.0
-        self.max_minutes = int(config.params.get("max_minutes", 43200))  # 30 дней
+        # Максимальный скачок цены для проверки качества свечей
+        self.max_price_jump_pct = float(config.params.get("max_price_jump_pct", 0.5))  # 0.5% по умолчанию
 
     def on_signal(self, data: StrategyInput) -> StrategyOutput:
-        candles: List[Candle] = data.candles
+        signal_time = data.signal.timestamp
 
-        # Оставляем свечи после сигнала
-        candles = [c for c in candles if c.timestamp >= data.signal.timestamp]
+        # Отбираем свечи, начиная с момента сигнала (или позже)
+        candles: List[Candle] = sorted(
+            [c for c in data.candles if c.timestamp >= signal_time],
+            key=lambda c: c.timestamp
+        )
+
+        # Если свечей нет — невозможно войти в позицию
         if not candles:
             return StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry",
-                meta={"detail": "no candles after signal"},
+                entry_time=None, entry_price=None,
+                exit_time=None, exit_price=None,
+                pnl=0.0, reason="no_entry",
+                meta={"detail": "no candles after signal"}
             )
 
-        entry_candle = candles[0]
+        # Первая доступная свеча после сигнала
+        first_available = candles[0]
+
+        # Проверка: первая свеча позже сигнала (возможна задержка/перерыв)
+        if first_available.timestamp > signal_time:
+            print(f"⚠️ WARNING: Signal at {signal_time}, but first candle is at {first_available.timestamp}")
+
+        # Проверка качества свечи входа
+        is_valid, error_msg = check_candle_quality(
+            first_available,
+            previous_candle=None,
+            max_price_jump_pct=self.max_price_jump_pct
+        )
+        
+        if not is_valid:
+            return StrategyOutput(
+                entry_time=None, entry_price=None,
+                exit_time=None, exit_price=None,
+                pnl=0.0, reason="no_entry",
+                meta={"detail": f"entry candle quality check failed: {error_msg}"}
+            )
+
+        # Вход по закрытию первой свечи
+        entry_candle = first_available
         entry_price = entry_candle.close
-        tp_price = entry_price * (1 + self.tp_pct)
-        sl_price = entry_price * (1 - self.sl_pct)
 
-        all_candles = [entry_candle]
-        current_candles = candles[1:]
-        next_from = all_candles[-1].timestamp + timedelta(minutes=1)
+        # Вычисляем дополнительные метрики
+        signal_to_entry_delay = calculate_signal_to_entry_delay(signal_time, entry_candle.timestamp)
+        volatility_around_entry = calculate_volatility_around_entry(candles, entry_candle)
 
+        # Базовые метаданные
+        base_meta = {
+            "signal_to_entry_delay_minutes": signal_to_entry_delay,
+            "volatility_around_entry": volatility_around_entry,
+        }
+
+        # Глобальные параметры
         loader = data.global_params.get("_price_loader")
         contract = data.signal.contract_address
+        max_minutes = int(data.global_params.get("max_minutes", 43200))  # 30 дней по умолчанию
 
-        while True:
-            for c in current_candles:
-                if c.low <= sl_price:
-                    return StrategyOutput(
-                        entry_time=entry_candle.timestamp,
-                        entry_price=entry_price,
-                        exit_time=c.timestamp,
-                        exit_price=sl_price,
-                        pnl=(sl_price - entry_price) / entry_price,
-                        reason="sl",
-                        meta={"exit_idx": len(all_candles)},
-                    )
-                if c.high >= tp_price:
-                    return StrategyOutput(
-                        entry_time=entry_candle.timestamp,
-                        entry_price=entry_price,
-                        exit_time=c.timestamp,
-                        exit_price=tp_price,
-                        pnl=(tp_price - entry_price) / entry_price,
-                        reason="tp",
-                        meta={"exit_idx": len(all_candles)},
-                    )
+        # Свечи после входа (начиная со следующей)
+        candles_from_entry = candles[1:] if len(candles) > 1 else []
 
-            all_candles.extend(current_candles)
-            total_minutes = (all_candles[-1].timestamp - entry_candle.timestamp).total_seconds() / 60
-            if total_minutes >= self.max_minutes:
-                break
-
-            if not loader:
-                break
-
-            # Загружаем новые свечи строго после предыдущих
-            new = loader.load_prices(contract, start_time=next_from)
-            # после new = loader.load_prices(...)
-
-            new = [c for c in new if c.timestamp > all_candles[-1].timestamp]
-            new = sorted(new, key=lambda c: c.timestamp)  # 🔧 обязательно сортируем
-
-
-            if not new:
-                break
-
-            current_candles = new
-            next_from = current_candles[-1].timestamp + timedelta(minutes=1)
-
-        last = all_candles[-1]
-        print(f"📊 Entry at {entry_candle.timestamp}, entry_price={entry_price}")
-        print(f"📈 TP: {tp_price}, SL: {sl_price}")
-        print(f"📉 Candles available: {len(all_candles)}")
-
-        return StrategyOutput(
-            entry_time=entry_candle.timestamp,
+        # Применяем общую RR-логику
+        return apply_rr_logic(
+            entry_candle=entry_candle,
             entry_price=entry_price,
-            exit_time=last.timestamp,
-            exit_price=last.close,
-            pnl=(last.close - entry_price) / entry_price,
-            reason="timeout",
-            meta={"exit_idx": len(all_candles)},
+            tp_pct=self.tp_pct,
+            sl_pct=self.sl_pct,
+            max_minutes=max_minutes,
+            candles_from_entry=candles_from_entry,
+            price_loader=loader,
+            contract_address=contract,
+            base_meta=base_meta,
         )

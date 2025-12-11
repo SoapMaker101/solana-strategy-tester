@@ -1,29 +1,30 @@
 #models.py
-from __future__ import annotations
+from __future__ import annotations  # Позволяет использовать аннотации типов самого себя внутри класса
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-
 @dataclass
 class Signal:
-    id: str
-    contract_address: str
-    timestamp: datetime
-    source: str
-    narrative: str
-    extra: Dict[str, Any] = field(default_factory=dict)
+    id: str                      # Уникальный идентификатор сигнала (например, "test1")
+    contract_address: str        # Контракт токена/пула (используется для загрузки свечей)
+    timestamp: datetime          # Время генерации сигнала (ключевая точка входа)
+    source: str                  # Источник сигнала (например, бот, модель)
+    narrative: str               # Краткое описание сигнала (для человека)
+    extra: Dict[str, Any] = field(default_factory=dict)  # Доп. произвольные поля
+
 
 
 @dataclass
 class Candle:
-    timestamp: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
+    timestamp: datetime   # Время закрытия свечи
+    open: float           # Цена открытия
+    high: float           # Максимум
+    low: float            # Минимум
+    close: float          # Цена закрытия
+    volume: float         # Объём торгов
+
 
 
 @dataclass
@@ -34,9 +35,9 @@ class StrategyInput:
     - ценовой ряд вокруг этого сигнала
     - глобальные параметры теста (баланс, комиссии и т.п.)
     """
-    signal: Signal
-    candles: List[Candle]
-    global_params: Dict[str, Any]
+    signal: Signal                    # Исходный сигнал
+    candles: List[Candle]            # Свечи, доступные для анализа стратегии
+    global_params: Dict[str, Any]    # Глобальные параметры (настройки теста, price loader и т.д.)
 
 
 @dataclass
@@ -44,10 +45,10 @@ class StrategyOutput:
     """
     То, что стратегия должна вернуть по результату обработки одного сигнала.
     """
-    entry_time: Optional[datetime]
-    entry_price: Optional[float]
-    exit_time: Optional[datetime]
-    exit_price: Optional[float]
-    pnl: float
-    reason: Literal["tp", "sl", "timeout", "no_entry", "error"]
-    meta: Dict[str, Any] = field(default_factory=dict)
+    entry_time: Optional[datetime]              # Момент входа в сделку (если был)
+    entry_price: Optional[float]                # Цена входа
+    exit_time: Optional[datetime]               # Момент выхода
+    exit_price: Optional[float]                 # Цена выхода
+    pnl: float                                  # Прибыль/убыток в процентах (в десятичной форме)
+    reason: Literal["tp", "sl", "timeout", "no_entry", "error"]  # Причина выхода из сделки
+    meta: Dict[str, Any] = field(default_factory=dict)           # Доп. информация (например, индекс свечи выхода)
