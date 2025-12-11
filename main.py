@@ -150,7 +150,7 @@ def main():
         max_workers=max_workers,
     )
 
-    # Запуск
+    # Запуск стратегий
     results = runner.run()
     print(f"Backtest finished. Results count: {len(results)}")
 
@@ -167,16 +167,28 @@ def main():
         
         results_by_strategy[row["strategy"]].append(row)
 
-    # Генерируем полные отчеты для каждой стратегии
+    # Генерируем полные отчеты для каждой стратегии (на уровне стратегий)
     for strategy_name, strategy_results in results_by_strategy.items():
         print(f"\n📊 Generating report for strategy: {strategy_name}")
         reporter.generate_full_report(strategy_name, strategy_results)
 
     # Печатаем краткий результат для каждой стратегии
-    print("\n📈 Summary:")
+    print("\n📈 Strategy-level Summary:")
     for row in results:
         r = row["result"]
         print(f"🔁 {row['strategy']} → entry: {r.entry_price}, exit: {r.exit_price}, pnl: {round(r.pnl * 100, 2)}%, reason: {r.reason}")
+
+    # Запускаем портфельную симуляцию
+    print("\n" + "="*60)
+    print("💼 PORTFOLIO SIMULATION")
+    print("="*60)
+    portfolio_results = runner.run_portfolio()
+
+    # Сохраняем портфельные результаты
+    if portfolio_results:
+        for strategy_name, p_result in portfolio_results.items():
+            reporter.save_portfolio_results(strategy_name, p_result)
+            print(f"\n💼 Portfolio results saved for: {strategy_name}")
 
     # Сохраняем общий JSON файл (для обратной совместимости)
     try:

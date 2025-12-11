@@ -146,12 +146,16 @@ class Reporter:
         lines = [
             f"=== Backtest Report: {strategy_name} ===",
             "",
+            "⚠️  NOTE: This is STRATEGY-LEVEL report (individual trades).",
+            "    Total PnL is the sum of percentages, NOT portfolio return.",
+            "    For REAL portfolio return, see Portfolio-level reports.",
+            "",
             "Basic Metrics:",
             f"  Total Trades: {metrics['total_trades']}",
             f"  Winning Trades: {metrics['winning_trades']}",
             f"  Losing Trades: {metrics['losing_trades']}",
             f"  Winrate: {metrics['winrate']:.2%}",
-            f"  Total PnL: {metrics['total_pnl']:.2%}",
+            f"  Total PnL (sum of %): {metrics['total_pnl']:.2%} ⚠️ Not portfolio return!",
             f"  Average PnL: {metrics['avg_pnl']:.2%}",
             f"  Median PnL: {metrics['median_pnl']:.2%}",
             f"  Best Trade: {metrics['best_trade']:.2%}",
@@ -274,6 +278,12 @@ class Reporter:
 <body>
     <h1>Backtest Report: {strategy_name}</h1>
     
+    <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 10px; margin: 20px 0; border-radius: 5px;">
+        <strong>⚠️ Important:</strong> This is a <strong>STRATEGY-LEVEL</strong> report showing individual trades.
+        <br><strong>Total PnL</strong> is the <strong>sum of percentages</strong>, NOT the real portfolio return.
+        <br>For <strong>real portfolio return</strong> with position sizing, fees, and dynamic balance, see <strong>Portfolio-level reports</strong>.
+    </div>
+    
     <h2>Basic Metrics</h2>
     <table>
         <tr><th>Metric</th><th>Value</th></tr>
@@ -281,7 +291,7 @@ class Reporter:
         <tr><td>Winning Trades</td><td>{metrics['winning_trades']}</td></tr>
         <tr><td>Losing Trades</td><td>{metrics['losing_trades']}</td></tr>
         <tr><td>Winrate</td><td>{metrics['winrate']:.2%}</td></tr>
-        <tr><td>Total PnL</td><td class="{'positive' if metrics['total_pnl'] >= 0 else 'negative'}">{metrics['total_pnl']:.2%}</td></tr>
+        <tr><td>Total PnL (sum of %) ⚠️</td><td class="{'positive' if metrics['total_pnl'] >= 0 else 'negative'}">{metrics['total_pnl']:.2%}</td></tr>
         <tr><td>Average PnL</td><td class="{'positive' if metrics['avg_pnl'] >= 0 else 'negative'}">{metrics['avg_pnl']:.2%}</td></tr>
         <tr><td>Median PnL</td><td class="{'positive' if metrics['median_pnl'] >= 0 else 'negative'}">{metrics['median_pnl']:.2%}</td></tr>
         <tr><td>Best Trade</td><td class="positive">{metrics['best_trade']:.2%}</td></tr>
@@ -532,3 +542,112 @@ class Reporter:
         # Выводим текстовый отчет
         summary = self.generate_summary_report(strategy_name, metrics)
         print(f"\n{summary}\n")
+
+    def save_portfolio_results(self, strategy_name: str, portfolio_result) -> None:
+        """
+        Сохраняет портфельные результаты в JSON и CSV форматы.
+
+        :param strategy_name: Название стратегии.
+        :param portfolio_result: PortfolioResult объект.
+        """
+        from ..domain.portfolio import PortfolioResult
+        
+        if not isinstance(portfolio_result, PortfolioResult):
+            return
+        
+        # Сохраняем equity curve в CSV
+        import pandas as pd
+        # Фильтруем записи с валидными timestamp
+        valid_equity = [
+            point for point in portfolio_result.equity_curve
+            if point.get("timestamp") is not None
+        ]
+        if valid_equity:
+            equity_df = pd.DataFrame(valid_equity)
+            equity_path = self.output_dir / f"{strategy_name}_equity_curve.csv"
+            equity_df.to_csv(equity_path, index=False)
+            print(f"📈 Saved equity curve to {equity_path}")
+        
+        # Сохраняем позиции в CSV
+        positions_data = []
+        for pos in portfolio_result.positions:
+            positions_data.append({
+                "signal_id": pos.signal_id,
+                "contract_address": pos.contract_address,
+                "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                "entry_price": pos.entry_price,
+                "exit_time": pos.exit_time.isoformat() if pos.exit_time else None,
+                "exit_price": pos.exit_price,
+                "size_sol": pos.size,
+                "pnl_pct": pos.pnl_pct,
+                "pnl_sol": pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0,
+                "raw_pnl_pct": pos.meta.get("raw_pnl_pct", 0.0) if pos.meta else 0.0,
+                "fee_pct": pos.meta.get("fee_pct", 0.0) if pos.meta else 0.0,
+                "status": pos.status,
+            })
+        
+        if positions_data:
+            positions_df = pd.DataFrame(positions_data)
+            positions_path = self.output_dir / f"{strategy_name}_portfolio_positions.csv"
+            positions_df.to_csv(positions_path, index=False)
+            print(f"💼 Saved portfolio positions to {positions_path}")
+        
+        # Сохраняем статистику в JSON
+        stats_data = {
+            "final_balance_sol": portfolio_result.stats.final_balance_sol,
+            "total_return_pct": portfolio_result.stats.total_return_pct,
+            "max_drawdown_pct": portfolio_result.stats.max_drawdown_pct,
+            "trades_executed": portfolio_result.stats.trades_executed,
+            "trades_skipped_by_risk": portfolio_result.stats.trades_skipped_by_risk,
+        }
+        
+        stats_path = self.output_dir / f"{strategy_name}_portfolio_stats.json"
+        with stats_path.open("w", encoding="utf-8") as f:
+            json.dump(stats_data, f, indent=2, ensure_ascii=False)
+        print(f"📊 Saved portfolio stats to {stats_path}")
+        
+        # Строим график equity curve портфеля
+        self.plot_portfolio_equity_curve(strategy_name, portfolio_result)
+
+    def plot_portfolio_equity_curve(self, strategy_name: str, portfolio_result) -> Optional[Path]:
+        """
+        Строит график equity curve портфеля.
+
+        :param strategy_name: Название стратегии.
+        :param portfolio_result: PortfolioResult объект.
+        :return: Путь к сохраненному файлу графика.
+        """
+        try:
+            import matplotlib.pyplot as plt
+            
+            if not portfolio_result.equity_curve:
+                return None
+            
+            timestamps = [point["timestamp"] for point in portfolio_result.equity_curve if point.get("timestamp")]
+            balances = [point["balance"] for point in portfolio_result.equity_curve if point.get("timestamp")]
+            
+            if not timestamps:
+                return None
+            
+            plt.figure(figsize=(14, 6))
+            plt.plot(timestamps, balances, linewidth=2, label="Portfolio Balance")
+            plt.axhline(y=portfolio_result.stats.final_balance_sol, color='r', linestyle='--', alpha=0.5, label=f"Final: {portfolio_result.stats.final_balance_sol:.4f} SOL")
+            plt.title(f"Portfolio Equity Curve: {strategy_name}")
+            plt.xlabel("Time")
+            plt.ylabel("Balance (SOL)")
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            plt.xticks(rotation=45)
+            
+            output_path = self.charts_dir / f"{strategy_name}_portfolio_equity.png"
+            plt.savefig(output_path, dpi=150, bbox_inches='tight')
+            plt.close()
+            
+            print(f"📈 Saved portfolio equity curve chart to {output_path}")
+            return output_path
+        except ImportError:
+            print("⚠️ matplotlib not available, skipping portfolio equity curve plot")
+            return None
+        except Exception as e:
+            print(f"⚠️ Failed to plot portfolio equity curve: {e}")
+            return None
