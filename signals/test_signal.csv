@@ -1,3 +1,0 @@
-id,contract_address,timestamp,source,narrative
-test1,EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm,2025-11-27T00:00:00Z,manual,Test WIF signal inside cached range
-test2,9AvytnUKsLxPxFHFqS6VLxaxt5p6BhYNr53SD2Chpump,2025-10-26T00:00:00Z,manual,Test 67 signal inside cached range
