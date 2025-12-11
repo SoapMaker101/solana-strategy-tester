@@ -42,7 +42,8 @@ def apply_rr_logic(
     
     # Инициализация
     all_candles_after_entry = candles_from_entry[:]
-    next_from = all_candles_after_entry[-1].timestamp + timedelta(minutes=1) if all_candles_after_entry else entry_candle.timestamp
+    # next_from должен быть после entry_candle, чтобы не загружать саму свечу входа повторно
+    next_from = all_candles_after_entry[-1].timestamp + timedelta(minutes=1) if all_candles_after_entry else entry_candle.timestamp + timedelta(minutes=1)
     max_exit_time = entry_candle.timestamp + timedelta(minutes=max_minutes)
     last_valid_candle = entry_candle  # На случай таймаута
     
