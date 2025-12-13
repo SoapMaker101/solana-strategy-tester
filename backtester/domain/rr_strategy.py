@@ -1,5 +1,4 @@
 from __future__ import annotations
-from datetime import timedelta
 from typing import List
 from .models import StrategyInput, StrategyOutput, Candle
 from .strategy_base import Strategy

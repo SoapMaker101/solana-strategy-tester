@@ -15,7 +15,6 @@ class Signal:
     extra: Dict[str, Any] = field(default_factory=dict)  # Доп. произвольные поля
 
 
-
 @dataclass
 class Candle:
     timestamp: datetime   # Время закрытия свечи
@@ -24,7 +23,6 @@ class Candle:
     low: float            # Минимум
     close: float          # Цена закрытия
     volume: float         # Объём торгов
-
 
 
 @dataclass

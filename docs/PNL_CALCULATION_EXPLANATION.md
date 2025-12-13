@@ -140,3 +140,7 @@ total_return_pct = (final_balance - initial_balance) / initial_balance
 - Вторая сделка: 0.9 SOL (10% от 9.0)
 - Strategy-level: 15% + 15% = 30%
 - Portfolio-level: 2.85% (значительно меньше из-за уменьшения размера второй позиции)
+
+
+
+
