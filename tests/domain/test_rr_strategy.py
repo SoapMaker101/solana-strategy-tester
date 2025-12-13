@@ -137,10 +137,10 @@ def test_rr_strategy_timeout(rr_strategy, sample_signal):
     candles = [
         Candle(
             timestamp=sample_signal.timestamp + timedelta(minutes=i),
-            open=entry_price + i * 0.01,
-            high=entry_price + i * 0.01 + 0.1,
-            low=entry_price + i * 0.01 - 0.1,
-            close=entry_price + i * 0.01,
+            open=entry_price + (i - 1) * 0.01,
+            high=entry_price + (i - 1) * 0.01 + 0.1,
+            low=entry_price + (i - 1) * 0.01 - 0.1,
+            close=entry_price + (i - 1) * 0.01,
             volume=1000.0
         )
         for i in range(1, 6)  # Несколько свечей без TP/SL
