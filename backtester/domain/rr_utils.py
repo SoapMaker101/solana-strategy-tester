@@ -337,3 +337,43 @@ def calculate_signal_to_entry_delay(
     delay = (entry_time - signal_time).total_seconds() / 60
     return max(0.0, delay)
 
+
+def create_no_entry_output(detail: str, extra_meta: Optional[Dict[str, Any]] = None) -> StrategyOutput:
+    """
+    Создает StrategyOutput для случая, когда вход в позицию не произошел.
+    
+    :param detail: Детальное описание причины отсутствия входа
+    :param extra_meta: Дополнительные метаданные для включения в meta
+    :return: StrategyOutput с reason="no_entry"
+    """
+    meta = {"detail": detail}
+    if extra_meta:
+        meta.update(extra_meta)
+    return StrategyOutput(
+        entry_time=None,
+        entry_price=None,
+        exit_time=None,
+        exit_price=None,
+        pnl=0.0,
+        reason="no_entry",
+        meta=meta,
+    )
+
+
+def create_error_output(exception: str) -> StrategyOutput:
+    """
+    Создает StrategyOutput для случая ошибки при обработке сигнала.
+    
+    :param exception: Текст исключения или описание ошибки
+    :return: StrategyOutput с reason="error"
+    """
+    return StrategyOutput(
+        entry_time=None,
+        entry_price=None,
+        exit_time=None,
+        exit_price=None,
+        pnl=0.0,
+        reason="error",
+        meta={"exception": exception},
+    )
+

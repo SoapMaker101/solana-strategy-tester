@@ -2,7 +2,13 @@ from __future__ import annotations
 from typing import List
 from .models import StrategyInput, StrategyOutput, Candle
 from .strategy_base import Strategy
-from .rr_utils import apply_rr_logic, check_candle_quality, calculate_volatility_around_entry, calculate_signal_to_entry_delay
+from .rr_utils import (
+    apply_rr_logic,
+    check_candle_quality,
+    calculate_volatility_around_entry,
+    calculate_signal_to_entry_delay,
+    create_no_entry_output,
+)
 
 # Стратегия RR (Risk/Reward) — базовая реализация трейда с TP и SL
 class RRStrategy(Strategy):
@@ -25,12 +31,7 @@ class RRStrategy(Strategy):
 
         # Если свечей нет — невозможно войти в позицию
         if not candles:
-            return StrategyOutput(
-                entry_time=None, entry_price=None,
-                exit_time=None, exit_price=None,
-                pnl=0.0, reason="no_entry",
-                meta={"detail": "no candles after signal"}
-            )
+            return create_no_entry_output("no candles after signal")
 
         # Первая доступная свеча после сигнала
         first_available = candles[0]
@@ -47,12 +48,7 @@ class RRStrategy(Strategy):
         )
         
         if not is_valid:
-            return StrategyOutput(
-                entry_time=None, entry_price=None,
-                exit_time=None, exit_price=None,
-                pnl=0.0, reason="no_entry",
-                meta={"detail": f"entry candle quality check failed: {error_msg}"}
-            )
+            return create_no_entry_output(f"entry candle quality check failed: {error_msg}")
 
         # Вход по закрытию первой свечи
         entry_candle = first_available

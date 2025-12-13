@@ -8,6 +8,7 @@ from .rr_utils import (
     check_candle_quality,
     calculate_volatility_around_entry,
     calculate_signal_to_entry_delay,
+    create_no_entry_output,
 )
 
 # RRDStrategy — стратегия с отложенным входом по drawdown
@@ -39,15 +40,7 @@ class RRDStrategy(Strategy):
 
         # Если после сигнала вообще нет свечей → возвращаем no_entry
         if len(candles) == 0:
-            return StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry",
-                meta={"detail": "no candles after signal (rrd)"}
-            )
+            return create_no_entry_output("no candles after signal (rrd)")
 
         # 2.2. Определение цены входа (drawdown)
         # Берем первую свечу после сигнала как базовую
@@ -61,15 +54,7 @@ class RRDStrategy(Strategy):
         )
         
         if not is_valid:
-            return StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry",
-                meta={"detail": f"first candle quality check failed: {error_msg}"}
-            )
+            return create_no_entry_output(f"first candle quality check failed: {error_msg}")
         
         # Рассчитываем целевую цену входа
         entry_price_target = first_candle.close * (1 - self.drawdown_entry_pct)
@@ -125,15 +110,9 @@ class RRDStrategy(Strategy):
             # Проверка: все ли свечи проверены до дедлайна
             if all_candles and all_candles[-1].timestamp >= entry_deadline_ts:
                 # Вход не найден до дедлайна
-                return StrategyOutput(
-                    entry_time=None,
-                    entry_price=None,
-                    exit_time=None,
-                    exit_price=None,
-                    pnl=0.0,
-                    reason="no_entry",
-                    meta={
-                        "detail": f"entry_price_target {entry_price_target:.4f} not reached within {self.entry_wait_minutes} minutes",
+                return create_no_entry_output(
+                    f"entry_price_target {entry_price_target:.4f} not reached within {self.entry_wait_minutes} minutes",
+                    extra_meta={
                         "entry_price_target": entry_price_target,
                         "drawdown_pct": self.drawdown_entry_pct,
                         "entry_wait_minutes": self.entry_wait_minutes,
@@ -143,15 +122,9 @@ class RRDStrategy(Strategy):
             
             # Если нет загрузчика — прекращаем поиск
             if not loader:
-                return StrategyOutput(
-                    entry_time=None,
-                    entry_price=None,
-                    exit_time=None,
-                    exit_price=None,
-                    pnl=0.0,
-                    reason="no_entry",
-                    meta={
-                        "detail": "no loader available for additional candles",
+                return create_no_entry_output(
+                    "no loader available for additional candles",
+                    extra_meta={
                         "entry_price_target": entry_price_target,
                         "drawdown_pct": self.drawdown_entry_pct,
                         "entry_wait_minutes": self.entry_wait_minutes,
@@ -162,15 +135,9 @@ class RRDStrategy(Strategy):
             new = loader.load_prices(contract, start_time=next_from, end_time=entry_deadline_ts)
             if not new:
                 # Больше данных нет — вход не найден
-                return StrategyOutput(
-                    entry_time=None,
-                    entry_price=None,
-                    exit_time=None,
-                    exit_price=None,
-                    pnl=0.0,
-                    reason="no_entry",
-                    meta={
-                        "detail": "no more candles available, entry_price_target not reached",
+                return create_no_entry_output(
+                    "no more candles available, entry_price_target not reached",
+                    extra_meta={
                         "entry_price_target": entry_price_target,
                         "drawdown_pct": self.drawdown_entry_pct,
                         "entry_wait_minutes": self.entry_wait_minutes,
