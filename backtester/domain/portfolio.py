@@ -90,16 +90,6 @@ class PortfolioEngine:
             base = current_balance
         return max(0.0, base * self.config.percent_per_trade)
 
-    def _in_backtest_window(self, dt: datetime) -> bool:
-        """
-        Проверяет, находится ли дата в окне бэктеста.
-        """
-        if self.config.backtest_start and dt < self.config.backtest_start:
-            return False
-        if self.config.backtest_end and dt > self.config.backtest_end:
-            return False
-        return True
-
     def simulate(
         self,
         all_results: List[Dict[str, Any]],
@@ -329,3 +319,7 @@ class PortfolioEngine:
             positions=closed_positions,
             stats=stats,
         )
+
+
+
+

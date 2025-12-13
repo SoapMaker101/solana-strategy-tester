@@ -57,3 +57,7 @@ feat: Phase 4 - Реализация портфельного слоя
 - docs/PORTFOLIO_LAYER.md - полная документация
 - docs/PNL_CALCULATION_EXPLANATION.md - объяснение различий в PnL
 - CHANGELOG.md - история изменений
+
+
+
+

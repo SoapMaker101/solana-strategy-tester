@@ -3,7 +3,6 @@ from __future__ import annotations  # Позволяет использоват�
 from datetime import timedelta, datetime
 from typing import Any, Dict, List, Sequence, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from functools import partial
 
 # Импорты компонентов системы
 from ..infrastructure.signal_loader import SignalLoader  # Интерфейс загрузки торговых сигналов

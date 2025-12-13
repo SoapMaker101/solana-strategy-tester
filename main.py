@@ -84,7 +84,6 @@ def build_strategy(cfg: StrategyConfig) -> Strategy:
     raise ValueError(f"Unknown strategy type: {cfg.type}")
 
 
-
 def load_strategies(config_path: str) -> List[Strategy]:
     """
     Загружает стратегии из YAML-файла и инициализирует каждый класс стратегии.
