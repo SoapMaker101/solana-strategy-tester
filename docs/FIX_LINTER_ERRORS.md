@@ -155,3 +155,4 @@ pip install pytest
 1. Линтер не выдает ошибок типа `reportOptionalOperand` и `reportOperatorIssue`
 2. Тесты все еще проходят (логика не нарушена)
 3. Проверки на `None` логически корректны (в тестах позиции должны быть закрыты, поэтому `exit_price` и `exit_time` не должны быть `None`)
+

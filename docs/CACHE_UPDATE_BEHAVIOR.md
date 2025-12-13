@@ -311,3 +311,4 @@ def _save_to_cache(self, path: Path, candles: List[Candle]):
 ---
 
 *Документация создана: 2025-12-13*
+

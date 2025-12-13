@@ -56,3 +56,4 @@ fix: исправлены критические баги в PortfolioEngine и 
 pytest tests/portfolio/ -v
 # Результат: 26 passed in 0.05s
 ```
+

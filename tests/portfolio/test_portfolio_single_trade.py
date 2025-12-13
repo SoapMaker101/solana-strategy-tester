@@ -231,3 +231,4 @@ def test_portfolio_single_trade_profitable_after_fees():
     # Проверка: финальный баланс больше начального
     assert result.stats.final_balance_sol > initial_balance, \
         f"Финальный баланс ({result.stats.final_balance_sol}) должен быть больше начального ({initial_balance})"
+
