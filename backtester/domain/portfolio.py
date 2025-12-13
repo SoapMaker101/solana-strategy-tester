@@ -51,6 +51,7 @@ class PortfolioConfig:
 
     # Флаги для Policy-уровня
     runner_reset_enabled: bool = False
+    runner_reset_multiple: float = 2.0  # XN multiplier (например, 2.0 = x2)
 
 
 @dataclass
@@ -60,6 +61,7 @@ class PortfolioStats:
     max_drawdown_pct: float
     trades_executed: int
     trades_skipped_by_risk: int
+    trades_skipped_by_reset: int = 0  # Сделки, пропущенные из-за runner reset
 
 
 @dataclass
@@ -180,6 +182,8 @@ class PortfolioEngine:
             equity_curve.append({"timestamp": first_time, "balance": balance})
 
         skipped_by_risk = 0
+        skipped_by_reset = 0
+        reset_until: Optional[datetime] = None  # Время, до которого игнорируем входы после reset
 
         for row in trades:
             out: StrategyOutput = row["result"]
@@ -188,6 +192,8 @@ class PortfolioEngine:
 
             # 3. Закрываем позиции, у которых exit_time <= entry_time
             still_open: List[Position] = []
+            reset_triggered = False
+            
             for pos in open_positions:
                 if pos.exit_time is not None and pos.exit_time <= entry_time:
                     # При закрытии: возвращаем размер позиции + прибыль/убыток
@@ -196,6 +202,17 @@ class PortfolioEngine:
                     balance += pos.size + trade_pnl_sol  # Возвращаем размер + PnL
                     pos.meta = pos.meta or {}
                     pos.meta["pnl_sol"] = trade_pnl_sol
+                    
+                    # Проверка runner reset: достигла ли позиция XN?
+                    # Выполняем ДО установки status и добавления в closed_positions
+                    if (self.config.runner_reset_enabled and 
+                        pos.entry_price > 0 and pos.exit_price is not None):
+                        multiplying_return = pos.exit_price / pos.entry_price
+                        if multiplying_return >= self.config.runner_reset_multiple:
+                            reset_triggered = True
+                            reset_until = pos.exit_time
+                            pos.meta["triggered_reset"] = True
+                    
                     pos.status = "closed"
                     closed_positions.append(pos)
 
@@ -206,7 +223,43 @@ class PortfolioEngine:
                         )
                 else:
                     still_open.append(pos)
+            
+            # Если сработал reset, закрываем все остальные открытые позиции
+            if reset_triggered:
+                reset_time = reset_until
+                if reset_time:
+                    # Закрываем все открытые позиции на момент reset
+                    for pos in still_open:
+                        if pos.exit_time is None:
+                            continue
+                        # Закрываем позицию на момент reset (или на ее exit_time, если он раньше)
+                        close_time = min(reset_time, pos.exit_time) if pos.exit_time else reset_time
+                        
+                        # Обновляем exit_time позиции на момент принудительного закрытия
+                        pos.exit_time = close_time
+                        
+                        # Пересчитываем PnL для досрочного закрытия
+                        # Используем текущий exit_price и exit_time позиции
+                        trade_pnl_sol = pos.size * (pos.pnl_pct or 0.0)
+                        balance += pos.size + trade_pnl_sol
+                        pos.meta = pos.meta or {}
+                        pos.meta["pnl_sol"] = trade_pnl_sol
+                        pos.meta["closed_by_reset"] = True
+                        pos.status = "closed"
+                        closed_positions.append(pos)
+                        
+                        peak_balance = max(peak_balance, balance)
+                        equity_curve.append(
+                            {"timestamp": close_time, "balance": balance}
+                        )
+                    still_open = []  # Все позиции закрыты
+            
             open_positions = still_open
+
+            # Проверка: игнорируем входы до следующего сигнала после reset
+            if reset_until is not None and entry_time <= reset_until:
+                skipped_by_reset += 1
+                continue
 
             # 4. Проверка лимитов портфеля
 
@@ -219,19 +272,32 @@ class PortfolioEngine:
             total_open_notional = sum(p.size for p in open_positions)
             # Доступный баланс = текущий баланс (уже уменьшенный на открытые позиции)
             available_balance = balance
-            current_exposure = total_open_notional / (available_balance + total_open_notional) if (available_balance + total_open_notional) > 0 else 0.0
-            
-            # Максимально допустимая экспозиция от общего капитала (баланс + открытые позиции)
             total_capital = available_balance + total_open_notional
-            max_allowed_notional = self.config.max_exposure * total_capital - total_open_notional
-
-            if max_allowed_notional <= 0:
-                skipped_by_risk += 1
-                continue
+            
+            # Рассчитываем максимально допустимый размер новой позиции с учетом max_exposure
+            # Формула: (total_open_notional + new_size) / (total_capital + new_size) <= max_exposure
+            # Решаем: new_size <= (max_exposure * total_capital - total_open_notional) / (1 - max_exposure)
+            if self.config.max_exposure >= 1.0:
+                # Нет ограничения на экспозицию
+                max_allowed_notional = float('inf')
+            else:
+                numerator = self.config.max_exposure * total_capital - total_open_notional
+                if numerator <= 0:
+                    # Уже превышен лимит экспозиции
+                    max_allowed_notional = 0.0
+                else:
+                    max_allowed_notional = numerator / (1.0 - self.config.max_exposure)
 
             # Размер позиции рассчитываем от доступного баланса
             desired_size = self._position_size(available_balance)
-            size = min(desired_size, max_allowed_notional)
+            
+            # Проверяем, что желаемый размер не превышает лимит экспозиции
+            if desired_size > max_allowed_notional:
+                # Если желаемый размер превышает лимит, отклоняем сделку полностью
+                skipped_by_risk += 1
+                continue
+            
+            size = desired_size
             if size <= 0:
                 skipped_by_risk += 1
                 continue
@@ -267,14 +333,43 @@ class PortfolioEngine:
             equity_curve.append({"timestamp": entry_time, "balance": balance})
 
         # 8. Закрываем все оставшиеся открытые позиции
-        for pos in open_positions:
-            if pos.exit_time is None:
-                continue
+        # Сортируем позиции по exit_time для корректной обработки reset
+        positions_to_close = sorted([p for p in open_positions if p.exit_time is not None], 
+                                   key=lambda p: p.exit_time if p.exit_time else datetime.max)
+        
+        reset_triggered_final = False
+        reset_time_final: Optional[datetime] = None
+        
+        for pos in positions_to_close:
+            # Проверка runner reset: достигла ли позиция XN?
+            if (self.config.runner_reset_enabled and 
+                not reset_triggered_final and
+                pos.entry_price > 0 and pos.exit_price is not None):
+                multiplying_return = pos.exit_price / pos.entry_price
+                if multiplying_return >= self.config.runner_reset_multiple:
+                    reset_triggered_final = True
+                    reset_time_final = pos.exit_time
+                    pos.meta = pos.meta or {}
+                    pos.meta["triggered_reset"] = True
+                    # Все последующие позиции закрываем принудительно
+                    remaining_positions = [p for p in positions_to_close if p != pos and positions_to_close.index(p) > positions_to_close.index(pos)]
+                    for remaining_pos in remaining_positions:
+                        remaining_pos.meta = remaining_pos.meta or {}
+                        remaining_pos.meta["closed_by_reset"] = True
+                        if remaining_pos.exit_time and reset_time_final:
+                            remaining_pos.exit_time = min(remaining_pos.exit_time, reset_time_final)
+            
+            # Если позиция закрыта по reset и уже помечена, skip
+            if pos.meta.get("closed_by_reset"):
+                # Позиция уже помечена как closed_by_reset, продолжаем
+                pass
+            
             # При закрытии: возвращаем размер позиции + прибыль/убыток
             trade_pnl_sol = pos.size * (pos.pnl_pct or 0.0)
             balance += pos.size + trade_pnl_sol  # Возвращаем размер + PnL
             pos.meta = pos.meta or {}
             pos.meta["pnl_sol"] = trade_pnl_sol
+            
             pos.status = "closed"
             closed_positions.append(pos)
 
@@ -308,6 +403,7 @@ class PortfolioEngine:
             max_drawdown_pct=max_drawdown_pct,
             trades_executed=len(closed_positions),
             trades_skipped_by_risk=skipped_by_risk,
+            trades_skipped_by_reset=skipped_by_reset,
         )
 
         # Все позиции помечаем closed для консистентности

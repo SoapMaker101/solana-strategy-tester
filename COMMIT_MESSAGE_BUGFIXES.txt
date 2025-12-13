@@ -1,0 +1,58 @@
+fix: исправлены критические баги в PortfolioEngine и улучшены тесты
+
+## Исправленные проблемы
+
+### 1. Исправлена формула расчета max_exposure
+- Проблема: неправильная формула не учитывала изменение капитала при добавлении позиции
+- Решение: реализована корректная формула с учетом изменения капитала
+- Результат: тесты test_max_exposure_rejects_second_trade и test_max_exposure_with_fixed_allocation теперь проходят
+
+### 2. Исправлено обновление exit_time при runner reset
+- Проблема: exit_time не обновлялся при принудительном закрытии по reset
+- Решение: добавлено обновление pos.exit_time = close_time при принудительном закрытии
+- Результат: тест test_runner_reset_with_three_trades_first_triggers_reset теперь проходит
+
+### 3. Исправлена обработка меток runner reset
+- Проблема: метка triggered_reset не добавлялась позициям, закрывающимся в конце цикла
+- Решение: добавлена обработка runner reset при закрытии позиций в конце цикла с сортировкой по exit_time
+- Результат: тесты test_runner_reset_closes_all_positions_on_xn и test_runner_reset_with_multiple_xn_levels теперь проходят
+
+## Улучшения тестов
+
+### Добавлены проверки на None
+- test_portfolio_single_trade.py: добавлена проверка position.pnl_pct is not None
+- test_portfolio_fees_turn_profit_to_loss.py: добавлены проверки position.pnl_pct is not None (2 места)
+- test_portfolio_dynamic_allocation.py: 
+  - добавлены проверки entry_time is not None перед сравнением
+  - исправлено использование next() с обработкой None и проверками
+
+## Реорганизация документации
+
+- Перенесены файлы в docs/:
+  - AUDIT_TESTS.md → docs/AUDIT_TESTS.md
+  - CHANGELOG.md → docs/CHANGELOG.md
+- Обновлены ссылки в документации на новые пути
+
+## Результаты
+
+- ✅ Все 26 тестов проходят (было 5 падающих)
+- ✅ Линтер не выявил ошибок
+- ✅ Все критические баги исправлены
+- ✅ Тесты стали более надежными с проверками на None
+
+## Измененные файлы
+
+- backtester/domain/portfolio.py - исправлены 3 критические проблемы
+- tests/portfolio/test_portfolio_single_trade.py - добавлены проверки на None
+- tests/portfolio/test_portfolio_fees_turn_profit_to_loss.py - добавлены проверки на None
+- tests/portfolio/test_portfolio_dynamic_allocation.py - добавлены проверки и исправлено использование next()
+- docs/CHANGELOG.md - добавлена секция о багфиксах, обновлена ссылка на AUDIT_TESTS.md
+- docs/AUDIT_TESTS.md - создан файл с аудитом проблем (перенесен из корня)
+- docs/GITHUB_COMMIT_INSTRUCTIONS.md - обновлены ссылки на docs/CHANGELOG.md
+
+## Тестирование
+
+```bash
+pytest tests/portfolio/ -v
+# Результат: 26 passed in 0.05s
+```

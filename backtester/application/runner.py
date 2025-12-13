@@ -223,6 +223,7 @@ class BacktestRunner:
             backtest_start=backtest_start,
             backtest_end=backtest_end,
             runner_reset_enabled=portfolio_cfg.get("runner_reset_enabled", False),
+            runner_reset_multiple=float(portfolio_cfg.get("runner_reset_multiple", 2.0)),
         )
 
     def run_portfolio(self) -> Dict[str, PortfolioResult]:
