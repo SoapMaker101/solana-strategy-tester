@@ -1,0 +1,26 @@
+{
+  "include": [
+    "backtester",
+    "tests",
+    "main.py"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules"
+  ],
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": false,
+  "pythonVersion": "3.8",
+  "typeCheckingMode": "basic",
+  "venvPath": ".",
+  "venv": ".",
+  "stubPath": "",
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "pythonVersion": "3.8",
+      "extraPaths": []
+    }
+  ],
+  "reportUnusedImport": "none"
+}

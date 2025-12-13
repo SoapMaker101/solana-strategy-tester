@@ -160,10 +160,11 @@ class PerformanceTester:
         reason_counts = defaultdict(int)
         
         for result in results:
-            output: StrategyOutput = result.get("result")
-            if not isinstance(output, StrategyOutput):
+            output_raw = result.get("result")
+            if not isinstance(output_raw, StrategyOutput):
                 stats["errors"] += 1
                 continue
+            output: StrategyOutput = output_raw
             
             reason = output.reason
             reason_counts[reason] += 1
