@@ -26,6 +26,24 @@ def rrd_strategy():
 
 
 @pytest.fixture
+def rrd_strategy_relaxed_jump():
+    """Создает RRD стратегию с увеличенным max_price_jump_pct для тестов с большими скачками цены"""
+    config = StrategyConfig(
+        name="test_rrd_relaxed",
+        type="RRD",
+        params={
+            "drawdown_entry_pct": 25,
+            "tp_pct": 20,
+            "sl_pct": 10,
+            "max_minutes": 1000,
+            "entry_wait_minutes": 360,
+            "max_price_jump_pct": 30.0  # Разрешаем большие скачки для тестов
+        }
+    )
+    return RRDStrategy(config)
+
+
+@pytest.fixture
 def sample_signal():
     """Создает тестовый сигнал"""
     return Signal(
@@ -37,7 +55,7 @@ def sample_signal():
     )
 
 
-def test_rrd_strategy_tp_after_entry(rrd_strategy, sample_signal):
+def test_rrd_strategy_tp_after_entry(rrd_strategy_relaxed_jump, sample_signal):
     """✅ Тест: Успешный вход и выход по TP"""
     # Первая свеча после сигнала (базовая цена)
     first_candle_close = 100.0
@@ -82,7 +100,7 @@ def test_rrd_strategy_tp_after_entry(rrd_strategy, sample_signal):
         global_params={}
     )
     
-    result = rrd_strategy.on_signal(data)
+    result = rrd_strategy_relaxed_jump.on_signal(data)
     
     assert result.entry_price == pytest.approx(entry_price_target, rel=1e-3)
     assert result.exit_price == pytest.approx(tp_price, rel=1e-3)
@@ -92,7 +110,7 @@ def test_rrd_strategy_tp_after_entry(rrd_strategy, sample_signal):
     assert result.exit_time == candles[2].timestamp
 
 
-def test_rrd_strategy_sl_after_entry(rrd_strategy, sample_signal):
+def test_rrd_strategy_sl_after_entry(rrd_strategy_relaxed_jump, sample_signal):
     """❌ Тест: Успешный вход и выход по SL"""
     first_candle_close = 100.0
     drawdown_entry_pct = 0.25
@@ -136,7 +154,7 @@ def test_rrd_strategy_sl_after_entry(rrd_strategy, sample_signal):
         global_params={}
     )
     
-    result = rrd_strategy.on_signal(data)
+    result = rrd_strategy_relaxed_jump.on_signal(data)
     
     assert result.entry_price == pytest.approx(entry_price_target, rel=1e-3)
     assert result.exit_price == pytest.approx(sl_price, rel=1e-3)
@@ -144,7 +162,7 @@ def test_rrd_strategy_sl_after_entry(rrd_strategy, sample_signal):
     assert result.pnl == pytest.approx(-sl_pct, rel=1e-3)  # -10%
 
 
-def test_rrd_strategy_timeout_after_entry(rrd_strategy, sample_signal):
+def test_rrd_strategy_timeout_after_entry(rrd_strategy_relaxed_jump, sample_signal):
     """⏱ Тест: Вход был, TP/SL не было, сработал timeout"""
     first_candle_close = 100.0
     drawdown_entry_pct = 0.25
@@ -189,7 +207,8 @@ def test_rrd_strategy_timeout_after_entry(rrd_strategy, sample_signal):
             "tp_pct": 20,
             "sl_pct": 10,
             "max_minutes": 5,  # Короткий таймаут
-            "entry_wait_minutes": 360
+            "entry_wait_minutes": 360,
+            "max_price_jump_pct": 30.0  # Разрешаем большие скачки для теста
         }
     )
     strategy = RRDStrategy(config)
@@ -304,7 +323,7 @@ def test_rrd_strategy_entry_wait_minutes_default(rrd_strategy, sample_signal):
     assert strategy.entry_wait_minutes == 360
 
 
-def test_rrd_strategy_entry_price_target_calculation(rrd_strategy, sample_signal):
+def test_rrd_strategy_entry_price_target_calculation(rrd_strategy_relaxed_jump, sample_signal):
     """Тест: Проверка правильности расчета entry_price_target"""
     first_candle_close = 100.0
     drawdown_entry_pct = 0.25
@@ -336,7 +355,7 @@ def test_rrd_strategy_entry_price_target_calculation(rrd_strategy, sample_signal
         global_params={}
     )
     
-    result = rrd_strategy.on_signal(data)
+    result = rrd_strategy_relaxed_jump.on_signal(data)
     
     # Проверяем, что entry_price равен entry_price_target
     assert result.entry_price == pytest.approx(expected_entry_price, rel=1e-3)
