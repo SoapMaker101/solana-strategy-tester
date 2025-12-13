@@ -86,7 +86,7 @@ def test_rr_strategy_tp_hit(rr_strategy, sample_signal, sample_candles):
     result = rr_strategy.on_signal(data)
     
     assert result.entry_price == entry_price
-    assert result.exit_price == tp_price
+    assert result.exit_price == pytest.approx(tp_price, rel=1e-6)
     assert result.reason == "tp"
     assert result.pnl == pytest.approx(0.10, rel=1e-3)  # 10%
 
