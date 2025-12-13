@@ -238,3 +238,4 @@ def test_fees_can_turn_small_profit_into_loss_with_different_sizes():
     # Проверка: баланс снизился
     assert result.stats.final_balance_sol < initial_balance, \
         f"Баланс должен снизиться: {result.stats.final_balance_sol} < {initial_balance}"
+

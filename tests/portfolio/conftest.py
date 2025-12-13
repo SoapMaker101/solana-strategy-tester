@@ -38,3 +38,4 @@ def custom_portfolio_config():
         backtest_end=datetime(2024, 12, 31, tzinfo=timezone.utc),
         runner_reset_enabled=False
     )
+

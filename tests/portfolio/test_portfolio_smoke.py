@@ -150,3 +150,4 @@ def test_custom_fixture_work(custom_portfolio_config):
     assert custom_portfolio_config.initial_balance_sol == 100.0
     assert custom_portfolio_config.max_open_positions == 5
     assert custom_portfolio_config.fee_model.swap_fee_pct == 0.002
+
