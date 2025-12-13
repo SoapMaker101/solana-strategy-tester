@@ -10,6 +10,7 @@ from ..infrastructure.price_loader import PriceLoader    # Интерфейс з
 from ..domain.strategy_base import Strategy              # Базовый класс стратегий
 from ..domain.models import StrategyInput, StrategyOutput, Signal, Candle  # Общие модели
 from ..domain.portfolio import PortfolioConfig, PortfolioEngine, FeeModel, PortfolioResult  # Портфельный слой
+from ..domain.rr_utils import create_error_output
 
 class BacktestRunner:
     """
@@ -103,15 +104,7 @@ class BacktestRunner:
                 out: StrategyOutput = strategy.on_signal(data)
             except Exception as e:
                 # Если ошибка — фиксируем результат с reason="error"
-                out = StrategyOutput(
-                    entry_time=None,
-                    entry_price=None,
-                    exit_time=None,
-                    exit_price=None,
-                    pnl=0.0,
-                    reason="error",
-                    meta={"exception": str(e)},
-                )
+                out = create_error_output(str(e))
 
             # Добавляем результат в список
             results.append(
@@ -156,15 +149,7 @@ class BacktestRunner:
                                 "contract_address": sig.contract_address,
                                 "strategy": strategy.config.name,
                                 "timestamp": sig.timestamp,
-                                "result": StrategyOutput(
-                                    entry_time=None,
-                                    entry_price=None,
-                                    exit_time=None,
-                                    exit_price=None,
-                                    pnl=0.0,
-                                    reason="error",
-                                    meta={"exception": str(e)},
-                                ),
+                                "result": create_error_output(str(e)),
                             })
             
             # Сортируем результаты по signal_id и timestamp для консистентности

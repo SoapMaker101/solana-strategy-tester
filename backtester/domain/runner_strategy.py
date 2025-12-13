@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import List
 from .models import StrategyInput, StrategyOutput, Candle
 from .strategy_base import Strategy
+from .rr_utils import create_no_entry_output
 
 
 class RunnerStrategy(Strategy):
@@ -17,12 +18,7 @@ class RunnerStrategy(Strategy):
 
         # Если нет свечей — ничего сделать нельзя
         if len(candles) == 0:
-            return StrategyOutput(
-                entry_time=None, entry_price=None,
-                exit_time=None, exit_price=None,
-                pnl=0.0, reason="no_entry",
-                meta={"detail": "no candles (runner)"}
-            )
+            return create_no_entry_output("no candles (runner)")
 
         # Вход на первой свече
         entry = candles[0]
