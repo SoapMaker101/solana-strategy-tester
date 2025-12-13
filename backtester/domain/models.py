@@ -1,4 +1,4 @@
-#models.py
+# backtester/domain/models.py
 from __future__ import annotations  # Позволяет использовать аннотации типов самого себя внутри класса
 
 from dataclasses import dataclass, field

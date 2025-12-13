@@ -6,6 +6,7 @@ import json                             # Для сохранения резул
 from pathlib import Path                # Удобная работа с путями к файлам и директориям
 from typing import List
 from datetime import datetime
+from collections import defaultdict
 import yaml                             # Для загрузки YAML конфигураций
 
 # Импорт основных компонентов бэктестера
@@ -154,7 +155,6 @@ def main():
     print(f"Backtest finished. Results count: {len(results)}")
 
     # Группируем результаты по стратегиям и генерируем отчеты
-    from collections import defaultdict
     results_by_strategy = defaultdict(list)
     
     for row in results:

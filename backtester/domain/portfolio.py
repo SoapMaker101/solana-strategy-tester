@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
 from .position import Position
@@ -159,7 +159,6 @@ class PortfolioEngine:
                 trades_skipped_by_risk=0,
             )
             # Используем текущее время для equity curve, если нет сделок
-            from datetime import datetime, timezone
             return PortfolioResult(
                 equity_curve=[{"timestamp": datetime.now(timezone.utc), "balance": initial}],
                 positions=[],

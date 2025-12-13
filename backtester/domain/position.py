@@ -6,7 +6,7 @@ from datetime import datetime
 
 @dataclass
 class Position:
-    signal_id: Any                        # Идентификатор сигнала, по которому была открыта позиция
+    signal_id: str                        # Идентификатор сигнала, по которому была открыта позиция
     contract_address: str                 # Адрес токена/контракта, к которому относится позиция
     entry_time: datetime                  # Время входа в позицию
     entry_price: float                    # Цена входа
