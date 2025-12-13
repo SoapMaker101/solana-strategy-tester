@@ -39,16 +39,18 @@ backtester/
 │
 ├── domain/
 │   ├── models.py           # Signal, Candle, StrategyInput, StrategyOutput dataclasses
-│   ├── position.py         # Position model (for future position manager / reports)
+│   ├── position.py         # Position model (for portfolio management)
+│   ├── portfolio.py        # Portfolio engine with fees, limits, and equity tracking
 │   ├── strategy_base.py    # StrategyConfig + abstract Strategy interface
 │   ├── rr_strategy.py      # RR strategy (TP/SL on first candle after signal)
-│   ├── rrd_strategy.py     # RRD stub (Risk-Reward with Drawdown)
-│   └── runner_strategy.py  # Runner stub (hold from first to last candle in window)
+│   ├── rrd_strategy.py     # RRD strategy (Risk-Reward with Drawdown entry)
+│   ├── runner_strategy.py  # Runner strategy (hold from first to last candle)
+│   └── rr_utils.py         # Shared utilities for RR strategies (TP/SL logic, helpers)
 │
 ├── infrastructure/
 │   ├── signal_loader.py    # CsvSignalLoader → List[Signal]
-│   ├── price_loader.py     # CsvPriceLoader  → List[Candle] from local CSV
-│   └── reporter.py         # Placeholder for future reporting / export
+│   ├── price_loader.py     # CsvPriceLoader, GeckoTerminalPriceLoader → List[Candle]
+│   └── reporter.py         # Reporter for generating reports (JSON, CSV, HTML, charts)
 │
 └── __init__.py
 
