@@ -1,30 +1,79 @@
 # config/strategies_example.yaml
-# ⚙️ Список стратегий, которые будут применяться ко всем сигналам
-# Каждая стратегия описана через:
-# - name: Название (будет отображаться в выводе)
-# - type: Тип стратегии (RR, RRD, RUNNER и т.д.)
-# - params: Параметры конкретной логики входа/выхода
+# SMOKE PACK: быстрый прогон, чтобы проверить скорость, кеш и корректность *_trades.csv
+
+# -----------------------------
+# RR (3–5 стратегий)
+# -----------------------------
+- name: RR_100_20
+  type: RR
+  params:
+    tp_pct: 100
+    sl_pct: 20
+    max_minutes: 42000
+    # Если RRStrategy поддерживает этот параметр — ок; если нет, просто игнорируется.
+    max_price_jump_pct: 30.0
+
+- name: RR_200_50
+  type: RR
+  params:
+    tp_pct: 200
+    sl_pct: 50
+    max_minutes: 42000
+    max_price_jump_pct: 30.0
 
 - name: RR_300_75
-  type: RR                  # Стратегия Risk/Reward — классический вход после сигнала
+  type: RR
   params:
-    tp_pct: 300             # Take Profit: закрываем позицию при +10%
-    sl_pct: 75              # Stop Loss: закрываем позицию при -10%
-    max_minutes: 42000      # Таймаут (в минутах) — максимум сколько держим позицию (≈ 30 дней)
-
-- name: RRD_30_100_50
-  type: RRD                 # Стратегия с отложенным входом при drawdown (просадке)
-  params:
-    drawdown_entry_pct: 30  # Вход, если цена падает на 25% от цены первой свечи после сигнала
-    tp_pct: 100              # TP: выход при +20%
-    sl_pct: 50              # SL: выход при -10%
-    max_minutes: 42000      # Максимальное удержание позиции после входа (≈ 30 дней)
-    entry_wait_minutes: 360 # Максимум 6 часов на то, чтобы цена провалилась до точки входа
-
-- name: test-rr
-  type: RR                  # Альтернативная RR-стратегия с использованием rr коэффициента
-  params:
-    rr: 2.0                 # Соотношение TP/SL = 2:1 (можно использовать вместо tp_pct/sl_pct)
-    sl_pct: 0.05            # Стоп-лосс в % (0.05% — суперкороткий риск)
-    timeout_minutes: 240    # ⛔️ Устаревший параметр — можно удалить или заменить на max_minutes
+    tp_pct: 300
+    sl_pct: 75
     max_minutes: 42000
+    max_price_jump_pct: 30.0
+
+
+# -----------------------------
+# RRD (3–5 стратегий)
+# entry_wait_minutes = 180 (3 часа) как ты и хочешь
+# max_price_jump_pct = 30.0 чтобы smoke не упёрся в фильтр "скачок цены"
+# -----------------------------
+- name: RRD_DD10_TP100_SL20_W180
+  type: RRD
+  params:
+    drawdown_entry_pct: 10
+    tp_pct: 100
+    sl_pct: 20
+    max_minutes: 42000
+    entry_wait_minutes: 180
+    max_price_jump_pct: 30.0
+
+- name: RRD_DD30_TP200_SL50_W180
+  type: RRD
+  params:
+    drawdown_entry_pct: 30
+    tp_pct: 200
+    sl_pct: 50
+    max_minutes: 42000
+    entry_wait_minutes: 180
+    max_price_jump_pct: 30.0
+
+- name: RRD_DD50_TP300_SL75_W180
+  type: RRD
+  params:
+    drawdown_entry_pct: 50
+    tp_pct: 300
+    sl_pct: 75
+    max_minutes: 42000
+    entry_wait_minutes: 180
+    max_price_jump_pct: 30.0
+
+
+# -----------------------------
+# RUNNER (2–3 стратегии)
+# RunnerStrategy сейчас buy&hold stub: параметры не читает, поэтому просто разные names
+# -----------------------------
+- name: RUNNER_SMOKE_A
+  type: RUNNER
+  params: {}
+
+- name: RUNNER_SMOKE_B
+  type: RUNNER
+  params: {}
