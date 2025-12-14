@@ -276,3 +276,4 @@ def test_dynamic_allocation_vs_fixed_allocation():
         f"В fixed mode размер второй позиции должен быть {expected_fixed_size} SOL (от начального баланса)"
 
 
+
