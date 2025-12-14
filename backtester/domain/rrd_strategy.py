@@ -9,6 +9,11 @@ from .rr_utils import (
     calculate_volatility_around_entry,
     calculate_signal_to_entry_delay,
 )
+from .trade_features import (
+    get_total_supply,
+    calc_window_features,
+    calc_trade_mcap_features,
+)
 
 # RRDStrategy — стратегия с отложенным входом по drawdown
 class RRDStrategy(Strategy):
@@ -190,6 +195,22 @@ class RRDStrategy(Strategy):
         signal_to_entry_delay = calculate_signal_to_entry_delay(signal_time, entry_candle.timestamp)
         volatility_around_entry = calculate_volatility_around_entry(all_candles, entry_candle)
         
+        # Вычисляем trade features
+        # Для window features нужны все candles (используем all_candles, они уже содержат все доступные)
+        window_features = calc_window_features(
+            candles=all_candles,
+            entry_time=entry_candle.timestamp,
+            entry_price=entry_price,
+        )
+        
+        # Вычисляем mcap features
+        total_supply = get_total_supply(data.signal)
+        mcap_features = calc_trade_mcap_features(
+            entry_price=entry_price,
+            exit_price=None,  # Будет добавлено после выхода в apply_rr_logic
+            total_supply=total_supply,
+        )
+        
         # Базовые метаданные
         base_meta = {
             "entry_price_target": entry_price_target,
@@ -199,6 +220,9 @@ class RRDStrategy(Strategy):
             "signal_to_entry_delay_minutes": signal_to_entry_delay,
             "volatility_around_entry": volatility_around_entry,
         }
+        # Добавляем trade features
+        base_meta.update(window_features)
+        base_meta.update(mcap_features)
         
         # Свечи после входа (начиная со следующей)
         start_check_idx = entry_idx + 1
@@ -216,6 +240,19 @@ class RRDStrategy(Strategy):
             contract_address=contract,
             base_meta=base_meta,
         )
+        
+        # Добавляем exit mcap features (если есть exit_price)
+        if result.exit_price is not None:
+            exit_mcap_features = calc_trade_mcap_features(
+                entry_price=entry_price,
+                exit_price=result.exit_price,
+                total_supply=total_supply,
+            )
+            # Обновляем только exit_mcap_proxy и mcap_change_pct (total_supply_used уже есть)
+            if "exit_mcap_proxy" in exit_mcap_features:
+                result.meta["exit_mcap_proxy"] = exit_mcap_features["exit_mcap_proxy"]
+            if "mcap_change_pct" in exit_mcap_features:
+                result.meta["mcap_change_pct"] = exit_mcap_features["mcap_change_pct"]
         
         # Добавляем exit_idx в мета (если его еще нет)
         if "exit_idx" not in result.meta and result.exit_time:

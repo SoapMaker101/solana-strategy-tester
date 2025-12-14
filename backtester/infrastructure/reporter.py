@@ -250,6 +250,78 @@ class Reporter:
         df.to_csv(csv_path, index=False)
         print(f"📊 Saved CSV report to {csv_path}")
 
+    def save_trades_table(self, strategy_name: str, results: List[Dict[str, Any]], out_name: Optional[str] = None) -> Path:
+        """
+        Сохраняет единую CSV таблицу сделок с расплющенным meta.
+        
+        Фильтрует только результаты с entry_time != None и reason != ("no_entry", "error").
+        Расплющивает meta: скаляры на верхнем уровне, dict/list → json string.
+        
+        :param strategy_name: Название стратегии (используется в имени файла, если out_name не указан).
+        :param results: Список словарей с результатами по сигналам.
+        :param out_name: Опциональное имя файла (без расширения). Если не указано, используется {strategy_name}_trades.
+        :return: Путь к сохраненному файлу.
+        """
+        import pandas as pd
+        
+        # Фильтруем только сделки с входом (исключаем no_entry и error)
+        trades = [
+            row for row in results
+            if row["result"].entry_time is not None 
+            and row["result"].reason not in ("no_entry", "error")
+        ]
+        
+        if not trades:
+            # Создаём пустой DataFrame с базовыми колонками
+            csv_path = self.output_dir / (f"{out_name or strategy_name}_trades.csv")
+            pd.DataFrame(columns=[
+                "signal_id", "contract_address", "signal_timestamp",
+                "entry_time", "exit_time", "entry_price", "exit_price",
+                "pnl_pct", "reason", "source", "narrative"
+            ]).to_csv(csv_path, index=False)
+            print(f"📊 Saved empty trades table to {csv_path}")
+            return csv_path
+        
+        # Создаём список строк для CSV
+        csv_rows = []
+        for row in trades:
+            r = row["result"]
+            
+            # Базовые поля
+            csv_row = {
+                "signal_id": row["signal_id"],
+                "contract_address": row["contract_address"],
+                "signal_timestamp": row["timestamp"],
+                "entry_time": r.entry_time,
+                "exit_time": r.exit_time,
+                "entry_price": r.entry_price,
+                "exit_price": r.exit_price,
+                "pnl_pct": r.pnl,  # В долях (0.1 = 10%)
+                "reason": r.reason,
+                "source": row.get("source"),
+                "narrative": row.get("narrative"),
+            }
+            
+            # Расплющиваем meta
+            if r.meta:
+                for key, value in r.meta.items():
+                    # Если значение - словарь или список, преобразуем в JSON string
+                    if isinstance(value, (dict, list)):
+                        csv_row[f"meta_{key}"] = json.dumps(value, ensure_ascii=False)
+                    else:
+                        # Скалярные значения добавляем как есть
+                        csv_row[f"meta_{key}"] = value
+            
+            csv_rows.append(csv_row)
+        
+        # Создаём DataFrame и сохраняем
+        df = pd.DataFrame(csv_rows)
+        file_name = f"{out_name or strategy_name}_trades.csv"
+        csv_path = self.output_dir / file_name
+        df.to_csv(csv_path, index=False)
+        print(f"📊 Saved trades table to {csv_path}")
+        return csv_path
+
     def generate_html_report(self, strategy_name: str, metrics: Dict[str, Any], results: List[Dict[str, Any]]) -> None:
         """
         Генерирует HTML отчет с метриками и графиками.

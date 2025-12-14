@@ -323,3 +323,4 @@ def test_limits_work_together():
     assert result.stats.trades_skipped_by_risk == 1, \
         "Должна быть отклонена 1 сделка"
 
+

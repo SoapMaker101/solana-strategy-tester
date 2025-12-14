@@ -275,3 +275,4 @@ def test_dynamic_allocation_vs_fixed_allocation():
     assert abs(fixed_position_2.size - expected_fixed_size) < 0.01, \
         f"В fixed mode размер второй позиции должен быть {expected_fixed_size} SOL (от начального баланса)"
 
+

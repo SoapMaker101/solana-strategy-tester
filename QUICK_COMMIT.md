@@ -46,3 +46,4 @@ git push origin main
 
 См. `docs/GITHUB_COMMIT_INSTRUCTIONS.md` для детальной информации.
 
+

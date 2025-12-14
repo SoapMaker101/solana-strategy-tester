@@ -3,6 +3,11 @@ from typing import List
 from .models import StrategyInput, StrategyOutput, Candle
 from .strategy_base import Strategy
 from .rr_utils import apply_rr_logic, check_candle_quality, calculate_volatility_around_entry, calculate_signal_to_entry_delay
+from .trade_features import (
+    get_total_supply,
+    calc_window_features,
+    calc_trade_mcap_features,
+)
 
 # Стратегия RR (Risk/Reward) — базовая реализация трейда с TP и SL
 class RRStrategy(Strategy):
@@ -62,11 +67,31 @@ class RRStrategy(Strategy):
         signal_to_entry_delay = calculate_signal_to_entry_delay(signal_time, entry_candle.timestamp)
         volatility_around_entry = calculate_volatility_around_entry(candles, entry_candle)
 
+        # Вычисляем trade features
+        # Для window features нужны все candles (не только после signal_time)
+        all_candles = sorted(data.candles, key=lambda c: c.timestamp)
+        window_features = calc_window_features(
+            candles=all_candles,
+            entry_time=entry_candle.timestamp,
+            entry_price=entry_price,
+        )
+        
+        # Вычисляем mcap features
+        total_supply = get_total_supply(data.signal)
+        mcap_features = calc_trade_mcap_features(
+            entry_price=entry_price,
+            exit_price=None,  # Будет добавлено после выхода в apply_rr_logic
+            total_supply=total_supply,
+        )
+
         # Базовые метаданные
         base_meta = {
             "signal_to_entry_delay_minutes": signal_to_entry_delay,
             "volatility_around_entry": volatility_around_entry,
         }
+        # Добавляем trade features
+        base_meta.update(window_features)
+        base_meta.update(mcap_features)
 
         # Глобальные параметры
         loader = data.global_params.get("_price_loader")
@@ -77,7 +102,7 @@ class RRStrategy(Strategy):
         candles_from_entry = candles[1:] if len(candles) > 1 else []
 
         # Применяем общую RR-логику
-        return apply_rr_logic(
+        result = apply_rr_logic(
             entry_candle=entry_candle,
             entry_price=entry_price,
             tp_pct=self.tp_pct,
@@ -88,3 +113,18 @@ class RRStrategy(Strategy):
             contract_address=contract,
             base_meta=base_meta,
         )
+        
+        # Добавляем exit mcap features (если есть exit_price)
+        if result.exit_price is not None:
+            exit_mcap_features = calc_trade_mcap_features(
+                entry_price=entry_price,
+                exit_price=result.exit_price,
+                total_supply=total_supply,
+            )
+            # Обновляем только exit_mcap_proxy и mcap_change_pct (total_supply_used уже есть)
+            if "exit_mcap_proxy" in exit_mcap_features:
+                result.meta["exit_mcap_proxy"] = exit_mcap_features["exit_mcap_proxy"]
+            if "mcap_change_pct" in exit_mcap_features:
+                result.meta["mcap_change_pct"] = exit_mcap_features["mcap_change_pct"]
+        
+        return result
