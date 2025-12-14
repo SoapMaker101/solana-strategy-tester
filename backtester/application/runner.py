@@ -178,6 +178,22 @@ class BacktestRunner:
                 signal_results = self._process_signal(sig)
                 self.results.extend(signal_results)
 
+        # Выводим summary по rate limit, если используется GeckoTerminalPriceLoader
+        if hasattr(self.price_loader, 'get_rate_limit_summary'):
+            summary = self.price_loader.get_rate_limit_summary()
+            if summary.get("total_requests", 0) > 0:
+                print("\n" + "="*60)
+                print("=== GeckoTerminal Rate Limit Summary ===")
+                print("="*60)
+                print(f"total_requests: {summary.get('total_requests', 0)}")
+                print(f"blocked_events: {summary.get('requests_blocked_by_rate_limiter', 0)}")
+                print(f"total_wait_seconds: {summary.get('total_wait_time_seconds', 0):.2f}")
+                print(f"http_429: {summary.get('http_429', 0)}")
+                print(f"mode_on_429: {summary.get('mode_on_429', 'N/A')}")
+                if summary.get('rate_limit_failures', 0) > 0:
+                    print(f"rate_limit_failures: {summary.get('rate_limit_failures', 0)}")
+                print("="*60)
+        
         return self.results
 
     def _build_portfolio_config(self) -> PortfolioConfig:
