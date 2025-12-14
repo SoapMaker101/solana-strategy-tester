@@ -134,3 +134,4 @@ pytest tests/portfolio/ -v
 - `docs/AUDIT_TESTS.md` - полный аудит проблем
 - `docs/CHANGELOG.md` - детальное описание исправлений
 
+

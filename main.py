@@ -170,6 +170,8 @@ def main():
     for strategy_name, strategy_results in results_by_strategy.items():
         print(f"\n📊 Generating report for strategy: {strategy_name}")
         reporter.generate_full_report(strategy_name, strategy_results)
+        # Сохраняем единую таблицу сделок с расплющенным meta
+        reporter.save_trades_table(strategy_name, strategy_results)
 
     # Печатаем краткий результат для каждой стратегии
     print("\n📈 Strategy-level Summary:")
