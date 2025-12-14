@@ -155,3 +155,4 @@ def calc_trade_mcap_features(
             features["mcap_change_pct"] = mcap_change_pct
     
     return features
+

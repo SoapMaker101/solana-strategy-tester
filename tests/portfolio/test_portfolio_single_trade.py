@@ -233,3 +233,4 @@ def test_portfolio_single_trade_profitable_after_fees():
         f"Финальный баланс ({result.stats.final_balance_sol}) должен быть больше начального ({initial_balance})"
 
 
+
