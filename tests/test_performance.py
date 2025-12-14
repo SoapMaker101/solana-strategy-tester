@@ -32,12 +32,16 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 # Настройка кодировки вывода для Windows (поддержка эмодзи)
+# НЕ выполняем при запуске через pytest, чтобы избежать конфликтов с захватом вывода
 if sys.platform == "win32":
-    try:
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-    except AttributeError:
-        pass
+    # Проверяем, не запущен ли код через pytest
+    is_pytest = any("pytest" in arg or "py.test" in arg for arg in sys.argv) or "pytest" in str(sys.modules.get("__main__", ""))
+    if not is_pytest:
+        try:
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+        except AttributeError:
+            pass
 
 from backtester.application.runner import BacktestRunner
 from backtester.infrastructure.signal_loader import CsvSignalLoader
