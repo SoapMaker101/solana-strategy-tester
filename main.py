@@ -115,9 +115,11 @@ def main():
 
     # Выбираем загрузчик цен: либо Gecko API, либо CSV
     if data_cfg.get("loader", "csv") == "gecko":
+        rate_limit_config = data_cfg.get("rate_limit", {})
         price_loader = GeckoTerminalPriceLoader(
             cache_dir=candles_dir,
-            timeframe=timeframe
+            timeframe=timeframe,
+            rate_limit_config=rate_limit_config
         )
     else:
         price_loader = CsvPriceLoader(
