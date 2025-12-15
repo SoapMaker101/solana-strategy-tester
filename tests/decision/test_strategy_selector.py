@@ -235,3 +235,5 @@ def test_save_selection_table(tmp_path, sample_stability_df):
     # Проверяем, что файл можно прочитать
     loaded_df = pd.read_csv(output_path)
     assert len(loaded_df) == len(sample_stability_df)
+
+

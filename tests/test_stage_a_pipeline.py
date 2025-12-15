@@ -179,3 +179,5 @@ def test_stage_a_pipeline_no_empty_strategies(fake_reports_dir):
     # Пустая стратегия может быть в таблице с нулевыми метриками
     # или может быть пропущена - оба варианта приемлемы
     assert isinstance(stability_df, pd.DataFrame)
+
+

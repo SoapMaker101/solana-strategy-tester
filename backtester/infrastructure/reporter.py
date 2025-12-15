@@ -248,7 +248,7 @@ class Reporter:
         df = pd.DataFrame(csv_data)
         csv_path = self.output_dir / f"{strategy_name}.csv"
         df.to_csv(csv_path, index=False)
-        print(f"📊 Saved CSV report to {csv_path}")
+        print(f"[report] Saved CSV report to {csv_path}")
 
     def save_trades_table(self, strategy_name: str, results: List[Dict[str, Any]], out_name: Optional[str] = None) -> Path:
         """
@@ -279,7 +279,7 @@ class Reporter:
                 "entry_time", "exit_time", "entry_price", "exit_price",
                 "pnl_pct", "reason", "source", "narrative"
             ]).to_csv(csv_path, index=False)
-            print(f"📊 Saved empty trades table to {csv_path}")
+            print(f"[report] Saved empty trades table to {csv_path}")
             return csv_path
         
         # Создаём список строк для CSV
@@ -319,7 +319,7 @@ class Reporter:
         file_name = f"{out_name or strategy_name}_trades.csv"
         csv_path = self.output_dir / file_name
         df.to_csv(csv_path, index=False)
-        print(f"📊 Saved trades table to {csv_path}")
+        print(f"[report] Saved trades table to {csv_path}")
         return csv_path
 
     def generate_html_report(self, strategy_name: str, metrics: Dict[str, Any], results: List[Dict[str, Any]]) -> None:
@@ -407,7 +407,7 @@ class Reporter:
         html_path = self.output_dir / f"{strategy_name}.html"
         with html_path.open("w", encoding="utf-8") as f:
             f.write(html_content)
-        print(f"📄 Saved HTML report to {html_path}")
+        print(f"[report] Saved HTML report to {html_path}")
 
     def plot_equity_curve(self, results: List[Dict[str, Any]], strategy_name: str) -> Optional[Path]:
         """
@@ -453,10 +453,10 @@ class Reporter:
             
             return output_path
         except ImportError:
-            print("⚠️ matplotlib not available, skipping equity curve plot")
+            print("[WARNING] matplotlib not available, skipping equity curve plot")
             return None
         except Exception as e:
-            print(f"⚠️ Failed to plot equity curve: {e}")
+            print(f"[WARNING] Failed to plot equity curve: {e}")
             return None
 
     def plot_pnl_distribution(self, results: List[Dict[str, Any]], strategy_name: str) -> Optional[Path]:
@@ -496,7 +496,7 @@ class Reporter:
         except ImportError:
             return None
         except Exception as e:
-            print(f"⚠️ Failed to plot PnL distribution: {e}")
+            print(f"[WARNING] Failed to plot PnL distribution: {e}")
             return None
 
     def plot_exit_reasons(self, metrics: Dict[str, Any], strategy_name: str) -> Optional[Path]:
@@ -528,7 +528,7 @@ class Reporter:
         except ImportError:
             return None
         except Exception as e:
-            print(f"⚠️ Failed to plot exit reasons: {e}")
+            print(f"[WARNING] Failed to plot exit reasons: {e}")
             return None
 
     def plot_trades_timeline(self, results: List[Dict[str, Any]], strategy_name: str) -> Optional[Path]:
@@ -583,7 +583,7 @@ class Reporter:
         except ImportError:
             return None
         except Exception as e:
-            print(f"⚠️ Failed to plot trades timeline: {e}")
+            print(f"[WARNING] Failed to plot trades timeline: {e}")
             return None
 
     def generate_full_report(self, strategy_name: str, results: List[Dict[str, Any]]) -> None:
@@ -638,7 +638,7 @@ class Reporter:
             equity_df = pd.DataFrame(valid_equity)
             equity_path = self.output_dir / f"{strategy_name}_equity_curve.csv"
             equity_df.to_csv(equity_path, index=False)
-            print(f"📈 Saved equity curve to {equity_path}")
+            print(f"[chart] Saved equity curve to {equity_path}")
         
         # Сохраняем позиции в CSV
         positions_data = []
@@ -676,7 +676,7 @@ class Reporter:
         stats_path = self.output_dir / f"{strategy_name}_portfolio_stats.json"
         with stats_path.open("w", encoding="utf-8") as f:
             json.dump(stats_data, f, indent=2, ensure_ascii=False)
-        print(f"📊 Saved portfolio stats to {stats_path}")
+        print(f"[report] Saved portfolio stats to {stats_path}")
         
         # Строим график equity curve портфеля
         self.plot_portfolio_equity_curve(strategy_name, portfolio_result)
@@ -715,11 +715,11 @@ class Reporter:
             plt.savefig(output_path, dpi=150, bbox_inches='tight')
             plt.close()
             
-            print(f"📈 Saved portfolio equity curve chart to {output_path}")
+            print(f"[chart] Saved portfolio equity curve chart to {output_path}")
             return output_path
         except ImportError:
-            print("⚠️ matplotlib not available, skipping portfolio equity curve plot")
+            print("[WARNING] matplotlib not available, skipping portfolio equity curve plot")
             return None
         except Exception as e:
-            print(f"⚠️ Failed to plot portfolio equity curve: {e}")
+            print(f"[WARNING] Failed to plot portfolio equity curve: {e}")
             return None

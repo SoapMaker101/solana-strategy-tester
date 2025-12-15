@@ -203,3 +203,5 @@ test2,TESTTOKEN2,2024-01-01T13:00:00Z,tg:456,Another narrative,https://x.com/tes
     assert signals[1].narrative == "Another narrative"
     assert signals[1].extra["twitter_url"] == "https://x.com/test2"
     assert signals[1].extra["launch"] == False  # pandas читает булевы значения
+
+

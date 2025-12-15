@@ -90,9 +90,9 @@ class CsvSignalLoader(SignalLoader):
 
         # Преобразуем строки DataFrame в список объектов Signal
         signals: List[Signal] = []
-        for row in df.itertuples(index=False):
+        for row in df.itertuples(index=False):  # type: ignore[attr-defined]
             # Начинаем с extra из extra_json (если был)
-            extra = getattr(row, "extra", {}) or {}
+            extra = getattr(row, "extra", {}) or {}  # type: ignore[attr-defined]
             if not isinstance(extra, dict):
                 extra = {}
 
@@ -101,29 +101,34 @@ class CsvSignalLoader(SignalLoader):
             # Исключаем также колонку "extra", которую мы создали сами
             for col in df.columns:
                 if col not in base_cols and col != "extra":
-                    value = getattr(row, col, None)
+                    value = getattr(row, col, None)  # type: ignore[attr-defined]
                     # Пропускаем NaN значения
-                    if pd.notna(value):
+                    if value is not None and not (isinstance(value, float) and pd.isna(value)):  # type: ignore[arg-type]
                         extra[col] = value
 
             # Получаем source и narrative с дефолтами
-            source = getattr(row, "source", "unknown")
+            source = getattr(row, "source", "unknown")  # type: ignore[attr-defined]
             if pd.isna(source):
                 source = "unknown"
             else:
                 source = str(source)
 
-            narrative = getattr(row, "narrative", "")
+            narrative = getattr(row, "narrative", "")  # type: ignore[attr-defined]
             if pd.isna(narrative):
                 narrative = ""
             else:
                 narrative = str(narrative)
 
+            # Извлекаем значения из namedtuple (itertuples создает namedtuple с именами колонок)
+            row_id = getattr(row, "id", None)  # type: ignore[attr-defined]
+            row_contract = getattr(row, "contract_address", None)  # type: ignore[attr-defined]
+            row_timestamp = getattr(row, "timestamp", None)  # type: ignore[attr-defined]
+            
             signals.append(
                 Signal(
-                    id=str(row.id),
-                    contract_address=str(row.contract_address),
-                    timestamp=row.timestamp.to_pydatetime(),  # pandas.Timestamp → datetime
+                    id=str(row_id) if row_id is not None else "",
+                    contract_address=str(row_contract) if row_contract is not None else "",
+                    timestamp=row_timestamp.to_pydatetime() if row_timestamp is not None else pd.Timestamp.now().to_pydatetime(),  # type: ignore[attr-defined] # pandas.Timestamp → datetime
                     source=source,
                     narrative=narrative,
                     extra=extra,
@@ -131,6 +136,6 @@ class CsvSignalLoader(SignalLoader):
             )
 
         # Логгируем загруженное количество
-        print(f"📩 Loaded {len(signals)} signals from {self.path}")
+        print(f"[signals] Loaded {len(signals)} signals from {self.path}")
 
         return signals

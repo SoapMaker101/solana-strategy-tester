@@ -312,3 +312,5 @@ def test_reset_flags_appear_only_in_portfolio_positions():
         assert pos.meta.get("triggered_reset") != True, \
             f"Позиция {pos.signal_id} не должна иметь triggered_reset=True"
 
+
+

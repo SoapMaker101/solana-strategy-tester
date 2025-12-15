@@ -263,3 +263,5 @@ def test_trades_table_handles_empty_results(reporter):
     for col in required_columns:
         assert col in df.columns
 
+
+

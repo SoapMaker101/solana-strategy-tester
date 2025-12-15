@@ -56,6 +56,15 @@ def main():
         help="Directory with *_trades.csv files",
     )
     
+    parser.add_argument(
+        "--split-counts",
+        type=int,
+        nargs="+",
+        default=None,
+        help="List of split_n values for multi-scale window analysis (e.g., --split-counts 2 3 4 5). "
+             "If not provided, uses default windows (6m, 3m, 2m, 1m).",
+    )
+    
     args = parser.parse_args()
     
     reports_dir = Path(args.reports_dir)
@@ -66,13 +75,18 @@ def main():
     
     print(f"Stage A: Aggregation & Stability Analysis")
     print(f"Reports directory: {reports_dir}")
+    if args.split_counts:
+        print(f"Split counts: {args.split_counts}")
+    else:
+        print(f"Windows: {list(WINDOWS.keys())}")
     print("")
     
     # Генерируем таблицу устойчивости
     try:
         stability_df = generate_stability_table_from_reports(
             reports_dir=reports_dir,
-            windows=WINDOWS,
+            windows=WINDOWS if args.split_counts is None else None,
+            split_counts=args.split_counts,
         )
         
         # Печатаем summary
@@ -89,3 +103,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

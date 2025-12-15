@@ -13,6 +13,7 @@ from backtester.research.window_aggregator import (
     load_trades_csv,
     calculate_window_metrics,
     split_into_windows,
+    split_into_equal_windows,
     aggregate_strategy_windows,
     WINDOWS,
 )
@@ -268,3 +269,126 @@ def test_aggregate_strategy_windows_custom_windows(tmp_csv_file):
     
     assert "1m" in result
     assert "2m" not in result
+
+
+def test_split_into_equal_windows_empty():
+    """Проверяет разбиение пустого DataFrame"""
+    empty_df = pd.DataFrame(columns=["entry_time", "exit_time", "pnl_pct", "reason"])
+    windows = split_into_equal_windows(empty_df, split_n=2)
+    
+    assert len(windows) == 0
+
+
+def test_split_into_equal_windows_split_n_2(sample_trades_df):
+    """Проверяет, что split_n=2 даёт ровно 2 окна"""
+    windows = split_into_equal_windows(sample_trades_df, split_n=2)
+    
+    assert len(windows) == 2
+    
+    # Проверяем, что все сделки попали в окна
+    total_trades = sum(len(df) for df in windows.values())
+    assert total_trades == len(sample_trades_df)
+
+
+def test_split_into_equal_windows_split_n_3(sample_trades_df):
+    """Проверяет, что split_n=3 даёт ровно 3 окна"""
+    windows = split_into_equal_windows(sample_trades_df, split_n=3)
+    
+    assert len(windows) == 3
+    
+    # Проверяем, что все сделки попали в окна
+    total_trades = sum(len(df) for df in windows.values())
+    assert total_trades == len(sample_trades_df)
+
+
+def test_split_into_equal_windows_different_split_n_give_different_windows_total(sample_trades_df):
+    """Проверяет, что одинаковые trades с разными split_n дают разное windows_total"""
+    windows_2 = split_into_equal_windows(sample_trades_df, split_n=2)
+    windows_3 = split_into_equal_windows(sample_trades_df, split_n=3)
+    
+    assert len(windows_2) == 2
+    assert len(windows_3) == 3
+
+
+def test_split_into_equal_windows_metrics_correct(sample_trades_df):
+    """Проверяет, что метрики считаются корректно для каждого окна"""
+    windows = split_into_equal_windows(sample_trades_df, split_n=2)
+    
+    for window_start, window_trades in windows.items():
+        metrics = calculate_window_metrics(window_trades)
+        
+        assert "trades_count" in metrics
+        assert "winrate" in metrics
+        assert "total_pnl" in metrics
+        assert "median_pnl" in metrics
+        assert "worst_trade" in metrics
+        assert "best_trade" in metrics
+        assert metrics["trades_count"] == len(window_trades)
+
+
+def test_split_into_equal_windows_stability_order(sample_trades_df):
+    """Проверяет стабильность метрик при разном порядке строк"""
+    # Оригинальный порядок
+    windows1 = split_into_equal_windows(sample_trades_df, split_n=2)
+    
+    # Перемешанный порядок
+    shuffled_df = sample_trades_df.sample(frac=1.0).reset_index(drop=True)
+    windows2 = split_into_equal_windows(shuffled_df, split_n=2)
+    
+    # Количество окон должно быть одинаковым
+    assert len(windows1) == len(windows2)
+    
+    # Количество сделок в каждом окне должно быть одинаковым
+    # (порядок ключей может отличаться, но количество окон и сделок должно совпадать)
+    trades_counts1 = sorted([len(df) for df in windows1.values()])
+    trades_counts2 = sorted([len(df) for df in windows2.values()])
+    assert trades_counts1 == trades_counts2
+
+
+def test_split_into_equal_windows_invalid_split_n(sample_trades_df):
+    """Проверяет обработку невалидного split_n"""
+    with pytest.raises(ValueError, match="split_n must be positive"):
+        split_into_equal_windows(sample_trades_df, split_n=0)
+    
+    with pytest.raises(ValueError, match="split_n must be positive"):
+        split_into_equal_windows(sample_trades_df, split_n=-1)
+
+
+def test_aggregate_strategy_windows_with_split_counts(tmp_csv_file):
+    """Проверяет агрегацию с split_counts"""
+    split_counts = [2, 3, 4]
+    result = aggregate_strategy_windows(tmp_csv_file, split_counts=split_counts)
+    
+    # Должны быть окна для каждого split_n
+    assert "split_2" in result
+    assert "split_3" in result
+    assert "split_4" in result
+    
+    # Проверяем, что windows_total <= split_n (пустые окна не добавляются)
+    # и что есть хотя бы одно окно с данными
+    for split_n in split_counts:
+        window_name = f"split_{split_n}"
+        windows = result[window_name]
+        # Количество окон не может превышать split_n, но может быть меньше из-за пустых окон
+        assert len(windows) <= split_n
+        assert len(windows) > 0  # Должно быть хотя бы одно окно
+        # Проверяем, что каждое окно содержит метрики
+        for window_start, metrics in windows.items():
+            assert isinstance(metrics, dict)
+            assert "trades_count" in metrics
+
+
+def test_aggregate_strategy_windows_backward_compatibility(tmp_csv_file):
+    """Проверяет обратную совместимость: без split_counts используется старое поведение"""
+    result = aggregate_strategy_windows(tmp_csv_file, windows=WINDOWS)
+    
+    # Должны быть стандартные окна
+    assert "1m" in result
+    assert "2m" in result
+    assert "3m" in result
+    assert "6m" in result
+    
+    # Не должно быть split_* окон
+    assert not any(key.startswith("split_") for key in result.keys())
+
+

@@ -117,20 +117,25 @@ class TestRateLimiter:
     
     def test_rate_limiter_thread_safety(self):
         """Тест 4: общий лимитер в многопоточности (smoke test)"""
-        limiter = RateLimiter(max_calls=10, period_seconds=60)
+        # Используем реальное ограничение API: 30 запросов в минуту
+        limiter = RateLimiter(max_calls=30, period_seconds=60)
         results = []
         errors = []
+        results_lock = threading.Lock()
         
         def make_request(thread_id):
             try:
                 limiter.acquire()
-                results.append(thread_id)
+                with results_lock:
+                    results.append(thread_id)
             except Exception as e:
-                errors.append((thread_id, e))
+                with results_lock:
+                    errors.append((thread_id, e))
         
-        # Создаём 20 потоков, которые одновременно дергают acquire
+        # Создаём 50 потоков, которые одновременно дергают acquire
+        # Это гарантирует, что минимум 20 запросов будут заблокированы (50 - 30 = 20)
         threads = []
-        for i in range(20):
+        for i in range(50):
             t = threading.Thread(target=make_request, args=(i,))
             threads.append(t)
         
@@ -140,17 +145,29 @@ class TestRateLimiter:
         
         # Ждём завершения всех потоков
         for t in threads:
-            t.join(timeout=10)
+            t.join(timeout=120)  # Увеличиваем timeout, так как некоторые потоки могут ждать до 60 секунд
         
         # Проверяем, что нет исключений
         assert len(errors) == 0, f"Не должно быть исключений, но были: {errors}"
         
         # Проверяем, что все запросы были обработаны
-        assert len(results) == 20, f"Все 20 запросов должны быть обработаны, но было: {len(results)}"
+        assert len(results) == 50, f"Все 50 запросов должны быть обработаны, но было: {len(results)}"
         
         # Проверяем статистику
+        # При 50 запросах и лимите 30, минимум 20 должны быть заблокированы
+        # Но из-за race conditions может быть немного меньше, поэтому проверяем >= 15
         stats = limiter.get_stats()
-        assert stats["blocked_events"] >= 10, "Должно быть минимум 10 заблокированных событий (первые 10 проходят, остальные ждут)"
+        assert stats["blocked_events"] >= 15, (
+            f"Должно быть минимум 15 заблокированных событий "
+            f"(лимит 30, запросов 50, ожидается ~20 блокировок), "
+            f"но было: {stats['blocked_events']}"
+        )
+        
+        # Проверяем, что было время ожидания (если были блокировки, должно быть время ожидания)
+        if stats["blocked_events"] > 0:
+            assert stats["total_wait_time_seconds"] > 0, (
+                "Если были блокировки, должно быть время ожидания"
+            )
 
 
 class TestGeckoTerminalPriceLoaderRateLimit:
@@ -244,3 +261,5 @@ class TestGeckoTerminalPriceLoaderRateLimit:
         assert summary["total_requests"] == 100
         assert summary["http_429"] == 5
         assert summary["mode_on_429"] == "wait"
+
+

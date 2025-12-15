@@ -9,16 +9,104 @@ import time
 import requests
 from requests.exceptions import RequestException, HTTPError
 import pandas as pd
+import threading
+from collections import deque
 
 from ..domain.models import Candle  # Импорт структуры свечи
 
 T = TypeVar('T')
 
 
+def _format_datetime(dt: Optional[datetime]) -> str:
+    """
+    Форматирует datetime для вывода в логах.
+    Использует isoformat с заменой T на пробел для читаемости.
+    """
+    if dt is None:
+        return "None"
+    # Используем isoformat() и заменяем T на пробел для читаемости
+    return dt.isoformat().replace("T", " ")
+
+
+class RateLimitExceededError(RuntimeError):
+    """Исключение, выбрасываемое при превышении rate limit в fail-fast режиме."""
+    pass
+
+
+class RateLimiter:
+    """
+    Thread-safe rate limiter с использованием sliding window алгоритма.
+    Ограничивает количество запросов в заданном временном окне.
+    """
+    
+    def __init__(self, max_calls: int = 30, period_seconds: int = 60):
+        """
+        :param max_calls: Максимальное количество запросов
+        :param period_seconds: Период времени в секундах
+        """
+        self.max_calls = max_calls
+        self.period_seconds = period_seconds
+        self._lock = threading.Lock()
+        self._timestamps = deque()  # Хранит timestamps последних запросов
+        self._blocked_events = 0
+        self._total_wait_time = 0.0
+    
+    def acquire(self, cost: int = 1) -> None:
+        """
+        Получает разрешение на выполнение запроса.
+        Если лимит исчерпан, ждёт до освобождения слота.
+        
+        :param cost: Стоимость запроса (по умолчанию 1)
+        """
+        while True:
+            with self._lock:
+                now = time.time()
+                
+                # Удаляем старые timestamps (старше period_seconds)
+                while self._timestamps and self._timestamps[0] < now - self.period_seconds:
+                    self._timestamps.popleft()
+                
+                # Проверяем, можем ли выполнить запрос
+                if len(self._timestamps) + cost <= self.max_calls:
+                    # Можем выполнить - добавляем timestamps
+                    for _ in range(cost):
+                        self._timestamps.append(now)
+                    return
+                
+                # Лимит исчерпан - нужно ждать
+                self._blocked_events += 1
+                # Вычисляем время до освобождения самого старого слота
+                oldest_ts = self._timestamps[0]
+                wait_time = (oldest_ts + self.period_seconds) - now + 0.1  # +0.1 для безопасности
+                wait_time = max(0.0, wait_time)
+            
+            # Sleep вне lock, чтобы другие потоки могли войти
+            if wait_time > 0:
+                try:
+                    print(f"[RL ⏳] Waiting {wait_time:.2f}s (limit {self.max_calls}/{self.period_seconds}s) before request...")
+                except (UnicodeEncodeError, UnicodeDecodeError):
+                    # Fallback для систем с проблемами кодировки
+                    print(f"[RL] Waiting {wait_time:.2f}s (limit {self.max_calls}/{self.period_seconds}s) before request...")
+                with self._lock:
+                    self._total_wait_time += wait_time
+                time.sleep(wait_time)
+            
+            # После ожидания цикл повторится и снова проверит лимит
+    
+    def get_stats(self) -> dict:
+        """Возвращает статистику по rate limiter."""
+        with self._lock:
+            return {
+                "blocked_events": self._blocked_events,
+                "total_wait_time_seconds": self._total_wait_time,
+            }
+
+
 def retry_on_failure(
     max_retries: int = 3,
     backoff_factor: float = 2.0,
-    retryable_status_codes: tuple = (429, 500, 502, 503, 504)
+    retryable_status_codes: tuple = (429, 500, 502, 503, 504),
+    on_429_mode: Optional[str] = None
 ) -> Callable:
     """
     Декоратор для повторных попыток при неудачных API запросах.
@@ -26,20 +114,56 @@ def retry_on_failure(
     :param max_retries: Максимальное количество попыток
     :param backoff_factor: Множитель для экспоненциальной задержки
     :param retryable_status_codes: Коды статусов HTTP, при которых стоит повторять запрос
+    :param on_429_mode: Режим обработки 429: "wait" (ждать) или "fail" (выбросить исключение).
+                        Если None, пытается прочитать из self.on_429_mode (для GeckoTerminalPriceLoader)
     """
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         def wrapper(*args, **kwargs) -> T:
+            # Пытаемся получить on_429_mode из self, если не передан явно
+            mode = on_429_mode
+            if mode is None and args and hasattr(args[0], 'on_429_mode'):
+                mode = args[0].on_429_mode
+            if mode is None:
+                mode = "wait"  # По умолчанию
+            
             last_exception = None
             for attempt in range(max_retries):
                 try:
                     return func(*args, **kwargs)
                 except HTTPError as e:
-                    # Проверяем, стоит ли повторять запрос
-                    if e.response.status_code in retryable_status_codes:
+                    # Специальная обработка 429
+                    if e.response.status_code == 429:
+                        if mode == "fail":
+                            print(f"[429 ❌] Rate limit exceeded, failing fast (on_429=fail)")
+                            # Обновляем счётчик failures если есть self
+                            if args and hasattr(args[0], '_rate_limit_failures'):
+                                args[0]._rate_limit_failures += 1
+                            raise RateLimitExceededError(f"Rate limit exceeded: {e}")
+                        
+                        # Режим wait - обрабатываем Retry-After
+                        last_exception = e
+                        if attempt < max_retries - 1:
+                            # Пытаемся получить Retry-After из заголовка
+                            retry_after = e.response.headers.get("Retry-After")
+                            if retry_after:
+                                try:
+                                    wait_time = float(retry_after)
+                                except (ValueError, TypeError):
+                                    wait_time = max(2.1, backoff_factor ** attempt)
+                            else:
+                                # Нет Retry-After - используем безопасную задержку
+                                wait_time = max(2.0, backoff_factor ** attempt)
+                            
+                            print(f"[429 ⏳] Rate limit exceeded, waiting {wait_time:.2f}s (Retry-After: {retry_after if retry_after else 'N/A'})... (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(wait_time)
+                            continue
+                    
+                    # Проверяем, стоит ли повторять запрос для других кодов
+                    elif e.response.status_code in retryable_status_codes:
                         last_exception = e
                         if attempt < max_retries - 1:
                             wait_time = backoff_factor ** attempt
-                            print(f"⚠️ API request failed (status {e.response.status_code}), retrying in {wait_time:.1f}s... (attempt {attempt + 1}/{max_retries})")
+                            print(f"[WARNING] API request failed (status {e.response.status_code}), retrying in {wait_time:.1f}s... (attempt {attempt + 1}/{max_retries})")
                             time.sleep(wait_time)
                             continue
                     else:
@@ -49,7 +173,7 @@ def retry_on_failure(
                     last_exception = e
                     if attempt < max_retries - 1:
                         wait_time = backoff_factor ** attempt
-                        print(f"⚠️ API request failed ({type(e).__name__}), retrying in {wait_time:.1f}s... (attempt {attempt + 1}/{max_retries})")
+                        print(f"[WARNING] API request failed ({type(e).__name__}), retrying in {wait_time:.1f}s... (attempt {attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                         continue
                     else:
@@ -57,8 +181,11 @@ def retry_on_failure(
             
             # Если все попытки исчерпаны
             if last_exception:
-                print(f"❌ API request failed after {max_retries} attempts")
+                print(f"[ERROR] API request failed after {max_retries} attempts")
                 raise last_exception
+            
+            # Этот код не должен достигнуться, но нужен для типизации
+            raise RuntimeError("Unexpected end of retry loop")
             
         return wrapper
     return decorator
@@ -112,7 +239,7 @@ def validate_candle(candle: Candle, strict_validation: bool = False) -> bool:
         if strict_validation:
             raise ValueError(error_msg)
         else:
-            print(f"⚠️ {error_msg}")
+            print(f"[WARNING] {error_msg}")
         return False
     
     return True
@@ -169,14 +296,14 @@ class CsvPriceLoader(PriceLoader):
 
         # Преобразуем строки в объекты Candle с валидацией
         candles = []
-        for row in df.itertuples(index=False):
+        for row in df.itertuples(index=False):  # type: ignore[attr-defined]
             candle = Candle(
-                timestamp=row.timestamp.to_pydatetime(),
-                open=row.open,
-                high=row.high,
-                low=row.low,
-                close=row.close,
-                volume=row.volume,
+                timestamp=row.timestamp.to_pydatetime(),  # type: ignore[attr-defined]
+                open=row.open,  # type: ignore[attr-defined]
+                high=row.high,  # type: ignore[attr-defined]
+                low=row.low,  # type: ignore[attr-defined]
+                close=row.close,  # type: ignore[attr-defined]
+                volume=row.volume,  # type: ignore[attr-defined]
             )
             if validate_candle(candle, strict_validation=self.strict_validation):
                 candles.append(candle)
@@ -193,7 +320,9 @@ class GeckoTerminalPriceLoader(PriceLoader):
         max_cache_age_days: int = 2, 
         strict_validation: bool = False,
         max_retries: int = 3,
-        retry_backoff_factor: float = 2.0
+        retry_backoff_factor: float = 2.0,
+        rate_limit_config: Optional[dict] = None,
+        prefer_cache_if_exists: bool = True
     ):
         # Папка для кеша, целевой таймфрейм, допустимая свежесть кеша
         self.cache_dir = Path(cache_dir)
@@ -202,10 +331,53 @@ class GeckoTerminalPriceLoader(PriceLoader):
         self.strict_validation = strict_validation
         self.max_retries = max_retries
         self.retry_backoff_factor = retry_backoff_factor
+        self.prefer_cache_if_exists = prefer_cache_if_exists
+        
+        # Настройки rate limit
+        rate_limit_config = rate_limit_config or {}
+        self.rate_limit_enabled = rate_limit_config.get("enabled", True)
+        self.rate_limit_max_calls = rate_limit_config.get("max_calls_per_minute", 30)
+        self.on_429_mode = rate_limit_config.get("on_429", "wait")  # "wait" или "fail"
+        
+        # Создаём rate limiter если включен
+        if self.rate_limit_enabled:
+            self.rate_limiter = RateLimiter(
+                max_calls=self.rate_limit_max_calls,
+                period_seconds=60
+            )
+        else:
+            self.rate_limiter = None
+        
+        # Метрики
+        self._total_requests = 0
+        self._total_429_responses = 0
+        self._rate_limit_failures = 0
+
+    def _get_cache_paths(self, contract_address: str) -> List[Path]:
+        """
+        Возвращает список возможных путей к кэшу в порядке приоритета.
+        
+        Поддерживает два формата:
+        1. Новый формат: cache_dir/{timeframe}/{contract}.csv (приоритет)
+        2. Старый формат: cache_dir/{contract}_{timeframe}.csv (backward compatible)
+        
+        :param contract_address: Адрес контракта
+        :return: Список путей в порядке приоритета
+        """
+        paths = []
+        
+        # Новый формат: cache_dir/{timeframe}/{contract}.csv
+        timeframe_dir = self.cache_dir / self.timeframe
+        paths.append(timeframe_dir / f"{contract_address}.csv")
+        
+        # Старый формат: cache_dir/{contract}_{timeframe}.csv
+        paths.append(self.cache_dir / f"{contract_address}_{self.timeframe}.csv")
+        
+        return paths
 
     def _get_cache_path(self, contract_address: str) -> Path:
         """
-        Возвращает путь до кешированного CSV-файла.
+        Возвращает путь до кешированного CSV-файла (новый формат).
         Структура: cache_dir/timeframe/contract.csv
         
         Папка timeframe создается автоматически при сохранении.
@@ -236,16 +408,17 @@ class GeckoTerminalPriceLoader(PriceLoader):
         try:
             df = pd.read_csv(path)
             df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-            return [
-                Candle(
-                    timestamp=row.timestamp.to_pydatetime(),
-                    open=row.open,
-                    high=row.high,
-                    low=row.low,
-                    close=row.close,
-                    volume=row.volume,
-                ) for row in df.itertuples(index=False)
-            ]
+            candles = []
+            for row in df.itertuples(index=False):  # type: ignore[attr-defined]
+                candles.append(Candle(
+                    timestamp=row.timestamp.to_pydatetime(),  # type: ignore[attr-defined]
+                    open=row.open,  # type: ignore[attr-defined]
+                    high=row.high,  # type: ignore[attr-defined]
+                    low=row.low,  # type: ignore[attr-defined]
+                    close=row.close,  # type: ignore[attr-defined]
+                    volume=row.volume,  # type: ignore[attr-defined]
+                ))
+            return candles
         except Exception as e:
             print(f"⚠️ Failed to load cache from {path}: {e}")
             return None
@@ -265,9 +438,37 @@ class GeckoTerminalPriceLoader(PriceLoader):
                 "volume": c.volume,
             } for c in candles])
             df.to_csv(path, index=False)
-            print(f"📅 Saved {len(candles)} candles to cache: {path}")
+            print(f"[cache] Saved {len(candles)} candles to cache: {path}")
         except Exception as e:
-            print(f"⚠️ Failed to save cache: {e}")
+            print(f"[WARNING] Failed to save cache: {e}")
+
+    def _http_get(self, url: str, headers: dict) -> requests.Response:
+        """
+        Единая точка отправки HTTP запросов с rate limiting.
+        
+        :param url: URL для запроса
+        :param headers: HTTP заголовки
+        :return: Response объект
+        """
+        # Применяем rate limiter если включен
+        if self.rate_limiter:
+            self.rate_limiter.acquire()
+        
+        self._total_requests += 1
+        print(f"[HTTP] GET {url}")
+        
+        try:
+            response = requests.get(url, headers=headers)
+            
+            # Отслеживаем 429 ответы
+            if response.status_code == 429:
+                self._total_429_responses += 1
+                print(f"[429] Rate limit response received (total: {self._total_429_responses})")
+            
+            return response
+        except Exception as e:
+            print(f"[HTTP ERROR] Request failed: {e}")
+            raise
 
     @retry_on_failure(max_retries=3, backoff_factor=2.0)
     def _fetch_pool_id(self, contract_address: str, headers: dict) -> str:
@@ -276,8 +477,8 @@ class GeckoTerminalPriceLoader(PriceLoader):
         Выбирает пул с наибольшей ликвидностью (reserve_in_usd).
         """
         pools_url = f"https://api.geckoterminal.com/api/v2/networks/solana/tokens/{contract_address}/pools"
-        print(f"🔍 Fetching pools for token: {contract_address}")
-        r = requests.get(pools_url, headers=headers)
+        print(f"[fetch] Fetching pools for token: {contract_address}")
+        r = self._http_get(pools_url, headers)
         r.raise_for_status()
         
         data = r.json()
@@ -306,39 +507,22 @@ class GeckoTerminalPriceLoader(PriceLoader):
         # Если не нашли пул с reserve_in_usd, берем первый
         if best_pool is None:
             best_pool = pools[0]
-            print(f"⚠️ No reserve_in_usd found, using first pool")
+            print(f"[WARNING] No reserve_in_usd found, using first pool")
         
         pool_id_raw = best_pool["attributes"]["address"]
         pool_name = best_pool["attributes"].get("name", "Unknown")
         reserve = best_pool["attributes"].get("reserve_in_usd", "N/A")
         
-        # Убеждаемся, что pool_id - это строка и не изменяется
+        # Убеждаемся, что pool_id - это строка
         pool_id = str(pool_id_raw).strip()
         
-        # КРИТИЧЕСКАЯ ПРОВЕРКА: убеждаемся, что pool_id не содержит опечаток
-        # Проверяем на наличие подозрительных паттернов (например, двойных букв)
-        if pool_id.count('dd') > 0 and 'Rpddp' in pool_id:
-            print(f"⚠️ WARNING: Detected suspicious pattern 'Rpddp' in pool_id: {pool_id}")
-            print(f"   This might be a typo - expected 'Rpdp' (single 'd')")
-            # НЕ исправляем автоматически, только предупреждаем
-        
-        # Проверяем корректность pool_id
-        if not pool_id or len(pool_id) != 44:
-            print(f"⚠️ Warning: Invalid pool_id format: {pool_id} (length: {len(pool_id) if pool_id else 0})")
+        # Проверяем корректность pool_id (Solana addresses могут быть 43-44 символа)
+        if not pool_id or len(pool_id) < 43 or len(pool_id) > 44:
+            print(f"[WARNING] Warning: Invalid pool_id format: {pool_id} (length: {len(pool_id) if pool_id else 0})")
             print(f"   Raw pool_id: {repr(pool_id_raw)}")
+            print(f"   Expected length: 43-44 characters (Solana address)")
         
-        # Логируем для отладки с проверкой
-        print(f"✅ Selected pool: {pool_id} ({pool_name}), reserve: {reserve} USD")
-        print(f"   🔍 Pool ID verification: {pool_id} (type: {type(pool_id)}, length: {len(pool_id)})")
-        
-        # Дополнительная проверка: выводим все пулы для отладки
-        if len(pools) > 1:
-            print(f"   📋 Available pools ({len(pools)} total):")
-            for i, p in enumerate(pools[:3]):  # Показываем первые 3
-                p_addr = p.get("attributes", {}).get("address", "N/A")
-                p_reserve = p.get("attributes", {}).get("reserve_in_usd", "N/A")
-                marker = " ← SELECTED" if p_addr == pool_id else ""
-                print(f"      {i+1}. {p_addr} (reserve: {p_reserve}){marker}")
+        print(f"[OK] Selected pool: {pool_id} ({pool_name}), reserve: {reserve} USD")
         
         return pool_id
 
@@ -348,27 +532,21 @@ class GeckoTerminalPriceLoader(PriceLoader):
         """
         Получает батч свечей OHLCV с retry-логикой.
         """
-        # Нормализуем pool_id (убираем пробелы, проверяем формат)
+        # Нормализуем pool_id (убираем пробелы)
         pool_id = str(pool_id).strip()
         
-        # Проверяем, что pool_id не изменился
-        if len(pool_id) != 44:  # Solana addresses are 44 characters
-            print(f"⚠️ Warning: pool_id length is {len(pool_id)}, expected 44")
+        # Проверяем, что pool_id имеет правильную длину (Solana addresses могут быть 43-44 символа)
+        if len(pool_id) < 43 or len(pool_id) > 44:
+            print(f"[WARNING] Warning: pool_id length is {len(pool_id)}, expected 43-44")
             print(f"   Pool ID received: {repr(pool_id)}")
         
         query = f"limit=1000&before_timestamp={before_ts}"
         if aggregate:
             query += f"&aggregate={aggregate}"
-
-        # Проверяем, что pool_id не был изменен (защита от багов)
-        if 'dd' in pool_id and pool_id.count('dd') > pool_id.count('dp'):
-            print(f"⚠️ WARNING: Suspicious pool_id detected: {pool_id}")
-            print(f"   This might indicate a bug in pool_id handling")
         
         ohlcv_url = f"https://api.geckoterminal.com/api/v2/networks/solana/pools/{pool_id}/ohlcv/{tf_endpoint}?{query}"
-        print(f"⬅️ Fetching: {ohlcv_url}")
-        print(f"   🔍 Pool ID in URL: {pool_id} (length: {len(pool_id)}, hex: {pool_id.encode('utf-8').hex()[:20]}...)")  # Дополнительное логирование для отладки
-        res = requests.get(ohlcv_url, headers=headers)
+        print(f"[fetch] Fetching: {ohlcv_url}")
+        res = self._http_get(ohlcv_url, headers)
         
         # Проверяем статус ответа
         if res.status_code == 404:
@@ -387,7 +565,7 @@ class GeckoTerminalPriceLoader(PriceLoader):
         
         # Проверяем структуру ответа
         if "data" not in response_data:
-            print(f"⚠️ Unexpected response structure: {response_data}")
+            print(f"[WARNING] Unexpected response structure: {response_data}")
             return []
         
         return response_data["data"]["attributes"].get("ohlcv_list", [])
@@ -397,30 +575,70 @@ class GeckoTerminalPriceLoader(PriceLoader):
         Основной метод. Загружает свечи из API GeckoTerminal с умным кешированием.
         
         Логика работы:
-        1. Проверяет наличие кеша
-        2. Если кеш покрывает нужный диапазон полностью - использует только кеш
-        3. Если диапазон не покрыт - дозагружает недостающие данные через API
-        4. Сохраняет обновленный кеш
+        1. Проверяет наличие кеша (поддерживает новый и старый формат)
+        2. Если prefer_cache_if_exists=True и кеш найден - использует только кеш (cache-only режим)
+        3. Если prefer_cache_if_exists=False - проверяет покрытие диапазона и дозагружает при необходимости
+        4. Сохраняет обновленный кеш в новом формате
         
         :param contract_address: Адрес контракта токена
         :param start_time: Начало временного диапазона (опционально)
         :param end_time: Конец временного диапазона (опционально)
         :return: Список свечей в указанном диапазоне
         """
-        cache_path = self._get_cache_path(contract_address)
+        # Ищем кэш в обоих форматах
+        cache_paths = self._get_cache_paths(contract_address)
+        cache_path: Optional[Path] = None
         cached_candles: Optional[List[Candle]] = None
+        is_legacy_format = False
         
-        # Проверяем наличие кеша
-        if cache_path.exists():
-            cached_candles = self._load_from_cache(cache_path)
+        # Пытаемся найти существующий кэш
+        for path in cache_paths:
+            if path.exists():
+                cache_path = path
+                # Определяем, это старый формат или новый
+                is_legacy_format = (path == cache_paths[1])  # Второй путь - старый формат
+                cached_candles = self._load_from_cache(path)
+                if cached_candles is not None:
+                    break
         
-        # Если кеш есть, проверяем покрытие диапазона
+        # Если кеш найден и успешно загружен
         if cached_candles and len(cached_candles) > 0:
             cached_candles.sort(key=lambda c: c.timestamp)
             cache_min = cached_candles[0].timestamp
             cache_max = cached_candles[-1].timestamp
             
-            # Проверяем, покрывает ли кеш нужный диапазон
+            # Если включен режим prefer_cache_if_exists - используем кэш без API запросов
+            if self.prefer_cache_if_exists:
+                filtered = [
+                    c for c in cached_candles
+                    if (start_time is None or c.timestamp >= start_time) and
+                       (end_time is None or c.timestamp <= end_time)
+                ]
+                
+                # Проверяем покрытие диапазона для логирования
+                covers_start = (start_time is None) or (cache_min <= start_time)
+                covers_end = (end_time is None) or (cache_max >= end_time)
+                
+                if covers_start and covers_end:
+                    print(f"[CACHE OK] cache-hit (cache-only) {contract_address} path={cache_path}")
+                else:
+                    missing_info = []
+                    if not covers_start:
+                        missing_info.append(f"start (have: {_format_datetime(cache_min)}, need: {_format_datetime(start_time)})")
+                    if not covers_end:
+                        missing_info.append(f"end (have: {_format_datetime(cache_max)}, need: {_format_datetime(end_time)})")
+                    print(f"[CACHE WARNING] cache-hit but incomplete range (cache-only) {contract_address} have={_format_datetime(cache_min)} to {_format_datetime(cache_max)} need={' to '.join(missing_info) if missing_info else 'full range'}")
+                
+                # Миграция из старого формата в новый (если нужно)
+                if is_legacy_format and cache_path:
+                    new_cache_path = cache_paths[0]  # Новый формат
+                    if not new_cache_path.exists():
+                        print(f"[CACHE] Migrating cache from legacy format: {cache_path} -> {new_cache_path}")
+                        self._save_to_cache(new_cache_path, cached_candles)
+                
+                return filtered
+            
+            # Старая логика: проверяем покрытие диапазона
             covers_start = (start_time is None) or (cache_min <= start_time)
             covers_end = (end_time is None) or (cache_max >= end_time)
             
@@ -431,19 +649,27 @@ class GeckoTerminalPriceLoader(PriceLoader):
                     if (start_time is None or c.timestamp >= start_time) and
                        (end_time is None or c.timestamp <= end_time)
                 ]
-                print(f"[CACHE ✅] Using cached candles for {contract_address} ({len(filtered)} candles, range: {cache_min} to {cache_max})")
+                print(f"[CACHE OK] Using cached candles for {contract_address} ({len(filtered)} candles, range: {_format_datetime(cache_min)} to {_format_datetime(cache_max)})")
+                
+                # Миграция из старого формата в новый (если нужно)
+                if is_legacy_format and cache_path:
+                    new_cache_path = cache_paths[0]  # Новый формат
+                    if not new_cache_path.exists():
+                        print(f"[CACHE] Migrating cache from legacy format: {cache_path} -> {new_cache_path}")
+                        self._save_to_cache(new_cache_path, cached_candles)
+                
                 return filtered
             else:
                 # Диапазон не покрыт полностью - перезагружаем полностью
                 missing_info = []
                 if not covers_start:
-                    missing_info.append(f"start (cache: {cache_min}, needed: {start_time})")
+                    missing_info.append(f"start (cache: {_format_datetime(cache_min)}, needed: {_format_datetime(start_time)})")
                 if not covers_end:
-                    missing_info.append(f"end (cache: {cache_max}, needed: {end_time})")
-                print(f"[CACHE ⚠️] Incomplete coverage for {contract_address} (missing: {', '.join(missing_info)}), reloading from API")
+                    missing_info.append(f"end (cache: {_format_datetime(cache_max)}, needed: {_format_datetime(end_time)})")
+                print(f"[CACHE WARNING] Incomplete coverage for {contract_address} (missing: {', '.join(missing_info)}), reloading from API")
         else:
             # Кеша нет - загружаем все с нуля
-            print(f"[CACHE ❌] No cache found, loading from API for {contract_address}")
+            print(f"[CACHE ERROR] cache-miss {contract_address} -> API")
         
         # Загружаем свечи через API (полная перезагрузка для простоты)
         # TODO: Оптимизировать - дозагружать только недостающие части
@@ -458,10 +684,6 @@ class GeckoTerminalPriceLoader(PriceLoader):
             # Получаем идентификатор пула (pool_id) по адресу контракта с retry
             pool_id = self._fetch_pool_id(contract_address, headers)
             pool_id = str(pool_id).strip()  # Нормализуем pool_id
-            
-            # Сохраняем оригинальный pool_id для проверки (не должен изменяться)
-            original_pool_id = pool_id
-            print(f"🔍 Received pool_id in load_prices: {pool_id} (length: {len(pool_id)})")  # Дополнительное логирование
 
             # Определяем начальный timestamp для загрузки
             # Если указан end_time, используем его, иначе текущее время
@@ -477,7 +699,7 @@ class GeckoTerminalPriceLoader(PriceLoader):
             # Проверяем, что timestamp не слишком старый (больше 6 месяцев назад API не возвращает данные)
             six_months_ago = int((datetime.now(timezone.utc) - timedelta(days=180)).timestamp())
             if before_ts < six_months_ago:
-                print(f"⚠️ Warning: Requested timestamp is more than 6 months ago. GeckoTerminal API may not have data.")
+                print(f"[WARNING] Warning: Requested timestamp is more than 6 months ago. GeckoTerminal API may not have data.")
                 print(f"   Requested: {before_ts} ({datetime.fromtimestamp(before_ts, tz=timezone.utc)})")
                 print(f"   Limit: {six_months_ago} ({datetime.fromtimestamp(six_months_ago, tz=timezone.utc)})")
             
@@ -485,25 +707,20 @@ class GeckoTerminalPriceLoader(PriceLoader):
 
             # Загружаем свечи батчами по 1000 штук, двигаясь в прошлое
             while True:
-                # Проверяем, что pool_id не изменился
-                if pool_id != original_pool_id:
-                    print(f"⚠️ WARNING: pool_id changed from {original_pool_id} to {pool_id}!")
-                    pool_id = original_pool_id  # Восстанавливаем оригинальный
-                
                 # Получаем батч свечей с retry
                 try:
                     candles_raw = self._fetch_ohlcv_batch(pool_id, tf_endpoint, aggregate, before_ts, headers)
                 except HTTPError as e:
                     # Если 404 - пул не найден или нет данных для этого таймфрейма
                     if e.response and e.response.status_code == 404:
-                        print(f"❌ Pool {pool_id} returned 404. Possible reasons:")
+                        print(f"[ERROR] Pool {pool_id} returned 404. Possible reasons:")
                         print(f"   1. Pool was removed or deactivated")
                         print(f"   2. Pool has no trading history")
                         print(f"   3. Requested timeframe ({self.timeframe}) is not available")
                         print(f"   4. Timestamp {before_ts} is too far in the past/future")
                         # Пытаемся использовать кеш, если есть
                         if cached_candles:
-                            print(f"⚠️ Falling back to cached candles due to 404 error")
+                            print(f"[WARNING] Falling back to cached candles due to 404 error")
                             return [
                                 c for c in cached_candles
                                 if (start_time is None or c.timestamp >= start_time) and
@@ -537,7 +754,7 @@ class GeckoTerminalPriceLoader(PriceLoader):
                 # Если получили непустой ответ, но все свечи уже были в seen (дубликаты),
                 # значит мы достигли конца данных - прерываем цикл
                 if candles_raw and not batch:
-                    print(f"⚠️ All candles in batch were duplicates, stopping fetch")
+                    print(f"[WARNING] All candles in batch were duplicates, stopping fetch")
                     break
 
                 # Прерываем, если достигли нужной начальной даты
@@ -550,26 +767,30 @@ class GeckoTerminalPriceLoader(PriceLoader):
                 else:
                     # Если batch пустой, но candles_raw не пустой (что не должно происходить после проверки выше),
                     # все равно прерываем, чтобы избежать бесконечного цикла
-                    print(f"⚠️ Empty batch but non-empty response, stopping to avoid infinite loop")
+                    print(f"[WARNING] Empty batch but non-empty response, stopping to avoid infinite loop")
                     break
 
             candles.sort(key=lambda c: c.timestamp)  # сортировка по времени
-            print(f"📦 Total candles fetched: {len(candles)}")
+            print(f"[fetch] Total candles fetched: {len(candles)}")
             
-            # Сохраняем обновленный кеш
-            self._save_to_cache(cache_path, candles)
+            # Сохраняем обновленный кеш в новом формате
+            new_cache_path = self._get_cache_path(contract_address)
+            self._save_to_cache(new_cache_path, candles)
 
+        except RateLimitExceededError:
+            # Rate limit exceeded в fail-fast режиме - пробрасываем дальше
+            raise
         except HTTPError as e:
             # Детальная обработка HTTP ошибок
             if e.response and e.response.status_code == 404:
-                print(f"❌ HTTP 404: Pool or OHLCV data not found for {contract_address}")
+                print(f"[ERROR] HTTP 404: Pool or OHLCV data not found for {contract_address}")
                 print(f"   URL: {e.response.url if hasattr(e.response, 'url') else 'N/A'}")
             else:
-                print(f"❌ HTTP Error loading candles for {contract_address}: {e}")
+                print(f"[ERROR] HTTP Error loading candles for {contract_address}: {e}")
             
             # В случае ошибки API, пытаемся вернуть кеш, если он есть
             if cached_candles:
-                print(f"⚠️ Falling back to cached candles due to API error")
+                print(f"[WARNING] Falling back to cached candles due to API error")
                 return [
                     c for c in cached_candles
                     if (start_time is None or c.timestamp >= start_time) and
@@ -577,12 +798,12 @@ class GeckoTerminalPriceLoader(PriceLoader):
                 ]
             return []
         except Exception as e:
-            print(f"❌ Error loading candles for {contract_address}: {e}")
+            print(f"[ERROR] Error loading candles for {contract_address}: {e}")
             import traceback
             traceback.print_exc()
             # В случае ошибки API, пытаемся вернуть кеш, если он есть
             if cached_candles:
-                print(f"⚠️ Falling back to cached candles due to API error")
+                print(f"[WARNING] Falling back to cached candles due to API error")
                 return [
                     c for c in cached_candles
                     if (start_time is None or c.timestamp >= start_time) and
@@ -596,3 +817,28 @@ class GeckoTerminalPriceLoader(PriceLoader):
             if (start_time is None or c.timestamp >= start_time) and
                (end_time is None or c.timestamp <= end_time)
         ]
+    
+    def get_rate_limit_summary(self) -> dict:
+        """
+        Возвращает summary по rate limit метрикам.
+        """
+        stats = {
+            "total_requests": self._total_requests,
+            "http_429": self._total_429_responses,
+            "rate_limit_failures": self._rate_limit_failures,
+            "mode_on_429": self.on_429_mode,
+        }
+        
+        if self.rate_limiter:
+            limiter_stats = self.rate_limiter.get_stats()
+            stats.update({
+                "requests_blocked_by_rate_limiter": limiter_stats["blocked_events"],
+                "total_wait_time_seconds": limiter_stats["total_wait_time_seconds"],
+            })
+        else:
+            stats.update({
+                "requests_blocked_by_rate_limiter": 0,
+                "total_wait_time_seconds": 0.0,
+            })
+        
+        return stats

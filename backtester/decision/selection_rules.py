@@ -41,3 +41,5 @@ DEFAULT_CRITERIA = SelectionCriteria(
     min_median_window_pnl=0.0,
     min_windows=3,
 )
+
+

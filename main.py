@@ -6,6 +6,7 @@ import json                             # Для сохранения резул
 from pathlib import Path                # Удобная работа с путями к файлам и директориям
 from typing import List
 from datetime import datetime
+from collections import defaultdict     # Для группировки результатов по стратегиям
 import yaml                             # Для загрузки YAML конфигураций
 
 # Импорт основных компонентов бэктестера
@@ -154,9 +155,19 @@ def main():
     # Запуск стратегий
     results = runner.run()
     print(f"Backtest finished. Results count: {len(results)}")
+    
+    # Выводим summary по dedup warnings
+    warn_store = runner.global_config.get("_warn_once_store", {})
+    if warn_store.get("counts"):
+        counts = warn_store["counts"]
+        unique_count = len(warn_store.get("seen", set()))
+        total_count = sum(counts.values())
+        # Топ-5 по количеству
+        top_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_str = ", ".join([f"{k}:{v}" for k, v in top_items])
+        print(f"[WARNING] Dedup warnings summary: unique={unique_count}, total={total_count}. Top: {top_str}")
 
     # Группируем результаты по стратегиям и генерируем отчеты
-    from collections import defaultdict
     results_by_strategy = defaultdict(list)
     
     for row in results:

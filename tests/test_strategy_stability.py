@@ -215,3 +215,165 @@ def test_save_stability_table(tmp_path):
     loaded_df = pd.read_csv(output_path)
     assert len(loaded_df) == 2
     assert list(loaded_df.columns) == list(df.columns)
+
+
+def test_calculate_stability_metrics_with_split_n():
+    """Проверяет расчёт метрик с указанным split_n"""
+    strategy_windows = {
+        "split_2": {
+            "2024-01-01T00:00:00+00:00": {"total_pnl": 0.1},
+            "2024-02-01T00:00:00+00:00": {"total_pnl": -0.05},
+        },
+        "split_3": {
+            "2024-01-01T00:00:00+00:00": {"total_pnl": 0.05},
+            "2024-02-01T00:00:00+00:00": {"total_pnl": 0.03},
+            "2024-03-01T00:00:00+00:00": {"total_pnl": 0.02},
+        },
+    }
+    
+    # Метрики для split_2
+    metrics_2 = calculate_stability_metrics(strategy_windows, split_n=2)
+    assert metrics_2["windows_total"] == 2
+    assert metrics_2["windows_positive"] == 1
+    assert metrics_2["survival_rate"] == pytest.approx(0.5)
+    
+    # Метрики для split_3
+    metrics_3 = calculate_stability_metrics(strategy_windows, split_n=3)
+    assert metrics_3["windows_total"] == 3
+    assert metrics_3["windows_positive"] == 3
+    assert metrics_3["survival_rate"] == pytest.approx(1.0)
+
+
+def test_build_stability_table_with_split_counts():
+    """Проверяет построение таблицы с split_counts"""
+    aggregated_strategies = {
+        "test_strategy": {
+            "split_2": {
+                "2024-01-01T00:00:00+00:00": {"total_pnl": 0.1},
+                "2024-02-01T00:00:00+00:00": {"total_pnl": -0.05},
+            },
+            "split_3": {
+                "2024-01-01T00:00:00+00:00": {"total_pnl": 0.05},
+                "2024-02-01T00:00:00+00:00": {"total_pnl": 0.03},
+                "2024-03-01T00:00:00+00:00": {"total_pnl": 0.02},
+            },
+        }
+    }
+    
+    split_counts = [2, 3]
+    df = build_stability_table(aggregated_strategies, split_counts=split_counts)
+    
+    # Должно быть 2 строки (одна на split_n)
+    assert len(df) == 2
+    
+    # Проверяем наличие колонки split_n
+    assert "split_n" in df.columns
+    
+    # Проверяем, что есть строки для split_n=2 и split_n=3
+    assert set(df["split_n"].tolist()) == {2, 3}
+    
+    # Проверяем windows_total
+    row_2 = df[df["split_n"] == 2].iloc[0]
+    assert row_2["windows_total"] == 2
+    
+    row_3 = df[df["split_n"] == 3].iloc[0]
+    assert row_3["windows_total"] == 3
+
+
+def test_build_stability_table_backward_compatibility():
+    """Проверяет обратную совместимость: без split_counts используется старое поведение"""
+    aggregated_strategies = {
+        "test_strategy": {
+            "1m": {
+                "2024-01-01T00:00:00+00:00": {"total_pnl": 0.1},
+                "2024-02-01T00:00:00+00:00": {"total_pnl": -0.05},
+            }
+        }
+    }
+    
+    df = build_stability_table(aggregated_strategies, split_counts=None)
+    
+    # Должна быть одна строка на стратегию
+    assert len(df) == 1
+    
+    # Не должно быть колонки split_n
+    assert "split_n" not in df.columns
+    
+    # Проверяем метрики
+    assert df.iloc[0]["strategy"] == "test_strategy"
+    assert df.iloc[0]["windows_total"] == 2
+
+
+def test_build_stability_table_multiple_strategies_with_split_counts():
+    """Проверяет построение таблицы для нескольких стратегий с split_counts"""
+    aggregated_strategies = {
+        "strategy1": {
+            "split_2": {
+                "2024-01-01T00:00:00+00:00": {"total_pnl": 0.1},
+                "2024-02-01T00:00:00+00:00": {"total_pnl": 0.05},
+            },
+        },
+        "strategy2": {
+            "split_2": {
+                "2024-01-01T00:00:00+00:00": {"total_pnl": -0.1},
+                "2024-02-01T00:00:00+00:00": {"total_pnl": -0.05},
+            },
+        },
+    }
+    
+    split_counts = [2]
+    df = build_stability_table(aggregated_strategies, split_counts=split_counts)
+    
+    # Должно быть 2 строки (одна на стратегию для split_n=2)
+    assert len(df) == 2
+    
+    # Проверяем, что обе стратегии присутствуют
+    assert set(df["strategy"].tolist()) == {"strategy1", "strategy2"}
+    
+    # Все строки должны иметь split_n=2
+    assert all(df["split_n"] == 2)
+
+
+def test_build_stability_table_order_independence():
+    """Проверяет, что порядок строк не влияет на результат"""
+    aggregated_strategies = {
+        "strategy1": {
+            "split_2": {
+                "2024-01-01T00:00:00+00:00": {"total_pnl": 0.1},
+                "2024-02-01T00:00:00+00:00": {"total_pnl": 0.05},
+            },
+        },
+        "strategy2": {
+            "split_2": {
+                "2024-01-01T00:00:00+00:00": {"total_pnl": -0.1},
+                "2024-02-01T00:00:00+00:00": {"total_pnl": -0.05},
+            },
+        },
+    }
+    
+    split_counts = [2]
+    
+    # Строим таблицу дважды
+    df1 = build_stability_table(aggregated_strategies, split_counts=split_counts)
+    
+    # Меняем порядок стратегий
+    aggregated_strategies_reordered = {
+        "strategy2": aggregated_strategies["strategy2"],
+        "strategy1": aggregated_strategies["strategy1"],
+    }
+    df2 = build_stability_table(aggregated_strategies_reordered, split_counts=split_counts)
+    
+    # Результаты должны быть одинаковыми (кроме порядка строк)
+    assert len(df1) == len(df2)
+    assert set(df1["strategy"].tolist()) == set(df2["strategy"].tolist())
+    
+    # Проверяем, что метрики одинаковые для каждой стратегии
+    for strategy in ["strategy1", "strategy2"]:
+        row1 = df1[df1["strategy"] == strategy].iloc[0]
+        row2 = df2[df2["strategy"] == strategy].iloc[0]
+        
+        assert row1["windows_total"] == row2["windows_total"]
+        assert row1["survival_rate"] == pytest.approx(row2["survival_rate"])
+        assert row1["worst_window_pnl"] == pytest.approx(row2["worst_window_pnl"])
+
+

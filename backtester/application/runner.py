@@ -83,12 +83,12 @@ class BacktestRunner:
 
         # Логируем диагностику по свечам
         if candles:
-            print(f"⏱️ Candle range requested: {start_time} to {end_time}")
-            print(f"📉 Candles available: {len(candles)}")
+            print(f"[time] Candle range requested: {start_time} to {end_time}")
+            print(f"[candles] Candles available: {len(candles)}")
             if candles[0].timestamp > ts:
-                print(f"⚠️ WARNING: Signal time {ts} is earlier than first candle {candles[0].timestamp}")
+                print(f"[WARNING] WARNING: Signal time {ts} is earlier than first candle {candles[0].timestamp}")
         else:
-            print(f"⚠️ No candles found for signal at {ts}")
+            print(f"[WARNING] No candles found for signal at {ts}")
 
         # Формируем единый объект с входными данными
         data = StrategyInput(
@@ -135,7 +135,7 @@ class BacktestRunner:
         
         if self.parallel and len(signals) > 1:
             # Параллельная обработка сигналов
-            print(f"🚀 Processing {len(signals)} signals in parallel (max_workers={self.max_workers})")
+            print(f"[processing] Processing {len(signals)} signals in parallel (max_workers={self.max_workers})")
             
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 # Запускаем обработку всех сигналов
@@ -148,7 +148,7 @@ class BacktestRunner:
                         signal_results = future.result()
                         self.results.extend(signal_results)
                     except Exception as e:
-                        print(f"❌ Error processing signal {sig.id}: {e}")
+                        print(f"[ERROR] Error processing signal {sig.id}: {e}")
                         # Добавляем ошибку для всех стратегий этого сигнала
                         for strategy in self.strategies:
                             self.results.append({
@@ -172,7 +172,7 @@ class BacktestRunner:
         else:
             # Последовательная обработка сигналов
             if self.parallel:
-                print("⚠️ Parallel processing requested but only 1 signal, using sequential mode")
+                print("[WARNING] Parallel processing requested but only 1 signal, using sequential mode")
             
             for sig in signals:
                 signal_results = self._process_signal(sig)
@@ -211,13 +211,13 @@ class BacktestRunner:
             try:
                 backtest_start = datetime.fromisoformat(backtest_cfg["start_at"].replace("Z", "+00:00"))
             except (ValueError, AttributeError) as e:
-                print(f"⚠️ Warning: Invalid backtest.start_at format: {backtest_cfg.get('start_at')}, ignoring")
+                print(f"[WARNING] Warning: Invalid backtest.start_at format: {backtest_cfg.get('start_at')}, ignoring")
                 backtest_start = None
         if backtest_cfg and backtest_cfg.get("end_at"):
             try:
                 backtest_end = datetime.fromisoformat(backtest_cfg["end_at"].replace("Z", "+00:00"))
             except (ValueError, AttributeError) as e:
-                print(f"⚠️ Warning: Invalid backtest.end_at format: {backtest_cfg.get('end_at')}, ignoring")
+                print(f"[WARNING] Warning: Invalid backtest.end_at format: {backtest_cfg.get('end_at')}, ignoring")
                 backtest_end = None
         
         # Парсим fee model
@@ -250,7 +250,7 @@ class BacktestRunner:
         :return: Словарь {strategy_name: PortfolioResult}
         """
         if not self.results:
-            print("⚠️ No strategy results available. Run run() first.")
+            print("[WARNING] No strategy results available. Run run() first.")
             return {}
         
         portfolio_cfg = self._build_portfolio_config()
@@ -259,19 +259,19 @@ class BacktestRunner:
         # Получаем уникальные имена стратегий
         strategy_names = sorted({r["strategy"] for r in self.results})
         
-        print(f"\n📊 Running portfolio simulation for {len(strategy_names)} strategies...")
+        print(f"\n[portfolio] Running portfolio simulation for {len(strategy_names)} strategies...")
         
         for name in strategy_names:
-            print(f"  🔄 Processing portfolio for strategy: {name}")
+            print(f"  [processing] Processing portfolio for strategy: {name}")
             p_result = engine.simulate(self.results, strategy_name=name)
             self.portfolio_results[name] = p_result
             
             # Выводим краткую статистику
             stats = p_result.stats
-            print(f"    ✅ Final balance: {stats.final_balance_sol:.4f} SOL")
-            print(f"    📈 Total return: {stats.total_return_pct:.2%}")
-            print(f"    📉 Max drawdown: {stats.max_drawdown_pct:.2%}")
-            print(f"    🔢 Trades executed: {stats.trades_executed}")
-            print(f"    ⛔ Trades skipped: {stats.trades_skipped_by_risk}")
+            print(f"    [OK] Final balance: {stats.final_balance_sol:.4f} SOL")
+            print(f"    [return] Total return: {stats.total_return_pct:.2%}")
+            print(f"    [drawdown] Max drawdown: {stats.max_drawdown_pct:.2%}")
+            print(f"    [trades] Trades executed: {stats.trades_executed}")
+            print(f"    [skipped] Trades skipped: {stats.trades_skipped_by_risk}")
         
         return self.portfolio_results

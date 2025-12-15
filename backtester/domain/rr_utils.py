@@ -7,8 +7,31 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 import statistics
+import threading
 
 from .models import Candle, StrategyOutput
+
+
+def warn_once(global_params: dict, key: str, message: str) -> None:
+    """
+    Печатает предупреждение только один раз для каждого уникального ключа.
+    Thread-safe для использования в параллельном режиме.
+    
+    :param global_params: Глобальные параметры (StrategyInput.global_params)
+    :param key: Уникальный ключ для дедупликации
+    :param message: Сообщение для печати
+    """
+    store = global_params.setdefault("_warn_once_store", {})
+    lock = store.setdefault("lock", threading.Lock())
+    with lock:
+        seen = store.setdefault("seen", set())
+        counts = store.setdefault("counts", {})
+        counts[key] = counts.get(key, 0) + 1
+        if key in seen:
+            return
+        seen.add(key)
+    # Печать вне lock, чтобы не блокировать другие потоки
+    print(message)
 
 
 def apply_rr_logic(

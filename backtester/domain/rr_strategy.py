@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import List
 from .models import StrategyInput, StrategyOutput, Candle
 from .strategy_base import Strategy
-from .rr_utils import apply_rr_logic, check_candle_quality, calculate_volatility_around_entry, calculate_signal_to_entry_delay
+from .rr_utils import apply_rr_logic, check_candle_quality, calculate_volatility_around_entry, calculate_signal_to_entry_delay, warn_once
 from .trade_features import (
     get_total_supply,
     calc_window_features,
@@ -42,7 +42,13 @@ class RRStrategy(Strategy):
 
         # Проверка: первая свеча позже сигнала (возможна задержка/перерыв)
         if first_available.timestamp > signal_time:
-            print(f"⚠️ WARNING: Signal at {signal_time}, but first candle is at {first_available.timestamp}")
+            delta_sec = int((first_available.timestamp - signal_time).total_seconds())
+            key = f"rr_first_candle_after_signal|{data.signal.id}|{data.signal.contract_address}"
+            warn_once(
+                data.global_params,
+                key,
+                f"[WARN] (dedup): Signal at {signal_time}, first candle at {first_available.timestamp} (delta_sec={delta_sec}s)"
+            )
 
         # Проверка качества свечи входа
         is_valid, error_msg = check_candle_quality(

@@ -150,35 +150,116 @@ def split_into_windows(
     return windows
 
 
+def split_into_equal_windows(
+    trades_df: pd.DataFrame,
+    split_n: int,
+) -> Dict[str, pd.DataFrame]:
+    """
+    Разделяет trades на split_n равных по времени окон.
+    
+    :param trades_df: DataFrame с колонкой entry_time.
+    :param split_n: Количество окон для разбиения.
+    :return: Словарь {window_start_str: DataFrame}, где window_start_str - начало окна в ISO формате.
+    """
+    if len(trades_df) == 0:
+        return {}
+    
+    if split_n <= 0:
+        raise ValueError(f"split_n must be positive, got {split_n}")
+    
+    # Сортируем по entry_time для стабильности
+    df_sorted = trades_df.sort_values("entry_time").copy()
+    
+    # Находим минимальное и максимальное время
+    min_time = df_sorted["entry_time"].min()
+    max_time = df_sorted["entry_time"].max()
+    
+    if pd.isna(min_time) or pd.isna(max_time):
+        return {}
+    
+    # Вычисляем длительность каждого окна
+    total_duration = max_time - min_time
+    if total_duration.total_seconds() == 0:
+        # Все сделки в один момент времени - возвращаем одно окно
+        window_key = min_time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        return {window_key: df_sorted}
+    
+    window_duration = total_duration / split_n
+    
+    windows = {}
+    for i in range(split_n):
+        window_start = min_time + (window_duration * i)
+        window_end = min_time + (window_duration * (i + 1))
+        
+        # Для последнего окна включаем границу (<= вместо <)
+        if i == split_n - 1:
+            window_trades = df_sorted[
+                (df_sorted["entry_time"] >= window_start) &
+                (df_sorted["entry_time"] <= window_end)
+            ].copy()
+        else:
+            window_trades = df_sorted[
+                (df_sorted["entry_time"] >= window_start) &
+                (df_sorted["entry_time"] < window_end)
+            ].copy()
+        
+        # Используем ISO формат для ключа
+        window_key = window_start.strftime("%Y-%m-%dT%H:%M:%S%z")
+        if len(window_trades) > 0:
+            windows[window_key] = window_trades
+    
+    return windows
+
+
 def aggregate_strategy_windows(
     csv_path: Path,
     windows: Optional[Dict[str, relativedelta]] = None,
+    split_counts: Optional[List[int]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Агрегирует trades стратегии по временным окнам.
     
     :param csv_path: Путь к CSV файлу с trades table.
     :param windows: Словарь {window_name: relativedelta}. Если None, используется WINDOWS.
+                   Используется только если split_counts не указан.
+    :param split_counts: Список значений split_n для мульти-масштабного разбиения.
+                        Если указан, используется вместо windows.
     :return: Словарь {window_name: {window_start: metrics_dict}}.
+             Если используется split_counts, window_name будет "split_{split_n}".
     """
-    if windows is None:
-        windows = WINDOWS
-    
     # Загружаем trades
     trades_df = load_trades_csv(csv_path)
     
     # Результат: {window_name: {window_start: metrics}}
     result = {}
     
-    for window_name, window_delta in windows.items():
-        window_windows = split_into_windows(trades_df, window_delta)
+    # Если указан split_counts, используем мульти-масштабное разбиение
+    if split_counts is not None:
+        for split_n in split_counts:
+            window_windows = split_into_equal_windows(trades_df, split_n)
+            
+            window_metrics = {}
+            for window_start_str, window_trades in window_windows.items():
+                metrics = calculate_window_metrics(window_trades)
+                window_metrics[window_start_str] = metrics
+            
+            # Используем имя вида "split_{split_n}" для идентификации
+            window_name = f"split_{split_n}"
+            result[window_name] = window_metrics
+    else:
+        # Старое поведение: используем windows
+        if windows is None:
+            windows = WINDOWS
         
-        window_metrics = {}
-        for window_start_str, window_trades in window_windows.items():
-            metrics = calculate_window_metrics(window_trades)
-            window_metrics[window_start_str] = metrics
-        
-        result[window_name] = window_metrics
+        for window_name, window_delta in windows.items():
+            window_windows = split_into_windows(trades_df, window_delta)
+            
+            window_metrics = {}
+            for window_start_str, window_trades in window_windows.items():
+                metrics = calculate_window_metrics(window_trades)
+                window_metrics[window_start_str] = metrics
+            
+            result[window_name] = window_metrics
     
     return result
 
@@ -186,17 +267,18 @@ def aggregate_strategy_windows(
 def aggregate_all_strategies(
     reports_dir: Path,
     windows: Optional[Dict[str, relativedelta]] = None,
+    split_counts: Optional[List[int]] = None,
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """
     Агрегирует все стратегии из reports_dir по временным окнам.
     
     :param reports_dir: Директория с *_trades.csv файлами.
     :param windows: Словарь {window_name: relativedelta}. Если None, используется WINDOWS.
+                   Используется только если split_counts не указан.
+    :param split_counts: Список значений split_n для мульти-масштабного разбиения.
+                        Если указан, используется вместо windows.
     :return: Словарь {strategy_name: {window_name: {window_start: metrics_dict}}}.
     """
-    if windows is None:
-        windows = WINDOWS
-    
     reports_dir = Path(reports_dir)
     if not reports_dir.exists():
         raise FileNotFoundError(f"Reports directory not found: {reports_dir}")
@@ -210,10 +292,16 @@ def aggregate_all_strategies(
         strategy_name = trades_file.stem.replace("_trades", "")
         
         try:
-            strategy_windows = aggregate_strategy_windows(trades_file, windows)
+            strategy_windows = aggregate_strategy_windows(
+                trades_file, 
+                windows=windows,
+                split_counts=split_counts
+            )
             result[strategy_name] = strategy_windows
         except Exception as e:
-            print(f"⚠️ Failed to aggregate {strategy_name}: {e}")
+            print(f"[WARNING] Failed to aggregate {strategy_name}: {e}")
             continue
     
     return result
+
+

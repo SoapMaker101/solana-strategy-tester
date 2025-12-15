@@ -141,7 +141,7 @@ class PortfolioEngine:
             # но это потребует доступа к ценам. Пока выходим, как есть.
             trades.append(r)
         
-        print(f"  📊 Portfolio filtering for {strategy_name}:")
+        print(f"  [portfolio] Portfolio filtering for {strategy_name}:")
         print(f"     Total results: {total_results}")
         print(f"     Filtered by strategy: {filtered_by_strategy}")
         print(f"     Filtered by entry/exit: {filtered_by_entry}")

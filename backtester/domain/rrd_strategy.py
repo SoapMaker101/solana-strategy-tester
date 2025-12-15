@@ -8,6 +8,7 @@ from .rr_utils import (
     check_candle_quality,
     calculate_volatility_around_entry,
     calculate_signal_to_entry_delay,
+    warn_once,
 )
 from .trade_features import (
     get_total_supply,
@@ -57,6 +58,16 @@ class RRDStrategy(Strategy):
         # 2.2. Определение цены входа (drawdown)
         # Берем первую свечу после сигнала как базовую
         first_candle = candles[0]
+        
+        # Проверка: первая свеча позже сигнала (возможна задержка/перерыв)
+        if first_candle.timestamp > signal_time:
+            delta_sec = int((first_candle.timestamp - signal_time).total_seconds())
+            key = f"rrd_first_candle_after_signal|{data.signal.id}|{data.signal.contract_address}"
+            warn_once(
+                data.global_params,
+                key,
+                f"[WARN] (dedup, RRD): Signal at {signal_time}, first candle at {first_candle.timestamp} (delta_sec={delta_sec}s)"
+            )
         
         # Проверка качества первой свечи
         is_valid, error_msg = check_candle_quality(
@@ -111,7 +122,7 @@ class RRDStrategy(Strategy):
                 
                 # Пропускаем аномальные свечи с предупреждением
                 if not is_valid:
-                    print(f"⚠️ Skipping anomalous candle at {c.timestamp}: {error_msg}")
+                    print(f"[WARNING] Skipping anomalous candle at {c.timestamp}: {error_msg}")
                     previous_candle = c
                     continue
                 
@@ -223,11 +234,14 @@ class RRDStrategy(Strategy):
         # Добавляем trade features
         base_meta.update(window_features)
         base_meta.update(mcap_features)
-        
+
         # Свечи после входа (начиная со следующей)
-        start_check_idx = entry_idx + 1
+        if entry_idx is not None:
+            start_check_idx = entry_idx + 1
+        else:
+            start_check_idx = 0
         candles_from_entry = all_candles[start_check_idx:] if start_check_idx < len(all_candles) else []
-        
+
         # Применяем общую RR-логику
         result = apply_rr_logic(
             entry_candle=entry_candle,

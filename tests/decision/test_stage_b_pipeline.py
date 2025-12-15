@@ -178,3 +178,5 @@ def test_stage_b_pipeline_empty_stability(tmp_path):
     assert len(selection_df) == 0
     assert "passed" in selection_df.columns
     assert "failed_reasons" in selection_df.columns
+
+
