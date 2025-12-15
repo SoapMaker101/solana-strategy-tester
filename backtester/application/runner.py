@@ -10,6 +10,7 @@ from ..infrastructure.price_loader import PriceLoader    # Интерфейс з
 from ..domain.strategy_base import Strategy              # Базовый класс стратегий
 from ..domain.models import StrategyInput, StrategyOutput, Signal, Candle  # Общие модели
 from ..domain.portfolio import PortfolioConfig, PortfolioEngine, FeeModel, PortfolioResult  # Портфельный слой
+from ..utils.warn_dedup import WarnDedup  # Потокобезопасный класс для дедупликации предупреждений
 
 class BacktestRunner:
     """
@@ -45,6 +46,10 @@ class BacktestRunner:
         
         # Добавляем price_loader в global_params для использования стратегиями
         self.global_config["_price_loader"] = self.price_loader
+        
+        # Создаем потокобезопасный экземпляр WarnDedup для дедупликации предупреждений
+        self.warn_dedup = WarnDedup()
+        self.global_config["_warn_dedup"] = self.warn_dedup
         
         # Портфельные результаты (по стратегиям)
         self.portfolio_results: Dict[str, PortfolioResult] = {}

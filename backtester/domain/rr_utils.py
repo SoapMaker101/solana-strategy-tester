@@ -7,31 +7,31 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 import statistics
-import threading
 
 from .models import Candle, StrategyOutput
 
 
-def warn_once(global_params: dict, key: str, message: str) -> None:
+def warn_once(global_params: dict, key: str, message: str) -> bool:
     """
     Печатает предупреждение только один раз для каждого уникального ключа.
     Thread-safe для использования в параллельном режиме.
     
+    Использует потокобезопасный класс WarnDedup из global_params.
+    
     :param global_params: Глобальные параметры (StrategyInput.global_params)
-    :param key: Уникальный ключ для дедупликации
+    :param key: Уникальный ключ для дедупликации (например, "{strategy}|first_candle_after_signal|{signal_id}|{contract}")
     :param message: Сообщение для печати
+    :return: True если сообщение было выведено впервые, False если уже было выведено ранее
     """
-    store = global_params.setdefault("_warn_once_store", {})
-    lock = store.setdefault("lock", threading.Lock())
-    with lock:
-        seen = store.setdefault("seen", set())
-        counts = store.setdefault("counts", {})
-        counts[key] = counts.get(key, 0) + 1
-        if key in seen:
-            return
-        seen.add(key)
-    # Печать вне lock, чтобы не блокировать другие потоки
-    print(message)
+    # Получаем экземпляр WarnDedup из global_params
+    warn_dedup = global_params.get("_warn_dedup")
+    if warn_dedup is None:
+        # Fallback: если WarnDedup не инициализирован, просто выводим сообщение
+        print(f"[WARN] {message}")
+        return True
+    
+    # Используем потокобезопасный метод
+    return warn_dedup.warn_once(key, message, category="WARN")
 
 
 def apply_rr_logic(

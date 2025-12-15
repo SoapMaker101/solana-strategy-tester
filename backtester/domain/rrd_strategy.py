@@ -62,11 +62,11 @@ class RRDStrategy(Strategy):
         # Проверка: первая свеча позже сигнала (возможна задержка/перерыв)
         if first_candle.timestamp > signal_time:
             delta_sec = int((first_candle.timestamp - signal_time).total_seconds())
-            key = f"rrd_first_candle_after_signal|{data.signal.id}|{data.signal.contract_address}"
+            key = f"{self.config.name}|first_candle_after_signal|{data.signal.id}|{data.signal.contract_address}"
             warn_once(
                 data.global_params,
                 key,
-                f"[WARN] (dedup, RRD): Signal at {signal_time}, first candle at {first_candle.timestamp} (delta_sec={delta_sec}s)"
+                f"Signal at {signal_time}, first candle at {first_candle.timestamp} (delta_sec={delta_sec}s)"
             )
         
         # Проверка качества первой свечи

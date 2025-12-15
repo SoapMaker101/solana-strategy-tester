@@ -20,12 +20,16 @@ T = TypeVar('T')
 def _format_datetime(dt: Optional[datetime]) -> str:
     """
     Форматирует datetime для вывода в логах.
-    Использует isoformat с заменой T на пробел для читаемости.
+    Использует strftime для гарантированного правильного формата YYYY-MM-DD HH:MM:SS.
     """
     if dt is None:
         return "None"
-    # Используем isoformat() и заменяем T на пробел для читаемости
-    return dt.isoformat().replace("T", " ")
+    # Используем strftime для гарантированного формата YYYY-MM-DD HH:MM:SS
+    # Если есть timezone, добавляем его
+    if dt.tzinfo is not None:
+        return dt.strftime("%Y-%m-%d %H:%M:%S%z")
+    else:
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 class RateLimitExceededError(RuntimeError):

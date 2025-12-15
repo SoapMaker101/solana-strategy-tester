@@ -8,6 +8,7 @@ from typing import List
 from datetime import datetime
 from collections import defaultdict     # Для группировки результатов по стратегиям
 import yaml                             # Для загрузки YAML конфигураций
+import sys                              # Для определения платформы
 
 # Импорт основных компонентов бэктестера
 from backtester.application.runner import BacktestRunner  # Главный исполнитель бэктеста
@@ -55,6 +56,12 @@ def parse_args():
         type=str,
         default="output/results.json",
         help="Путь для сохранения JSON-отчета"
+    )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="Максимальное количество потоков для параллельной обработки (по умолчанию: 1 на Windows, 4 на Linux/mac)"
     )
     return parser.parse_args()
 
@@ -139,7 +146,18 @@ def main():
     # Получаем настройки параллельной обработки
     runtime_cfg = backtest_cfg.get("runtime", {})
     parallel = runtime_cfg.get("parallel", False)
-    max_workers = runtime_cfg.get("max_workers", 4)
+    
+    # Определяем дефолт для max_workers в зависимости от платформы
+    if args.max_workers is not None:
+        max_workers = args.max_workers
+    elif "max_workers" in runtime_cfg:
+        max_workers = runtime_cfg.get("max_workers")
+    else:
+        # Дефолт: Windows = 1 (стабильно), Linux/mac = 4
+        if sys.platform == "win32":
+            max_workers = 1
+        else:
+            max_workers = 4
 
     # Создаем и запускаем бэктест
     runner = BacktestRunner(
@@ -157,15 +175,10 @@ def main():
     print(f"Backtest finished. Results count: {len(results)}")
     
     # Выводим summary по dedup warnings
-    warn_store = runner.global_config.get("_warn_once_store", {})
-    if warn_store.get("counts"):
-        counts = warn_store["counts"]
-        unique_count = len(warn_store.get("seen", set()))
-        total_count = sum(counts.values())
-        # Топ-5 по количеству
-        top_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        top_str = ", ".join([f"{k}:{v}" for k, v in top_items])
-        print(f"[WARNING] Dedup warnings summary: unique={unique_count}, total={total_count}. Top: {top_str}")
+    warn_dedup = runner.warn_dedup
+    if warn_dedup:
+        summary = warn_dedup.summary(top_n=10)
+        print(summary)
 
     # Группируем результаты по стратегиям и генерируем отчеты
     results_by_strategy = defaultdict(list)
