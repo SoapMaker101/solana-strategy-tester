@@ -63,24 +63,52 @@
 
 #### Детальное описание изменений
 
-##### 1. Модель комиссий (FeeModel)
+##### 1. Модель комиссий и Execution Profiles (FeeModel + ExecutionModel)
 
-**Файл:** `backtester/domain/portfolio.py`
+**Файлы:** `backtester/domain/portfolio.py`, `backtester/domain/execution_model.py`
 
 **Что делает:**
 - Моделирует реальные издержки торговли на Solana
-- Учитывает комиссии swap (0.3%), LP (0.1%), проскальзывание (10%), сетевые комиссии (0.0005 SOL)
-- Метод `effective_fee_pct()` рассчитывает суммарные комиссии round-trip (вход + выход)
+- Учитывает комиссии swap (0.3%), LP (0.1%), проскальзывание, сетевые комиссии (0.0005 SOL)
+- Поддерживает **execution profiles** с reason-based slippage multipliers
 
-**Формула:**
+**Execution Profiles:**
+
+Система поддерживает разные профили исполнения для более реалистичного моделирования:
+
+- **`realistic`** (по умолчанию): Базовое проскальзывание 3%, разные multipliers для разных типов выхода
+  - Entry: 3% (1.0x)
+  - Exit TP: 2.1% (0.7x) - меньше slippage при прибыльном выходе
+  - Exit SL: 3.6% (1.2x) - больше slippage при стоп-лоссе (паника)
+  - Exit Timeout: 0.9% (0.3x) - минимальный slippage при плановом выходе
+  - Exit Manual: 1.5% (0.5x)
+
+- **`stress`**: Базовое проскальзывание 10% для stress-testing low-cap токенов
+  - Используется для проверки устойчивости стратегий к экстремальным условиям
+
+- **`custom`**: Пользовательский профиль (определяется в YAML)
+
+**Legacy режим:**
+Если в конфиге указан только `slippage_pct` без `profiles`, используется legacy режим:
+- Одинаковое проскальзывание для всех событий (вход/выход)
+- Выдается предупреждение о миграции на profiles
+
+**Формула применения slippage:**
 ```
-effective_fee_pct = 2 * (swap_fee_pct + lp_fee_pct + slippage_pct) + network_fee_sol / notional_sol
+effective_entry_price = raw_entry_price * (1 + slippage_entry)
+effective_exit_price = raw_exit_price * (1 - slippage_exit)
+```
+
+**Формула применения fees:**
+```
+notional_after_fees = notional * (1 - swap_fee_pct - lp_fee_pct)
 ```
 
 **Зачем нужно:**
 - Реалистичная оценка прибыльности стратегий
-- Учет высокого проскальзывания на мемкоинах Solana (10%)
-- Точный расчет PnL с учетом всех издержек
+- Разные slippage для разных сценариев выхода (TP vs SL vs timeout)
+- Возможность stress-testing без влияния на основной анализ (Stage A/B используют realistic)
+- Обратная совместимость с legacy конфигами
 
 ##### 2. Портфельный движок (PortfolioEngine)
 
@@ -261,12 +289,35 @@ portfolio:
   percent_per_trade: 0.1          # Доля капитала на одну сделку (10%)
   max_exposure: 0.5               # Максимальная экспозиция (50%)
   max_open_positions: 10          # Максимальное количество открытых позиций
-  runner_reset_enabled: false     # Режим Runner-XN (пока не реализован)
+  runner_reset_enabled: false     # Режим Runner-XN
+  execution_profile: "realistic"   # Профиль исполнения: "realistic", "stress", или "custom"
   fee:
     swap_fee_pct: 0.003           # Комиссия swap (0.3%)
     lp_fee_pct: 0.001             # Комиссия LP (0.1%)
-    slippage_pct: 0.10            # Проскальзывание (10%)
     network_fee_sol: 0.0005        # Фиксированная комиссия сети в SOL
+    
+    # Execution profiles с reason-based slippage (рекомендуется)
+    profiles:
+      realistic:
+        base_slippage_pct: 0.03    # 3% базовое проскальзывание
+        slippage_multipliers:
+          entry: 1.0               # 3% при входе
+          exit_tp: 0.7             # 2.1% при выходе по TP
+          exit_sl: 1.2             # 3.6% при выходе по SL
+          exit_timeout: 0.3        # 0.9% при timeout
+          exit_manual: 0.5         # 1.5% при ручном выходе
+      
+      stress:
+        base_slippage_pct: 0.10    # 10% для stress-testing
+        slippage_multipliers:
+          entry: 1.0
+          exit_tp: 0.6
+          exit_sl: 1.3
+          exit_timeout: 0.2
+          exit_manual: 0.5
+    
+    # Legacy режим (если profiles не указаны)
+    # slippage_pct: 0.10            # Одинаковое проскальзывание для всех событий
 ```
 
 ### Параметры
@@ -278,11 +329,19 @@ portfolio:
 - **percent_per_trade**: Доля капитала на одну сделку (0.1 = 10%)
 - **max_exposure**: Максимальная доля капитала в открытых позициях (0.5 = 50%)
 - **max_open_positions**: Максимальное количество одновременно открытых позиций
+- **execution_profile**: Профиль исполнения (`"realistic"`, `"stress"`, или `"custom"`)
+  - `"realistic"` (по умолчанию): Базовое проскальзывание 3% с разными multipliers
+  - `"stress"`: Базовое проскальзывание 10% для stress-testing
+  - `"custom"`: Пользовательский профиль из `fee.profiles`
 - **fee**: Модель комиссий
-  - `swap_fee_pct`: Комиссия swap (в долях)
-  - `lp_fee_pct`: Комиссия LP (в долях)
-  - `slippage_pct`: Проскальзывание (в долях)
-  - `network_fee_sol`: Фиксированная комиссия сети в SOL
+  - `swap_fee_pct`: Комиссия swap (в долях, 0.003 = 0.3%)
+  - `lp_fee_pct`: Комиссия LP (в долях, 0.001 = 0.1%)
+  - `network_fee_sol`: Фиксированная комиссия сети в SOL (0.0005 SOL)
+  - `profiles`: Execution profiles с reason-based slippage (рекомендуется)
+    - `realistic`: Профиль для обычного анализа (3% базовое slippage)
+    - `stress`: Профиль для stress-testing (10% базовое slippage)
+    - `custom`: Пользовательский профиль
+  - `slippage_pct`: Legacy режим (если profiles не указаны, одинаковое slippage для всех событий)
 
 ## Использование
 
@@ -374,17 +433,43 @@ portfolio_result = engine.simulate(all_results, strategy_name="RR_10_20")
 6. **Применение комиссий**: Из PnL вычитаются комиссии и проскальзывание
 7. **Обновление баланса**: Баланс обновляется при закрытии позиций
 
-## Комиссии
+## Комиссии и Execution Profiles
 
-Суммарные комиссии рассчитываются как:
+### Применение slippage
+
+Slippage применяется к ценам входа и выхода на основе execution profile:
 
 ```
-effective_fee_pct = 2 * (swap_fee_pct + lp_fee_pct + slippage_pct) + network_fee_sol / notional_sol
+effective_entry_price = raw_entry_price * (1 + slippage_entry)
+effective_exit_price = raw_exit_price * (1 - slippage_exit)
 ```
 
-Где:
-- `2 *` - учитывает вход и выход (round-trip)
-- `network_fee_sol / notional_sol` - фиксированная комиссия сети в процентах
+Где `slippage_entry` и `slippage_exit` зависят от:
+- Базового проскальзывания (`base_slippage_pct`)
+- Multiplier для типа события (`slippage_multipliers[event]`)
+
+### Применение fees
+
+Fees (swap + LP) применяются к нотионалу при входе и выходе:
+
+```
+notional_after_fees = notional * (1 - swap_fee_pct - lp_fee_pct)
+```
+
+Network fee вычитается отдельно из баланса (при входе и выходе).
+
+### Рекомендуемый workflow
+
+1. **Stage A/B (поиск альфы)**: Используйте `execution_profile: "realistic"`
+   - Реалистичные условия для поиска прибыльных стратегий
+   - Не фильтрует стратегии слишком агрессивно
+
+2. **Stress testing**: Используйте `execution_profile: "stress"` для топ-N стратегий
+   - Проверка устойчивости к экстремальным условиям
+   - Фильтрация стратегий, которые работают только в идеальных условиях
+
+3. **CLI переопределение**: `--execution-profile realistic|stress`
+   - Переопределяет YAML конфиг для быстрого переключения
 
 ## Примеры
 
@@ -418,6 +503,7 @@ portfolio:
 - [ ] Более сложные модели комиссий
 - [ ] Учет частичного закрытия позиций
 - [ ] Портфельная оптимизация
+
 
 
 

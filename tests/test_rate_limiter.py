@@ -177,9 +177,17 @@ class TestGeckoTerminalPriceLoaderRateLimit:
         """Тест что loader использует rate limiter при HTTP запросах"""
         acquire_calls = []
         
-        class MockRateLimiter:
+        class MockRateLimiter(RateLimiter):
+            def __init__(self):
+                # Вызываем super().__init__() для соответствия типам, но переопределяем методы
+                super().__init__(max_calls=1, period_seconds=1)
+            
             def acquire(self, cost=1):
+                # Переопределяем, чтобы не использовать реальную логику
                 acquire_calls.append(cost)
+            
+            def get_stats(self):
+                return {"blocked_events": 0, "total_wait_time_seconds": 0.0}
         
         loader = GeckoTerminalPriceLoader(
             cache_dir="test_cache",
@@ -261,6 +269,7 @@ class TestGeckoTerminalPriceLoaderRateLimit:
         assert summary["total_requests"] == 100
         assert summary["http_429"] == 5
         assert summary["mode_on_429"] == "wait"
+
 
 
 

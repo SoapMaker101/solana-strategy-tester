@@ -10,6 +10,7 @@ from ..infrastructure.price_loader import PriceLoader    # Интерфейс з
 from ..domain.strategy_base import Strategy              # Базовый класс стратегий
 from ..domain.models import StrategyInput, StrategyOutput, Signal, Candle  # Общие модели
 from ..domain.portfolio import PortfolioConfig, PortfolioEngine, FeeModel, PortfolioResult  # Портфельный слой
+from ..domain.execution_model import ExecutionProfileConfig  # Execution profiles
 from ..utils.warn_dedup import WarnDedup  # Потокобезопасный класс для дедупликации предупреждений
 
 class BacktestRunner:
@@ -233,12 +234,39 @@ class BacktestRunner:
         
         # Парсим fee model
         fee_cfg = portfolio_cfg.get("fee", {})
+        
+        # Парсим execution profiles если есть
+        profiles = None
+        if "profiles" in fee_cfg:
+            profiles_dict = {}
+            for profile_name, profile_data in fee_cfg["profiles"].items():
+                profiles_dict[profile_name] = ExecutionProfileConfig(
+                    base_slippage_pct=float(profile_data.get("base_slippage_pct", 0.03)),
+                    slippage_multipliers={
+                        "entry": float(profile_data.get("slippage_multipliers", {}).get("entry", 1.0)),
+                        "exit_tp": float(profile_data.get("slippage_multipliers", {}).get("exit_tp", 1.0)),
+                        "exit_sl": float(profile_data.get("slippage_multipliers", {}).get("exit_sl", 1.0)),
+                        "exit_timeout": float(profile_data.get("slippage_multipliers", {}).get("exit_timeout", 1.0)),
+                        "exit_manual": float(profile_data.get("slippage_multipliers", {}).get("exit_manual", 1.0)),
+                    }
+                )
+            profiles = profiles_dict
+        
+        # Legacy slippage_pct (используется если profiles отсутствует)
+        slippage_pct = None
+        if "slippage_pct" in fee_cfg:
+            slippage_pct = float(fee_cfg.get("slippage_pct"))
+        
         fee_model = FeeModel(
             swap_fee_pct=float(fee_cfg.get("swap_fee_pct", 0.003)),
             lp_fee_pct=float(fee_cfg.get("lp_fee_pct", 0.001)),
-            slippage_pct=float(fee_cfg.get("slippage_pct", 0.10)),
+            slippage_pct=slippage_pct,
             network_fee_sol=float(fee_cfg.get("network_fee_sol", 0.0005)),
+            profiles=profiles,
         )
+        
+        # Execution profile (по умолчанию realistic)
+        execution_profile = portfolio_cfg.get("execution_profile", "realistic")
         
         return PortfolioConfig(
             initial_balance_sol=float(portfolio_cfg.get("initial_balance_sol", 10.0)),
@@ -247,6 +275,7 @@ class BacktestRunner:
             max_exposure=float(portfolio_cfg.get("max_exposure", 0.5)),
             max_open_positions=int(portfolio_cfg.get("max_open_positions", 10)),
             fee_model=fee_model,
+            execution_profile=execution_profile,
             backtest_start=backtest_start,
             backtest_end=backtest_end,
             runner_reset_enabled=portfolio_cfg.get("runner_reset_enabled", False),

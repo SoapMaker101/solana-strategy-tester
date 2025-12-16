@@ -287,6 +287,76 @@ config/strategies_example.yaml
 
 signals/example_signals.csv
 
+## Reporting Modes
+
+Для больших объемов данных (тысячи сигналов × тысячи стратегий) можно управлять генерацией отчетов через параметр `--report-mode`:
+
+### Режимы отчетности
+
+- **`none`** — сохраняет только `results.json`, никаких отчетов/графиков
+- **`summary`** (по умолчанию) — генерирует только агрегированные summary файлы (`strategy_summary.csv`, `portfolio_summary.csv`)
+- **`top`** — генерирует отчеты только для top-N стратегий (N задается через `--report-top-n`)
+- **`all`** — генерирует все отчеты для всех стратегий (как раньше)
+
+### Примеры использования
+
+**Быстрый массовый прогон без отчетов:**
+```bash
+python main.py \
+  --signals signals/signals_2025-07-01_to_2025-12-14.csv \
+  --strategies-config config/strategies_rr_rrd_grid.yaml \
+  --report-mode summary
+```
+
+**Совсем без репортов (только results.json):**
+```bash
+python main.py \
+  --signals signals/signals_2025-07-01_to_2025-12-14.csv \
+  --strategies-config config/strategies_rr_rrd_grid.yaml \
+  --report-mode none
+```
+
+**Отчёты только для top 30 стратегий (без графиков/HTML):**
+```bash
+python main.py \
+  --signals signals/signals_2025-07-01_to_2025-12-14.csv \
+  --strategies-config config/strategies_rr_rrd_grid.yaml \
+  --report-mode top \
+  --report-top-n 30 \
+  --report-metric portfolio_return \
+  --no-charts \
+  --no-html
+```
+
+**Генерация детальных отчетов после Stage B:**
+```bash
+python tools/generate_reports.py \
+  --input output/results.json \
+  --strategies output/strategy_selection.csv \
+  --with-charts \
+  --with-html
+```
+
+**Генерация отчетов для top-N из summary:**
+```bash
+python tools/generate_reports.py \
+  --input output/results.json \
+  --summary-csv output/reports/strategy_summary.csv \
+  --top-n 50 \
+  --metric portfolio_return \
+  --with-charts \
+  --with-html \
+  --signals signals/signals_2025-07-01_to_2025-12-14.csv
+```
+
+### Параметры CLI
+
+- `--report-mode` — режим генерации отчетов (`none`, `summary`, `top`, `all`, по умолчанию `summary`)
+- `--report-top-n` — количество топ стратегий для режима `top` (по умолчанию 50)
+- `--report-metric` — метрика для выбора top-N (`portfolio_return`, `strategy_total_pnl`, `sharpe`, по умолчанию `portfolio_return`)
+- `--no-charts` — не генерировать PNG графики (по умолчанию True для `none`/`summary`/`top`)
+- `--no-html` — не генерировать HTML отчеты (по умолчанию True для `none`/`summary`/`top`)
+
 ## Current Status
 
 ✅ **Phase 2 Complete:** Clean architecture, stable pipeline  

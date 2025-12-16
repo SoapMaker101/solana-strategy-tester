@@ -43,9 +43,10 @@ def test_trades_table_has_required_columns(reporter):
     ]
     
     # Сохраняем таблицу
-    csv_path = reporter.save_trades_table("test_strategy", results)
+    reporter.save_trades_table("test_strategy", results)
     
     # Читаем CSV
+    csv_path = reporter.output_dir / "test_strategy_trades.csv"
     df = pd.read_csv(csv_path)
     
     # Проверяем наличие обязательных колонок
@@ -64,7 +65,7 @@ def test_trades_table_has_required_columns(reporter):
     assert df.iloc[0]["contract_address"] == "TOKEN1"
     assert df.iloc[0]["entry_price"] == 100.0
     assert df.iloc[0]["exit_price"] == 110.0
-    assert df.iloc[0]["pnl_pct"] == 0.1
+    assert df.iloc[0]["pnl_pct"] == 10.0  # 0.1 * 100 = 10.0%
     assert df.iloc[0]["reason"] == "tp"
     assert df.iloc[0]["source"] == "test_source"
     assert df.iloc[0]["narrative"] == "test narrative"
@@ -100,7 +101,8 @@ def test_trades_table_flattens_meta_scalars(reporter):
         }
     ]
     
-    csv_path = reporter.save_trades_table("test_strategy", results)
+    reporter.save_trades_table("test_strategy", results)
+    csv_path = reporter.output_dir / "test_strategy_trades.csv"
     df = pd.read_csv(csv_path)
     
     # Проверяем, что скалярные значения из meta появились как колонки с префиксом meta_
@@ -149,7 +151,8 @@ def test_trades_table_jsonifies_nested_meta(reporter):
         }
     ]
     
-    csv_path = reporter.save_trades_table("test_strategy", results)
+    reporter.save_trades_table("test_strategy", results)
+    csv_path = reporter.output_dir / "test_strategy_trades.csv"
     df = pd.read_csv(csv_path)
     
     # Проверяем скалярное значение
@@ -231,7 +234,8 @@ def test_trades_table_filters_no_entry_and_error(reporter):
         },
     ]
     
-    csv_path = reporter.save_trades_table("test_strategy", results)
+    reporter.save_trades_table("test_strategy", results)
+    csv_path = reporter.output_dir / "test_strategy_trades.csv"
     df = pd.read_csv(csv_path)
     
     # Должна быть только одна строка (valid_trade)
@@ -245,9 +249,10 @@ def test_trades_table_handles_empty_results(reporter):
     """Проверяет обработку пустого списка результатов"""
     results = []
     
-    csv_path = reporter.save_trades_table("test_strategy", results)
+    reporter.save_trades_table("test_strategy", results)
     
     # Файл должен существовать
+    csv_path = reporter.output_dir / "test_strategy_trades.csv"
     assert csv_path.exists()
     
     # Должен содержать только заголовки
@@ -262,6 +267,7 @@ def test_trades_table_handles_empty_results(reporter):
     ]
     for col in required_columns:
         assert col in df.columns
+
 
 
 

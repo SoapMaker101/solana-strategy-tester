@@ -116,3 +116,4 @@ def test_warn_dedup_summary_empty():
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
+

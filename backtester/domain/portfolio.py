@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from .position import Position
 from .models import StrategyOutput
+from .execution_model import ExecutionProfileConfig, ExecutionModel
 
 
 @dataclass
@@ -15,19 +16,29 @@ class FeeModel:
     """
     Модель комиссий и проскальзывания.
     Все значения в долях (0.1 = 10%).
+    
+    Поддерживает два режима:
+    1. Legacy: slippage_pct применяется одинаково для всех событий
+    2. Profiles: reason-based slippage через execution profiles
     """
     swap_fee_pct: float = 0.003       # 0.3%
     lp_fee_pct: float = 0.001         # 0.1%
-    slippage_pct: float = 0.10        # 10% slippage
+    slippage_pct: Optional[float] = 0.10  # 10% slippage (legacy, используется если profiles=None)
     network_fee_sol: float = 0.0005   # фикс. комиссия сети в SOL
+    profiles: Optional[Dict[str, ExecutionProfileConfig]] = None  # Execution profiles
 
     def effective_fee_pct(self, notional_sol: float) -> float:
         """
+        DEPRECATED: Используется только для обратной совместимости.
+        Новая логика применяет slippage к ценам через ExecutionModel.
+        
         Считает суммарные издержки как долю от notional_sol.
         Round-trip: вход + выход.
         """
+        # Используем slippage_pct для legacy режима
+        slippage = self.slippage_pct if self.slippage_pct is not None else 0.10
         # Переменные компоненты (в процентах)
-        pct_roundtrip = 2 * (self.swap_fee_pct + self.lp_fee_pct + self.slippage_pct)
+        pct_roundtrip = 2 * (self.swap_fee_pct + self.lp_fee_pct + slippage)
         # Фиксированная сеть в процентах
         network_pct = self.network_fee_sol / notional_sol if notional_sol > 0 else 0.0
         return pct_roundtrip + network_pct
@@ -45,6 +56,7 @@ class PortfolioConfig:
     max_open_positions: int = 10
 
     fee_model: FeeModel = field(default_factory=FeeModel)
+    execution_profile: str = "realistic"  # realistic | stress | custom
 
     backtest_start: Optional[datetime] = None
     backtest_end: Optional[datetime] = None
@@ -81,6 +93,7 @@ class PortfolioEngine:
 
     def __init__(self, config: PortfolioConfig) -> None:
         self.config = config
+        self.execution_model = ExecutionModel.from_config(config)
 
     def _position_size(self, current_balance: float) -> float:
         """
@@ -197,11 +210,25 @@ class PortfolioEngine:
             for pos in open_positions:
                 if pos.exit_time is not None and pos.exit_time <= entry_time:
                     # При закрытии: возвращаем размер позиции + прибыль/убыток
-                    # balance = balance + size + size * pnl_pct = size * (1 + pnl_pct)
+                    # Вычитаем fees (swap + LP) из возвращаемого нотионала
+                    network_fee_exit = self.execution_model.network_fee()
                     trade_pnl_sol = pos.size * (pos.pnl_pct or 0.0)
-                    balance += pos.size + trade_pnl_sol  # Возвращаем размер + PnL
+                    
+                    # Применяем fees к возвращаемому нотионалу
+                    notional_returned = pos.size + trade_pnl_sol
+                    notional_after_fees = self.execution_model.apply_fees(notional_returned)
+                    fees_total = notional_returned - notional_after_fees
+                    
+                    balance += notional_after_fees  # Возвращаем размер + PnL минус fees
+                    balance -= network_fee_exit  # Network fee при выходе
                     pos.meta = pos.meta or {}
                     pos.meta["pnl_sol"] = trade_pnl_sol
+                    pos.meta["fees_total_sol"] = fees_total
+                    # Обновляем общий network_fee_sol (вход + выход)
+                    if "network_fee_sol" in pos.meta:
+                        pos.meta["network_fee_sol"] += network_fee_exit
+                    else:
+                        pos.meta["network_fee_sol"] = network_fee_exit
                     
                     # Проверка runner reset: достигла ли позиция XN?
                     # Выполняем ДО установки status и добавления в closed_positions
@@ -240,11 +267,26 @@ class PortfolioEngine:
                         
                         # Пересчитываем PnL для досрочного закрытия
                         # Используем текущий exit_price и exit_time позиции
+                        network_fee_exit = self.execution_model.network_fee()
                         trade_pnl_sol = pos.size * (pos.pnl_pct or 0.0)
-                        balance += pos.size + trade_pnl_sol
+                        
+                        # Применяем fees к возвращаемому нотионалу (round-trip)
+                        notional_returned = pos.size + trade_pnl_sol
+                        notional_after_entry_fees = self.execution_model.apply_fees(notional_returned)
+                        notional_after_exit_fees = self.execution_model.apply_fees(notional_after_entry_fees)
+                        fees_total = notional_returned - notional_after_exit_fees
+                        
+                        balance += notional_after_exit_fees
+                        balance -= network_fee_exit  # Network fee при выходе
                         pos.meta = pos.meta or {}
                         pos.meta["pnl_sol"] = trade_pnl_sol
+                        pos.meta["fees_total_sol"] = fees_total
                         pos.meta["closed_by_reset"] = True
+                        # Обновляем общий network_fee_sol
+                        if "network_fee_sol" in pos.meta:
+                            pos.meta["network_fee_sol"] += network_fee_exit
+                        else:
+                            pos.meta["network_fee_sol"] = network_fee_exit
                         pos.status = "closed"
                         closed_positions.append(pos)
                         
@@ -302,29 +344,53 @@ class PortfolioEngine:
                 skipped_by_risk += 1
                 continue
 
-            # 5. Комиссии
+            # 5. Применяем ExecutionModel: slippage к ценам и fees к нотионалу
+            raw_entry_price = out.entry_price or 0.0
+            raw_exit_price = out.exit_price or 0.0
+            
+            if raw_entry_price <= 0 or raw_exit_price <= 0:
+                skipped_by_risk += 1
+                continue
+            
+            # Применяем slippage к ценам
+            effective_entry_price = self.execution_model.apply_entry(raw_entry_price, "entry")
+            effective_exit_price = self.execution_model.apply_exit(raw_exit_price, out.reason)
+            
+            # Пересчитываем PnL на основе эффективных цен (slippage уже учтен)
             raw_pnl_pct = out.pnl
-            fee_pct = self.config.fee_model.effective_fee_pct(size)
-            net_pnl_pct = raw_pnl_pct - fee_pct
-
-            # 6. Вычитаем размер позиции из баланса при открытии
-            balance -= size
-
-            # 7. Создаем Position
+            effective_pnl_pct = (effective_exit_price - effective_entry_price) / effective_entry_price
+            
+            # Network fee вычитается отдельно из баланса
+            network_fee = self.execution_model.network_fee()
+            
+            # Итоговый PnL с учетом slippage (fees будут вычтены из нотионала при закрытии)
+            net_pnl_pct = effective_pnl_pct
+            
+            # 6. Вычитаем размер позиции и network fee из баланса при открытии
+            balance -= size  # Платим полный размер позиции
+            balance -= network_fee  # Network fee при входе
+            
+            # 7. Создаем Position с эффективными ценами
             pos = Position(
                 signal_id=row["signal_id"],
                 contract_address=row["contract_address"],
                 entry_time=entry_time,
-                entry_price=out.entry_price or 0.0,
+                entry_price=effective_entry_price,  # Эффективная цена с slippage
                 size=size,
                 exit_time=exit_time,
-                exit_price=out.exit_price,
+                exit_price=effective_exit_price,  # Эффективная цена с slippage
                 pnl_pct=net_pnl_pct,
                 status="open",
                 meta={
                     "strategy": strategy_name,
                     "raw_pnl_pct": raw_pnl_pct,
-                    "fee_pct": fee_pct,
+                    "raw_entry_price": raw_entry_price,
+                    "raw_exit_price": raw_exit_price,
+                    "effective_pnl_pct": effective_pnl_pct,
+                    "slippage_entry_pct": (effective_entry_price - raw_entry_price) / raw_entry_price,
+                    "slippage_exit_pct": (raw_exit_price - effective_exit_price) / raw_exit_price,
+                    "network_fee_sol": network_fee,  # Только вход, выход добавится при закрытии
+                    "execution_profile": self.config.execution_profile,
                 },
             )
             open_positions.append(pos)
@@ -365,10 +431,29 @@ class PortfolioEngine:
                 pass
             
             # При закрытии: возвращаем размер позиции + прибыль/убыток
+            # Вычитаем fees (swap + LP) из возвращаемого нотионала
+            # Fees применяются дважды: при входе и при выходе (round-trip)
+            network_fee_exit = self.execution_model.network_fee()
             trade_pnl_sol = pos.size * (pos.pnl_pct or 0.0)
-            balance += pos.size + trade_pnl_sol  # Возвращаем размер + PnL
+            
+            # Применяем fees к возвращаемому нотионалу (round-trip: вход + выход)
+            notional_returned = pos.size + trade_pnl_sol
+            # Fees применяются дважды (вход и выход)
+            notional_after_entry_fees = self.execution_model.apply_fees(notional_returned)
+            notional_after_exit_fees = self.execution_model.apply_fees(notional_after_entry_fees)
+            fees_total = notional_returned - notional_after_exit_fees
+            
+            balance += notional_after_exit_fees  # Возвращаем размер + PnL минус fees (round-trip)
+            balance -= network_fee_exit  # Network fee при выходе
+            
             pos.meta = pos.meta or {}
             pos.meta["pnl_sol"] = trade_pnl_sol
+            pos.meta["fees_total_sol"] = fees_total
+            # Обновляем общий network_fee_sol (вход + выход)
+            if "network_fee_sol" in pos.meta:
+                pos.meta["network_fee_sol"] += network_fee_exit
+            else:
+                pos.meta["network_fee_sol"] = network_fee_exit
             
             pos.status = "closed"
             closed_positions.append(pos)

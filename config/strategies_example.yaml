@@ -1,79 +1,189 @@
-# config/strategies_example.yaml
-# SMOKE PACK: быстрый прогон, чтобы проверить скорость, кеш и корректность *_trades.csv
-
 # -----------------------------
-# RR (3–5 стратегий)
+# RR (10 стратегий)
+# Логика: TP >= 120% чаще всего, SL 15–35%
 # -----------------------------
-- name: RR_100_20
+- name: RR_120_15
   type: RR
   params:
-    tp_pct: 100
+    tp_pct: 120
+    sl_pct: 15
+    max_minutes: 42000
+    max_price_jump_pct: 30.0
+
+- name: RR_150_15
+  type: RR
+  params:
+    tp_pct: 150
+    sl_pct: 15
+    max_minutes: 42000
+    max_price_jump_pct: 30.0
+
+- name: RR_180_20
+  type: RR
+  params:
+    tp_pct: 180
     sl_pct: 20
     max_minutes: 42000
-    # Если RRStrategy поддерживает этот параметр — ок; если нет, просто игнорируется.
     max_price_jump_pct: 30.0
 
-- name: RR_200_50
+- name: RR_220_20
   type: RR
   params:
-    tp_pct: 200
-    sl_pct: 50
+    tp_pct: 220
+    sl_pct: 20
     max_minutes: 42000
     max_price_jump_pct: 30.0
 
-- name: RR_300_75
+- name: RR_250_25
+  type: RR
+  params:
+    tp_pct: 250
+    sl_pct: 25
+    max_minutes: 42000
+    max_price_jump_pct: 30.0
+
+- name: RR_300_25
   type: RR
   params:
     tp_pct: 300
-    sl_pct: 75
+    sl_pct: 25
+    max_minutes: 42000
+    max_price_jump_pct: 30.0
+
+- name: RR_350_30
+  type: RR
+  params:
+    tp_pct: 350
+    sl_pct: 30
+    max_minutes: 42000
+    max_price_jump_pct: 30.0
+
+- name: RR_400_30
+  type: RR
+  params:
+    tp_pct: 400
+    sl_pct: 30
+    max_minutes: 42000
+    max_price_jump_pct: 30.0
+
+- name: RR_450_35
+  type: RR
+  params:
+    tp_pct: 450
+    sl_pct: 35
+    max_minutes: 42000
+    max_price_jump_pct: 30.0
+
+- name: RR_500_35
+  type: RR
+  params:
+    tp_pct: 500
+    sl_pct: 35
     max_minutes: 42000
     max_price_jump_pct: 30.0
 
 
 # -----------------------------
-# RRD (3–5 стратегий)
-# entry_wait_minutes = 180 (3 часа) как ты и хочешь
-# max_price_jump_pct = 30.0 чтобы smoke не упёрся в фильтр "скачок цены"
+# RRD (10 стратегий)
+# entry_wait_minutes = 180 (3 часа)
+# Логика: вход на DD 10–40%, TP 150–500%, SL 20–35%
 # -----------------------------
-- name: RRD_DD10_TP100_SL20_W180
+- name: RRD_DD10_TP150_SL20_W180
   type: RRD
   params:
     drawdown_entry_pct: 10
-    tp_pct: 100
+    tp_pct: 150
     sl_pct: 20
     max_minutes: 42000
     entry_wait_minutes: 180
     max_price_jump_pct: 30.0
 
-- name: RRD_DD30_TP200_SL50_W180
+- name: RRD_DD15_TP180_SL20_W180
+  type: RRD
+  params:
+    drawdown_entry_pct: 15
+    tp_pct: 180
+    sl_pct: 20
+    max_minutes: 42000
+    entry_wait_minutes: 180
+    max_price_jump_pct: 30.0
+
+- name: RRD_DD20_TP220_SL25_W180
+  type: RRD
+  params:
+    drawdown_entry_pct: 20
+    tp_pct: 220
+    sl_pct: 25
+    max_minutes: 42000
+    entry_wait_minutes: 180
+    max_price_jump_pct: 30.0
+
+- name: RRD_DD25_TP250_SL25_W180
+  type: RRD
+  params:
+    drawdown_entry_pct: 25
+    tp_pct: 250
+    sl_pct: 25
+    max_minutes: 42000
+    entry_wait_minutes: 180
+    max_price_jump_pct: 30.0
+
+- name: RRD_DD30_TP300_SL25_W180
   type: RRD
   params:
     drawdown_entry_pct: 30
-    tp_pct: 200
-    sl_pct: 50
+    tp_pct: 300
+    sl_pct: 25
     max_minutes: 42000
     entry_wait_minutes: 180
     max_price_jump_pct: 30.0
 
-- name: RRD_DD50_TP300_SL75_W180
+- name: RRD_DD30_TP350_SL30_W180
+  type: RRD
+  params:
+    drawdown_entry_pct: 30
+    tp_pct: 350
+    sl_pct: 30
+    max_minutes: 42000
+    entry_wait_minutes: 180
+    max_price_jump_pct: 30.0
+
+- name: RRD_DD35_TP400_SL30_W180
+  type: RRD
+  params:
+    drawdown_entry_pct: 35
+    tp_pct: 400
+    sl_pct: 30
+    max_minutes: 42000
+    entry_wait_minutes: 180
+    max_price_jump_pct: 30.0
+
+- name: RRD_DD40_TP450_SL30_W180
+  type: RRD
+  params:
+    drawdown_entry_pct: 40
+    tp_pct: 450
+    sl_pct: 30
+    max_minutes: 42000
+    entry_wait_minutes: 180
+    max_price_jump_pct: 30.0
+
+- name: RRD_DD40_TP500_SL35_W180
+  type: RRD
+  params:
+    drawdown_entry_pct: 40
+    tp_pct: 500
+    sl_pct: 35
+    max_minutes: 42000
+    entry_wait_minutes: 180
+    max_price_jump_pct: 30.0
+
+- name: RRD_DD50_TP650_SL35_W180
   type: RRD
   params:
     drawdown_entry_pct: 50
-    tp_pct: 300
-    sl_pct: 75
+    tp_pct: 650
+    sl_pct: 35
     max_minutes: 42000
     entry_wait_minutes: 180
     max_price_jump_pct: 30.0
-
-
-# -----------------------------
-# RUNNER (2–3 стратегии)
-# RunnerStrategy сейчас buy&hold stub: параметры не читает, поэтому просто разные names
-# -----------------------------
-- name: RUNNER_SMOKE_A
-  type: RUNNER
-  params: {}
-
-- name: RUNNER_SMOKE_B
-  type: RUNNER
-  params: {}

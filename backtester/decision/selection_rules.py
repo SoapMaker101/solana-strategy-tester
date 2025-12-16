@@ -36,11 +36,12 @@ class SelectionCriteria:
 # Cursor НЕ ПОДБИРАЕТ эти значения.
 DEFAULT_CRITERIA = SelectionCriteria(
     min_survival_rate=0.6,
-    max_pnl_variance=0.10,
-    min_worst_window_pnl=-0.20,
+    max_pnl_variance=0.3,
+    min_worst_window_pnl=-0.15,
     min_median_window_pnl=0.0,
     min_windows=3,
 )
+
 
 
 

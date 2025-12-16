@@ -431,3 +431,4 @@ python -m backtester.decision.run_stage_b
 ---
 
 *Документ обновлен: 2025-12-14*
+

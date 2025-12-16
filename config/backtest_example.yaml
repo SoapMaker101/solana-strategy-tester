@@ -19,16 +19,40 @@ data:
 portfolio:
   initial_balance_sol: 10.0       # Начальный баланс в SOL
   allocation_mode: "fixed"      # "fixed" или "dynamic" (размер позиции от начального/текущего баланса)
-  percent_per_trade: 0.05          # Доля капитала на одну сделку (10%)
-  max_exposure: 0.6               # Максимальная экспозиция портфеля (50% капитала в рынке)
-  max_open_positions: 20          # Максимальное количество одновременно открытых позиций
+  percent_per_trade: 0.02          # Доля капитала на одну сделку (2%)
+  max_exposure: 0.8               # Максимальная экспозиция портфеля (80% капитала в рынке)
+  max_open_positions: 40          # Максимальное количество одновременно открытых позиций
   runner_reset_enabled: false     # Режим Runner-XN: при достижении позицией XN закрываются все позиции
   runner_reset_multiple: 5.0      # Множитель XN (например, 2.0 = x2, 3.0 = x3). Используется только если runner_reset_enabled=true
+  execution_profile: "realistic"   # Профиль исполнения: "realistic" (по умолчанию), "stress", или "custom"
   fee:
     swap_fee_pct: 0.003          # Комиссия swap (0.3%)
     lp_fee_pct: 0.001             # Комиссия LP (0.1%)
-    slippage_pct: 0.10            # Проскальзывание (10%)
     network_fee_sol: 0.0005       # Фиксированная комиссия сети в SOL
+    
+    # Execution profiles с reason-based slippage multipliers
+    # Если profiles указаны, slippage_pct игнорируется (legacy режим)
+    profiles:
+      realistic:
+        base_slippage_pct: 0.03   # Базовое проскальзывание 3%
+        slippage_multipliers:
+          entry: 1.0               # Slippage при входе: 3% * 1.0 = 3%
+          exit_tp: 0.7             # Slippage при выходе по TP: 3% * 0.7 = 2.1% (меньше, т.к. ликвидность лучше)
+          exit_sl: 1.2             # Slippage при выходе по SL: 3% * 1.2 = 3.6% (больше, т.к. паника)
+          exit_timeout: 0.3        # Slippage при timeout: 3% * 0.3 = 0.9% (меньше, т.к. плановый выход)
+          exit_manual: 0.5         # Slippage при ручном выходе: 3% * 0.5 = 1.5%
+      
+      stress:
+        base_slippage_pct: 0.10    # Базовое проскальзывание 10% (stress test для low-cap токенов)
+        slippage_multipliers:
+          entry: 1.0                # 10% * 1.0 = 10%
+          exit_tp: 0.6              # 10% * 0.6 = 6%
+          exit_sl: 1.3              # 10% * 1.3 = 13%
+          exit_timeout: 0.2         # 10% * 0.2 = 2%
+          exit_manual: 0.5         # 10% * 0.5 = 5%
+    
+    # Legacy режим (если profiles не указаны, используется slippage_pct для всех событий)
+    # slippage_pct: 0.10            # Проскальзывание 10% (legacy, одинаково для всех событий)
 
 report:
   output_dir: "output/reports"   # Папка, куда сохраняются отчёты с результатами бэктеста (.json на стратегию)
