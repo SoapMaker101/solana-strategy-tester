@@ -12,7 +12,10 @@ import numpy as np
 import statistics
 
 
-# HARDCODED windows for analysis
+# DEFAULT split counts for equal window analysis
+DEFAULT_SPLITS = [2, 3, 4, 5]
+
+# Legacy windows (deprecated, kept for backward compatibility)
 WINDOWS = {
     "6m": relativedelta(months=6),
     "3m": relativedelta(months=3),
@@ -125,7 +128,8 @@ def split_into_windows(
     min_time = df_sorted["entry_time"].min()
     max_time = df_sorted["entry_time"].max()
     
-    if pd.isna(min_time) or pd.isna(max_time):
+    # Проверяем на NaN/NaT (явно конвертируем результат pd.isna в bool)
+    if bool(pd.isna(min_time)) or bool(pd.isna(max_time)):
         return {}
     
     windows = {}
@@ -153,16 +157,18 @@ def split_into_windows(
 def split_into_equal_windows(
     trades_df: pd.DataFrame,
     split_n: int,
-) -> Dict[str, pd.DataFrame]:
+) -> List[Dict[str, Any]]:
     """
     Разделяет trades на split_n равных по времени окон.
     
     :param trades_df: DataFrame с колонкой entry_time.
     :param split_n: Количество окон для разбиения.
-    :return: Словарь {window_start_str: DataFrame}, где window_start_str - начало окна в ISO формате.
+    :return: Список словарей с информацией о каждом окне:
+             [{"window_index": int, "window_start": datetime, "window_end": datetime, "trades": DataFrame}, ...]
+             Включает ВСЕ окна, даже пустые (для корректного расчёта survival_rate).
     """
     if len(trades_df) == 0:
-        return {}
+        return []
     
     if split_n <= 0:
         raise ValueError(f"split_n must be positive, got {split_n}")
@@ -171,22 +177,28 @@ def split_into_equal_windows(
     df_sorted = trades_df.sort_values("entry_time").copy()
     
     # Находим минимальное и максимальное время
+    # min_time по entry_time, max_time по exit_time (как указано в требованиях)
     min_time = df_sorted["entry_time"].min()
-    max_time = df_sorted["entry_time"].max()
+    max_time = df_sorted["exit_time"].max()
     
-    if pd.isna(min_time) or pd.isna(max_time):
-        return {}
+    # Проверяем на NaN/NaT (явно конвертируем результат pd.isna в bool)
+    if bool(pd.isna(min_time)) or bool(pd.isna(max_time)):
+        return []
     
     # Вычисляем длительность каждого окна
     total_duration = max_time - min_time
     if total_duration.total_seconds() == 0:
         # Все сделки в один момент времени - возвращаем одно окно
-        window_key = min_time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        return {window_key: df_sorted}
+        return [{
+            "window_index": 0,
+            "window_start": min_time,
+            "window_end": max_time,
+            "trades": df_sorted,
+        }]
     
     window_duration = total_duration / split_n
     
-    windows = {}
+    windows = []
     for i in range(split_n):
         window_start = min_time + (window_duration * i)
         window_end = min_time + (window_duration * (i + 1))
@@ -203,10 +215,13 @@ def split_into_equal_windows(
                 (df_sorted["entry_time"] < window_end)
             ].copy()
         
-        # Используем ISO формат для ключа
-        window_key = window_start.strftime("%Y-%m-%dT%H:%M:%S%z")
-        if len(window_trades) > 0:
-            windows[window_key] = window_trades
+        # ВАЖНО: Включаем ВСЕ окна, даже пустые (для корректного расчёта survival_rate)
+        windows.append({
+            "window_index": i,
+            "window_start": window_start,
+            "window_end": window_end,
+            "trades": window_trades,
+        })
     
     return windows
 
@@ -215,51 +230,75 @@ def aggregate_strategy_windows(
     csv_path: Path,
     windows: Optional[Dict[str, relativedelta]] = None,
     split_counts: Optional[List[int]] = None,
-) -> Dict[str, Dict[str, Any]]:
+) -> Dict[str, List[Dict[str, Any]]]:
     """
     Агрегирует trades стратегии по временным окнам.
     
     :param csv_path: Путь к CSV файлу с trades table.
     :param windows: Словарь {window_name: relativedelta}. Если None, используется WINDOWS.
-                   Используется только если split_counts не указан.
+                   Используется только если split_counts не указан (legacy режим).
     :param split_counts: Список значений split_n для мульти-масштабного разбиения.
                         Если указан, используется вместо windows.
-    :return: Словарь {window_name: {window_start: metrics_dict}}.
+                        Если None, используется DEFAULT_SPLITS.
+    :return: Словарь {window_name: [window_info_dict, ...]}.
              Если используется split_counts, window_name будет "split_{split_n}".
+             Каждый window_info_dict содержит:
+             - window_index: int
+             - window_start: datetime
+             - window_end: datetime
+             - metrics: dict с метриками окна
     """
     # Загружаем trades
     trades_df = load_trades_csv(csv_path)
     
-    # Результат: {window_name: {window_start: metrics}}
+    # Результат: {window_name: [window_info_dict, ...]}
     result = {}
     
-    # Если указан split_counts, используем мульти-масштабное разбиение
-    if split_counts is not None:
+    # Если указан split_counts (или используется по умолчанию), используем равные окна
+    if split_counts is not None or windows is None:
+        if split_counts is None:
+            split_counts = DEFAULT_SPLITS
+        
         for split_n in split_counts:
-            window_windows = split_into_equal_windows(trades_df, split_n)
+            window_list = split_into_equal_windows(trades_df, split_n)
             
-            window_metrics = {}
-            for window_start_str, window_trades in window_windows.items():
+            window_infos = []
+            for window_info in window_list:
+                window_trades = window_info["trades"]
                 metrics = calculate_window_metrics(window_trades)
-                window_metrics[window_start_str] = metrics
+                
+                window_infos.append({
+                    "window_index": window_info["window_index"],
+                    "window_start": window_info["window_start"],
+                    "window_end": window_info["window_end"],
+                    "metrics": metrics,
+                })
             
             # Используем имя вида "split_{split_n}" для идентификации
             window_name = f"split_{split_n}"
-            result[window_name] = window_metrics
+            result[window_name] = window_infos
     else:
-        # Старое поведение: используем windows
+        # Старое поведение: используем windows (legacy режим)
         if windows is None:
             windows = WINDOWS
         
         for window_name, window_delta in windows.items():
             window_windows = split_into_windows(trades_df, window_delta)
             
-            window_metrics = {}
+            window_infos = []
             for window_start_str, window_trades in window_windows.items():
                 metrics = calculate_window_metrics(window_trades)
-                window_metrics[window_start_str] = metrics
+                window_start_dt = pd.to_datetime(window_start_str)
+                window_end_dt = window_start_dt + window_delta
+                
+                window_infos.append({
+                    "window_index": len(window_infos),  # Простой индекс для legacy режима
+                    "window_start": window_start_dt,
+                    "window_end": window_end_dt,
+                    "metrics": metrics,
+                })
             
-            result[window_name] = window_metrics
+            result[window_name] = window_infos
     
     return result
 
@@ -268,16 +307,17 @@ def aggregate_all_strategies(
     reports_dir: Path,
     windows: Optional[Dict[str, relativedelta]] = None,
     split_counts: Optional[List[int]] = None,
-) -> Dict[str, Dict[str, Dict[str, Any]]]:
+) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
     """
     Агрегирует все стратегии из reports_dir по временным окнам.
     
     :param reports_dir: Директория с *_trades.csv файлами.
     :param windows: Словарь {window_name: relativedelta}. Если None, используется WINDOWS.
-                   Используется только если split_counts не указан.
+                   Используется только если split_counts не указан (legacy режим).
     :param split_counts: Список значений split_n для мульти-масштабного разбиения.
                         Если указан, используется вместо windows.
-    :return: Словарь {strategy_name: {window_name: {window_start: metrics_dict}}}.
+                        Если None и windows=None, используется DEFAULT_SPLITS.
+    :return: Словарь {strategy_name: {window_name: [window_info_dict, ...]}}.
     """
     reports_dir = Path(reports_dir)
     if not reports_dir.exists():
@@ -303,5 +343,6 @@ def aggregate_all_strategies(
             continue
     
     return result
+
 
 

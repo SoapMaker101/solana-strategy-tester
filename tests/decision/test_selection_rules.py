@@ -78,3 +78,4 @@ def test_criteria_equality():
     assert criteria1 != criteria3
 
 
+

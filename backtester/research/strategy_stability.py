@@ -13,32 +13,35 @@ from .window_aggregator import aggregate_all_strategies, WINDOWS
 
 
 def calculate_stability_metrics(
-    strategy_windows: Dict[str, Dict[str, Any]],
+    strategy_windows: Dict[str, List[Dict[str, Any]]],
     split_n: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Вычисляет показатели устойчивости стратегии на основе агрегированных окон.
     
-    :param strategy_windows: Словарь {window_name: {window_start: metrics_dict}}.
+    :param strategy_windows: Словарь {window_name: [window_info_dict, ...]}.
+                            Каждый window_info_dict содержит window_index, window_start, window_end, metrics.
     :param split_n: Опциональное значение split_n для мульти-масштабного анализа.
                    Если указано, используется только окно с именем "split_{split_n}".
     :return: Словарь с показателями устойчивости.
     """
-    # Собираем все total_pnl из всех окон
+    # Собираем все total_pnl из всех окон (включая пустые окна)
     all_window_pnls = []
     
     # Если указан split_n, используем только соответствующее окно
     if split_n is not None:
         window_name = f"split_{split_n}"
         if window_name in strategy_windows:
-            windows = strategy_windows[window_name]
-            for window_start, metrics in windows.items():
+            window_list = strategy_windows[window_name]
+            for window_info in window_list:
+                metrics = window_info.get("metrics", {})
                 total_pnl = metrics.get("total_pnl", 0.0)
                 all_window_pnls.append(total_pnl)
     else:
-        # Старое поведение: собираем все окна
-        for window_name, windows in strategy_windows.items():
-            for window_start, metrics in windows.items():
+        # Старое поведение: собираем все окна (для legacy режима)
+        for window_name, window_list in strategy_windows.items():
+            for window_info in window_list:
+                metrics = window_info.get("metrics", {})
                 total_pnl = metrics.get("total_pnl", 0.0)
                 all_window_pnls.append(total_pnl)
     
@@ -54,6 +57,9 @@ def calculate_stability_metrics(
         }
     
     # Вычисляем производные показатели
+    # ВАЖНО: survival_rate считается по окнам, не по трейдам
+    # Окно считается выжившим, если total_pnl > 0
+    # Пустое окно (0 сделок) имеет total_pnl = 0.0, поэтому считается невыжившим
     windows_total = len(all_window_pnls)
     windows_positive = sum(1 for pnl in all_window_pnls if pnl > 0)
     survival_rate = windows_positive / windows_total if windows_total > 0 else 0.0
@@ -80,43 +86,35 @@ def calculate_stability_metrics(
 
 
 def build_stability_table(
-    aggregated_strategies: Dict[str, Dict[str, Dict[str, Any]]],
+    aggregated_strategies: Dict[str, Dict[str, List[Dict[str, Any]]]],
     split_counts: Optional[List[int]] = None,
 ) -> pd.DataFrame:
     """
     Строит единую таблицу устойчивости стратегий.
     
-    :param aggregated_strategies: Словарь {strategy_name: {window_name: {window_start: metrics_dict}}}.
+    :param aggregated_strategies: Словарь {strategy_name: {window_name: [window_info_dict, ...]}}.
     :param split_counts: Опциональный список значений split_n для мульти-масштабного анализа.
                         Если указан, генерируется одна строка на (strategy, split_n).
-    :return: DataFrame с колонками: strategy, split_n (если используется), survival_rate, pnl_variance, 
+                        Если None, используется DEFAULT_SPLITS из window_aggregator.
+    :return: DataFrame с колонками: strategy, split_count, survival_rate, pnl_variance, 
              worst_window_pnl, best_window_pnl, median_window_pnl, windows_positive, windows_total.
     """
+    from .window_aggregator import DEFAULT_SPLITS
+    
+    # Если split_counts не указан, используем DEFAULT_SPLITS
+    if split_counts is None:
+        split_counts = DEFAULT_SPLITS
+    
     stability_rows = []
     
     for strategy_name, strategy_windows in aggregated_strategies.items():
-        if split_counts is not None:
-            # Мульти-масштабный режим: одна строка на split_n
-            for split_n in split_counts:
-                stability_metrics = calculate_stability_metrics(strategy_windows, split_n=split_n)
-                
-                stability_rows.append({
-                    "strategy": strategy_name,
-                    "split_n": split_n,
-                    "survival_rate": stability_metrics["survival_rate"],
-                    "pnl_variance": stability_metrics["pnl_variance"],
-                    "worst_window_pnl": stability_metrics["worst_window_pnl"],
-                    "best_window_pnl": stability_metrics["best_window_pnl"],
-                    "median_window_pnl": stability_metrics["median_window_pnl"],
-                    "windows_positive": stability_metrics["windows_positive"],
-                    "windows_total": stability_metrics["windows_total"],
-                })
-        else:
-            # Старое поведение: одна строка на стратегию
-            stability_metrics = calculate_stability_metrics(strategy_windows)
+        # Мульти-масштабный режим: одна строка на split_n
+        for split_n in split_counts:
+            stability_metrics = calculate_stability_metrics(strategy_windows, split_n=split_n)
             
             stability_rows.append({
                 "strategy": strategy_name,
+                "split_count": split_n,  # Используем split_count вместо split_n для ясности
                 "survival_rate": stability_metrics["survival_rate"],
                 "pnl_variance": stability_metrics["pnl_variance"],
                 "worst_window_pnl": stability_metrics["worst_window_pnl"],
@@ -130,6 +128,7 @@ def build_stability_table(
         # Создаём пустой DataFrame с правильными колонками
         columns = [
             "strategy",
+            "split_count",
             "survival_rate",
             "pnl_variance",
             "worst_window_pnl",
@@ -138,12 +137,11 @@ def build_stability_table(
             "windows_positive",
             "windows_total",
         ]
-        if split_counts is not None:
-            columns.insert(1, "split_n")  # Вставляем split_n после strategy
-        return pd.DataFrame(columns=columns)
-    
+        empty_df = pd.DataFrame({col: [] for col in columns})
+        return empty_df
+
     df = pd.DataFrame(stability_rows)
-    
+
     # ВАЖНО: НЕ сортируем по pnl, НЕ делаем score, НЕ фильтруем
     # Возвращаем как есть
     
@@ -166,9 +164,80 @@ def save_stability_table(
     print(f"Saved strategy stability table to {output_path}")
 
 
+def build_detailed_windows_table(
+    aggregated_strategies: Dict[str, Dict[str, List[Dict[str, Any]]]],
+    split_counts: Optional[List[int]] = None,
+) -> pd.DataFrame:
+    """
+    Строит детальную таблицу с информацией по каждому окну.
+    
+    :param aggregated_strategies: Словарь {strategy_name: {window_name: [window_info_dict, ...]}}.
+    :param split_counts: Опциональный список значений split_n.
+                        Если None, используется DEFAULT_SPLITS из window_aggregator.
+    :return: DataFrame с колонками: strategy, split_count, window_index, window_start, window_end,
+             window_trades, window_pnl.
+    """
+    from .window_aggregator import DEFAULT_SPLITS
+    
+    if split_counts is None:
+        split_counts = DEFAULT_SPLITS
+    
+    detailed_rows = []
+    
+    for strategy_name, strategy_windows in aggregated_strategies.items():
+        for split_n in split_counts:
+            window_name = f"split_{split_n}"
+            if window_name in strategy_windows:
+                window_list = strategy_windows[window_name]
+                for window_info in window_list:
+                    metrics = window_info.get("metrics", {})
+                    
+                    detailed_rows.append({
+                        "strategy": strategy_name,
+                        "split_count": split_n,
+                        "window_index": window_info.get("window_index", 0),
+                        "window_start": window_info.get("window_start"),
+                        "window_end": window_info.get("window_end"),
+                        "window_trades": metrics.get("trades_count", 0),
+                        "window_pnl": metrics.get("total_pnl", 0.0),
+                    })
+    
+    if not detailed_rows:
+        columns = [
+            "strategy",
+            "split_count",
+            "window_index",
+            "window_start",
+            "window_end",
+            "window_trades",
+            "window_pnl",
+        ]
+        return pd.DataFrame({col: [] for col in columns})
+    
+    df = pd.DataFrame(detailed_rows)
+    return df
+
+
+def save_detailed_windows_table(
+    detailed_df: pd.DataFrame,
+    output_path: Path,
+) -> None:
+    """
+    Сохраняет детальную таблицу окон в CSV.
+    
+    :param detailed_df: DataFrame с детальной информацией по окнам.
+    :param output_path: Путь для сохранения CSV файла.
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    detailed_df.to_csv(output_path, index=False)
+    print(f"Saved detailed windows table to {output_path}")
+
+
 def generate_stability_table_from_reports(
     reports_dir: Path,
     output_path: Optional[Path] = None,
+    detailed_output_path: Optional[Path] = None,
     windows: Optional[Dict[str, Any]] = None,
     split_counts: Optional[List[int]] = None,
 ) -> pd.DataFrame:
@@ -177,13 +246,20 @@ def generate_stability_table_from_reports(
     
     :param reports_dir: Директория с *_trades.csv файлами.
     :param output_path: Опциональный путь для сохранения CSV. Если None, сохраняется в reports_dir/strategy_stability.csv.
-    :param windows: Опциональный словарь окон. Если None, используется WINDOWS.
-                   Используется только если split_counts не указан.
+    :param detailed_output_path: Опциональный путь для детального CSV с окнами. Если None, сохраняется в reports_dir/stage_a_summary.csv.
+    :param windows: Опциональный словарь окон (legacy режим). Если None и split_counts=None, используется DEFAULT_SPLITS.
     :param split_counts: Опциональный список значений split_n для мульти-масштабного анализа.
                         Если указан, используется вместо windows.
+                        Если None и windows=None, используется DEFAULT_SPLITS.
     :return: DataFrame с таблицей устойчивости.
     """
+    from .window_aggregator import DEFAULT_SPLITS
+    
     reports_dir = Path(reports_dir)
+    
+    # Если оба параметра None, используем DEFAULT_SPLITS
+    if split_counts is None and windows is None:
+        split_counts = DEFAULT_SPLITS
     
     # Агрегируем все стратегии
     aggregated_strategies = aggregate_all_strategies(
@@ -202,6 +278,15 @@ def generate_stability_table_from_reports(
     if len(stability_df) > 0:
         save_stability_table(stability_df, output_path)
     
+    # Генерируем детальную таблицу с окнами
+    if detailed_output_path is None:
+        detailed_output_path = reports_dir / "stage_a_summary.csv"
+    
+    detailed_df = build_detailed_windows_table(aggregated_strategies, split_counts=split_counts)
+    if len(detailed_df) > 0:
+        save_detailed_windows_table(detailed_df, detailed_output_path)
+    
     return stability_df
+
 
 

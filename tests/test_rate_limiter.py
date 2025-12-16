@@ -263,3 +263,4 @@ class TestGeckoTerminalPriceLoaderRateLimit:
         assert summary["mode_on_429"] == "wait"
 
 
+

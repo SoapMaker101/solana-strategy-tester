@@ -43,9 +43,8 @@ class RRStrategy(Strategy):
         # Проверка: первая свеча позже сигнала (возможна задержка/перерыв)
         if first_available.timestamp > signal_time:
             delta_sec = int((first_available.timestamp - signal_time).total_seconds())
-            key = f"{self.config.name}|first_candle_after_signal|{data.signal.id}|{data.signal.contract_address}"
+            key = f"first_candle_after_signal|{data.signal.id}|{data.signal.contract_address}|RR"
             warn_once(
-                data.global_params,
                 key,
                 f"Signal at {signal_time}, first candle at {first_available.timestamp} (delta_sec={delta_sec}s)"
             )

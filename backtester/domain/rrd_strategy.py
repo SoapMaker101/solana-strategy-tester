@@ -62,9 +62,8 @@ class RRDStrategy(Strategy):
         # Проверка: первая свеча позже сигнала (возможна задержка/перерыв)
         if first_candle.timestamp > signal_time:
             delta_sec = int((first_candle.timestamp - signal_time).total_seconds())
-            key = f"{self.config.name}|first_candle_after_signal|{data.signal.id}|{data.signal.contract_address}"
+            key = f"first_candle_after_signal|{data.signal.id}|{data.signal.contract_address}|RRD"
             warn_once(
-                data.global_params,
                 key,
                 f"Signal at {signal_time}, first candle at {first_candle.timestamp} (delta_sec={delta_sec}s)"
             )
@@ -122,7 +121,11 @@ class RRDStrategy(Strategy):
                 
                 # Пропускаем аномальные свечи с предупреждением
                 if not is_valid:
-                    print(f"[WARNING] Skipping anomalous candle at {c.timestamp}: {error_msg}")
+                    key = f"anomalous_candle|{data.signal.id}|{data.signal.contract_address}|RRD"
+                    warn_once(
+                        key,
+                        f"Skipping anomalous candle at {c.timestamp}: {error_msg}"
+                    )
                     previous_candle = c
                     continue
                 

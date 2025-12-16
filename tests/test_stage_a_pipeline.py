@@ -99,11 +99,16 @@ def test_stage_a_pipeline_full(fake_reports_dir, monkeypatch, capsys):
     stability_path = fake_reports_dir / "strategy_stability.csv"
     assert stability_path.exists(), "strategy_stability.csv should be created"
     
-    # Проверяем содержимое файла
+    # Проверяем, что создан файл stage_a_summary.csv
+    summary_path = fake_reports_dir / "stage_a_summary.csv"
+    assert summary_path.exists(), "stage_a_summary.csv should be created"
+    
+    # Проверяем содержимое файла stability
     df = pd.read_csv(stability_path)
     
     assert len(df) >= 2, "Should have at least 2 strategies"
     assert "strategy" in df.columns
+    assert "split_count" in df.columns, "Should have split_count column"
     assert "survival_rate" in df.columns
     assert "worst_window_pnl" in df.columns
     assert "pnl_variance" in df.columns
@@ -112,23 +117,39 @@ def test_stage_a_pipeline_full(fake_reports_dir, monkeypatch, capsys):
     strategies = set(df["strategy"].tolist())
     assert "fake_strategy_1" in strategies or "fake_strategy_1_trades" in strategies
     assert "fake_strategy_2" in strategies or "fake_strategy_2_trades" in strategies
+    
+    # Проверяем содержимое файла summary
+    summary_df = pd.read_csv(summary_path)
+    assert "strategy" in summary_df.columns
+    assert "split_count" in summary_df.columns
+    assert "window_index" in summary_df.columns
+    assert "window_start" in summary_df.columns
+    assert "window_end" in summary_df.columns
+    assert "window_trades" in summary_df.columns
+    assert "window_pnl" in summary_df.columns
 
 
 def test_stage_a_pipeline_aggregation(fake_reports_dir):
-    """Проверяет агрегацию стратегий"""
-    from backtester.research.window_aggregator import aggregate_all_strategies, WINDOWS
+    """Проверяет агрегацию стратегий с равными окнами"""
+    from backtester.research.window_aggregator import aggregate_all_strategies, DEFAULT_SPLITS
     
-    aggregated = aggregate_all_strategies(fake_reports_dir, WINDOWS)
+    aggregated = aggregate_all_strategies(fake_reports_dir, split_counts=DEFAULT_SPLITS)
     
     assert len(aggregated) >= 2, "Should aggregate at least 2 strategies"
     
     # Проверяем структуру
     for strategy_name, strategy_windows in aggregated.items():
         assert isinstance(strategy_windows, dict)
-        # Должны быть окна разных размеров
-        for window_name, windows in strategy_windows.items():
-            assert window_name in ["1m", "2m", "3m", "6m"]
-            assert isinstance(windows, dict)
+        # Должны быть окна для каждого split_count
+        for window_name, window_list in strategy_windows.items():
+            assert window_name.startswith("split_")
+            assert isinstance(window_list, list)
+            # Проверяем структуру каждого окна
+            for window_info in window_list:
+                assert "window_index" in window_info
+                assert "window_start" in window_info
+                assert "window_end" in window_info
+                assert "metrics" in window_info
 
 
 def test_stage_a_pipeline_stability_table_exists(fake_reports_dir):
@@ -143,6 +164,7 @@ def test_stage_a_pipeline_stability_table_exists(fake_reports_dir):
     # Проверяем обязательные колонки
     required_cols = [
         "strategy",
+        "split_count",
         "survival_rate",
         "pnl_variance",
         "worst_window_pnl",
@@ -179,5 +201,6 @@ def test_stage_a_pipeline_no_empty_strategies(fake_reports_dir):
     # Пустая стратегия может быть в таблице с нулевыми метриками
     # или может быть пропущена - оба варианта приемлемы
     assert isinstance(stability_df, pd.DataFrame)
+
 
 

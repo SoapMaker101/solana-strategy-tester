@@ -7,31 +7,61 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Tuple
 import statistics
+import threading
 
 from .models import Candle, StrategyOutput
 
+# Module-level singleton для глобальной дедупликации предупреждений
+_WARN_LOCK = threading.Lock()
+_WARN_SEEN: set[str] = set()
+_WARN_COUNTS: dict[str, int] = {}
 
-def warn_once(global_params: dict, key: str, message: str) -> bool:
+
+def warn_once(key: str, message: str) -> bool:
     """
     Печатает предупреждение только один раз для каждого уникального ключа.
     Thread-safe для использования в параллельном режиме.
     
-    Использует потокобезопасный класс WarnDedup из global_params.
+    Глобальная дедупликация на уровне модуля - один и тот же warning
+    по одному и тому же событию печатается ровно 1 раз за весь прогон.
     
-    :param global_params: Глобальные параметры (StrategyInput.global_params)
-    :param key: Уникальный ключ для дедупликации (например, "{strategy}|first_candle_after_signal|{signal_id}|{contract}")
+    :param key: Детерминированный ключ для дедупликации (например, "first_candle_after_signal|{signal_id}|{contract_address}")
     :param message: Сообщение для печати
     :return: True если сообщение было выведено впервые, False если уже было выведено ранее
     """
-    # Получаем экземпляр WarnDedup из global_params
-    warn_dedup = global_params.get("_warn_dedup")
-    if warn_dedup is None:
-        # Fallback: если WarnDedup не инициализирован, просто выводим сообщение
+    with _WARN_LOCK:
+        # Увеличиваем счетчик для этого ключа
+        _WARN_COUNTS[key] = _WARN_COUNTS.get(key, 0) + 1
+        
+        # Если key уже в _WARN_SEEN → return False
+        if key in _WARN_SEEN:
+            return False
+        
+        # Иначе добавить в _WARN_SEEN, напечатать msg, return True
+        _WARN_SEEN.add(key)
         print(f"[WARN] {message}")
         return True
+
+
+def get_warn_summary(top_n: int = 10) -> str:
+    """
+    Возвращает сводку по всем предупреждениям.
     
-    # Используем потокобезопасный метод
-    return warn_dedup.warn_once(key, message, category="WARN")
+    :param top_n: Количество топ-ключей для вывода
+    :return: Строка с сводкой
+    """
+    with _WARN_LOCK:
+        unique_count = len(_WARN_COUNTS)
+        total_count = sum(_WARN_COUNTS.values())
+        
+        if unique_count == 0:
+            return "[WARN] Dedup warnings summary: no warnings"
+        
+        # Топ ключей по количеству
+        top_items = sorted(_WARN_COUNTS.items(), key=lambda x: x[1], reverse=True)[:top_n]
+        top_str = ", ".join([f"{k}:{v}" for k, v in top_items])
+        
+        return f"[WARN] Dedup warnings summary: unique={unique_count}, total={total_count}. Top: {top_str}"
 
 
 def apply_rr_logic(

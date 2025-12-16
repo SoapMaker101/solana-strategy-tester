@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
-from .window_aggregator import aggregate_all_strategies, WINDOWS
+from .window_aggregator import aggregate_all_strategies, DEFAULT_SPLITS
 from .strategy_stability import generate_stability_table_from_reports, build_stability_table
 
 
@@ -24,16 +24,33 @@ def format_summary(stability_df) -> str:
     lines = ["\n" + "="*80]
     lines.append("Strategy Stability Summary")
     lines.append("="*80)
-    lines.append(f"{'Strategy':<30} {'Survival':<10} {'Worst':<12} {'Variance':<12}")
-    lines.append("-"*80)
     
-    for _, row in stability_df.iterrows():
-        strategy = str(row["strategy"])[:28]
-        survival = f"{row['survival_rate']:.1%}"
-        worst = f"{row['worst_window_pnl']:.4f}"
-        variance = f"{row['pnl_variance']:.6f}"
+    # Проверяем наличие колонки split_count
+    has_split_count = "split_count" in stability_df.columns
+    
+    if has_split_count:
+        lines.append(f"{'Strategy':<25} {'Split':<8} {'Survival':<10} {'Worst':<12} {'Variance':<12}")
+        lines.append("-"*80)
         
-        lines.append(f"{strategy:<30} {survival:<10} {worst:<12} {variance:<12}")
+        for _, row in stability_df.iterrows():
+            strategy = str(row["strategy"])[:23]
+            split_count = str(row["split_count"])
+            survival = f"{row['survival_rate']:.1%}"
+            worst = f"{row['worst_window_pnl']:.4f}"
+            variance = f"{row['pnl_variance']:.6f}"
+            
+            lines.append(f"{strategy:<25} {split_count:<8} {survival:<10} {worst:<12} {variance:<12}")
+    else:
+        lines.append(f"{'Strategy':<30} {'Survival':<10} {'Worst':<12} {'Variance':<12}")
+        lines.append("-"*80)
+        
+        for _, row in stability_df.iterrows():
+            strategy = str(row["strategy"])[:28]
+            survival = f"{row['survival_rate']:.1%}"
+            worst = f"{row['worst_window_pnl']:.4f}"
+            variance = f"{row['pnl_variance']:.6f}"
+            
+            lines.append(f"{strategy:<30} {survival:<10} {worst:<12} {variance:<12}")
     
     lines.append("="*80)
     lines.append("")
@@ -57,12 +74,12 @@ def main():
     )
     
     parser.add_argument(
-        "--split-counts",
+        "--splits",
         type=int,
         nargs="+",
         default=None,
-        help="List of split_n values for multi-scale window analysis (e.g., --split-counts 2 3 4 5). "
-             "If not provided, uses default windows (6m, 3m, 2m, 1m).",
+        help=f"List of split counts for equal window analysis (e.g., --splits 2 3 4 5). "
+             f"If not provided, uses default splits: {DEFAULT_SPLITS}.",
     )
     
     args = parser.parse_args()
@@ -75,18 +92,18 @@ def main():
     
     print(f"Stage A: Aggregation & Stability Analysis")
     print(f"Reports directory: {reports_dir}")
-    if args.split_counts:
-        print(f"Split counts: {args.split_counts}")
-    else:
-        print(f"Windows: {list(WINDOWS.keys())}")
+    
+    # Определяем splits для использования
+    splits = args.splits if args.splits is not None else DEFAULT_SPLITS
+    print(f"Split counts: {splits}")
     print("")
     
     # Генерируем таблицу устойчивости
     try:
         stability_df = generate_stability_table_from_reports(
             reports_dir=reports_dir,
-            windows=WINDOWS if args.split_counts is None else None,
-            split_counts=args.split_counts,
+            windows=None,  # Всегда используем равные окна
+            split_counts=splits,
         )
         
         # Печатаем summary
@@ -95,6 +112,7 @@ def main():
         
         print(f"OK: Stage A completed successfully!")
         print(f"Stability table saved to: {reports_dir / 'strategy_stability.csv'}")
+        print(f"Detailed windows table saved to: {reports_dir / 'stage_a_summary.csv'}")
         
     except Exception as e:
         print(f"ERROR: Error during Stage A: {e}")
@@ -103,5 +121,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

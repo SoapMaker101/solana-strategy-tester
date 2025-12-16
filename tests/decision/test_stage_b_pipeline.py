@@ -180,3 +180,4 @@ def test_stage_b_pipeline_empty_stability(tmp_path):
     assert "failed_reasons" in selection_df.columns
 
 
+

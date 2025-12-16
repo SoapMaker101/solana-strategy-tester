@@ -28,7 +28,7 @@ class BacktestRunner:
         strategies: Sequence[Strategy],     # Список стратегий для тестирования
         global_config: Dict[str, Any] | None = None,  # Глобальная конфигурация из YAML
         parallel: bool = False,             # Включить параллельную обработку сигналов
-        max_workers: int = 4,               # Максимальное количество потоков для параллельной обработки
+        max_workers: int = 1,               # Максимальное количество потоков для параллельной обработки
     ) -> None:
         self.signal_loader = signal_loader
         self.price_loader = price_loader
@@ -184,7 +184,8 @@ class BacktestRunner:
                 self.results.extend(signal_results)
 
         # Выводим summary по rate limit, если используется GeckoTerminalPriceLoader
-        if hasattr(self.price_loader, 'get_rate_limit_summary'):
+        from ..infrastructure.price_loader import GeckoTerminalPriceLoader
+        if isinstance(self.price_loader, GeckoTerminalPriceLoader):
             summary = self.price_loader.get_rate_limit_summary()
             if summary.get("total_requests", 0) > 0:
                 print("\n" + "="*60)
@@ -198,6 +199,11 @@ class BacktestRunner:
                 if summary.get('rate_limit_failures', 0) > 0:
                     print(f"rate_limit_failures: {summary.get('rate_limit_failures', 0)}")
                 print("="*60)
+        
+        # Выводим summary по дедупликации предупреждений
+        from ..domain.rr_utils import get_warn_summary
+        warn_summary = get_warn_summary(top_n=10)
+        print(f"\n{warn_summary}")
         
         return self.results
 

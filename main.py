@@ -173,12 +173,6 @@ def main():
     # Запуск стратегий
     results = runner.run()
     print(f"Backtest finished. Results count: {len(results)}")
-    
-    # Выводим summary по dedup warnings
-    warn_dedup = runner.warn_dedup
-    if warn_dedup:
-        summary = warn_dedup.summary(top_n=10)
-        print(summary)
 
     # Группируем результаты по стратегиям и генерируем отчеты
     results_by_strategy = defaultdict(list)
