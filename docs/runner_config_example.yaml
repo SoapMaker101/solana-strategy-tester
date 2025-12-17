@@ -1,0 +1,49 @@
+# Пример конфигурации для Runner стратегии с лестницей тейк-профитов
+# 
+# Runner стратегия использует несколько уровней тейк-профита (ladder),
+# где на каждом уровне закрывается определенная доля позиции.
+#
+# Baseline параметры (рекомендованные стартовые):
+#   - levels: [(2, 0.4), (5, 0.4), (10, 0.2)] - 40% на 2x, 40% на 5x, 20% на 10x
+#   - time_stop: 14 дней (20160 минут) или 21 день (30240 минут)
+#   - use_high_for_targets: true - ориентироваться на HIGH как триггер
+#   - exit остатка по close последней свечи окна (зафиксировано в реализации)
+#
+# Параметры:
+#   take_profit_levels: список уровней TP
+#     - xn: множитель от цены входа (например, 2.0 = 2x)
+#     - fraction: доля позиции, закрываемая на этом уровне (0..1)
+#   time_stop_minutes: максимальное время удержания позиции в минутах (None = без ограничения)
+#   use_high_for_targets: ориентироваться на HIGH как триггер для TP (по умолчанию true)
+#   exit_on_first_tp: если true — закрывать всю позицию на первом TP (для сравнения)
+#   allow_partial_fills: для симуляции частичных фиксаций (по умолчанию true)
+#
+# Portfolio-level reset (в config/backtest_example.yaml):
+#   portfolio:
+#     runner_reset_enabled: true      # Включить portfolio-level reset
+#     runner_reset_multiple: 2.0      # Порог: equity >= cycle_start_equity * 2.0
+
+runner:
+  take_profit_levels:
+    - { xn: 2.0, fraction: 0.4 }   # 40% позиции закрывается на 2x
+    - { xn: 5.0, fraction: 0.4 }   # 40% позиции закрывается на 5x
+    - { xn: 10.0, fraction: 0.2 } # 20% позиции закрывается на 10x
+  time_stop_minutes: 20160  # 14 дней (20160 минут = 14 * 24 * 60)
+  use_high_for_targets: true
+  exit_on_first_tp: false
+  allow_partial_fills: true
+
+# Пример использования в strategies_example.yaml:
+# - name: Runner_Ladder_2x_5x_10x
+#   type: RUNNER
+#   params:
+#     take_profit_levels:
+#       - { xn: 2.0, fraction: 0.4 }
+#       - { xn: 5.0, fraction: 0.4 }
+#       - { xn: 10.0, fraction: 0.2 }
+#     time_stop_minutes: 20160
+#     use_high_for_targets: true
+#     exit_on_first_tp: false
+#     allow_partial_fills: true
+
+

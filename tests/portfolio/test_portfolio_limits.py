@@ -324,6 +324,99 @@ def test_limits_work_together():
         "Должна быть отклонена 1 сделка"
 
 
+def test_fixed_allocation_allows_many_small_positions():
+    """
+    Тест: проверяет, что в fixed mode портфель может открыть много мелких позиций.
+    
+    Сценарий:
+    - initial_balance = 10 SOL
+    - percent_per_trade = 0.002 (0.2% от начального баланса)
+    - max_open_positions = 100
+    - max_exposure = 0.9 (90%)
+    - Математически портфель должен открыть до 100 сделок
+    
+    Расчет:
+    - Размер каждой позиции = 10 * 0.002 = 0.02 SOL
+    - 100 позиций = 100 * 0.02 = 2.0 SOL
+    - Экспозиция = 2.0 / 10.0 = 20% < 90% (OK)
+    - Ожидаем: портфель может открыть ≥50 сделок (без реальных цен, только проверка лимитов)
+    
+    Проверяем:
+    - trades_executed >= 50 (если есть достаточно сигналов)
+    - Размер каждой позиции = 0.02 SOL
+    """
+    initial_balance = 10.0
+    percent_per_trade = 0.002  # 0.2% от начального баланса
+    max_open_positions = 100
+    max_exposure = 0.9  # 90%
+    
+    config = PortfolioConfig(
+        initial_balance_sol=initial_balance,
+        allocation_mode="fixed",  # КЛЮЧЕВОЕ: размер от начального баланса
+        percent_per_trade=percent_per_trade,
+        max_exposure=max_exposure,
+        max_open_positions=max_open_positions,
+        fee_model=FeeModel()
+    )
+    
+    engine = PortfolioEngine(config)
+    
+    # Создаем 100 сделок с пересекающимися временными окнами
+    # Все они должны открыться одновременно (entry_time совпадает или близко)
+    base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    
+    trades = []
+    for i in range(100):
+        entry_time = base_time + timedelta(minutes=i * 1)  # Небольшой разброс по времени
+        exit_time = entry_time + timedelta(hours=2)  # Все позиции открыты одновременно
+        
+        strategy_output = StrategyOutput(
+            entry_time=entry_time,
+            entry_price=1.0,
+            exit_time=exit_time,
+            exit_price=1.05,
+            pnl=0.05,
+            reason="tp"
+        )
+        
+        trades.append({
+            "signal_id": f"small_signal_{i+1}",
+            "contract_address": f"TOKEN{i+1}",
+            "strategy": "test_strategy",
+            "timestamp": entry_time,
+            "result": strategy_output
+        })
+    
+    result = engine.simulate(trades, strategy_name="test_strategy")
+    
+    # ===== ПРОВЕРКИ =====
+    
+    # Ожидаем, что портфель может открыть много позиций
+    # При percent_per_trade=0.002 и max_open_positions=100 должно открыться >=50 сделок
+    assert result.stats.trades_executed >= 50, (
+        f"Должно быть открыто >=50 сделок при percent_per_trade={percent_per_trade}, "
+        f"max_open_positions={max_open_positions}, получено: {result.stats.trades_executed}"
+    )
+    
+    # Проверка: размер каждой позиции должен быть равен initial_balance * percent_per_trade
+    expected_size = initial_balance * percent_per_trade  # 10.0 * 0.002 = 0.02 SOL
+    for pos in result.positions:
+        assert abs(pos.size - expected_size) < 0.0001, (
+            f"В fixed mode размер позиции должен быть {expected_size} SOL "
+            f"(от начального баланса), получено: {pos.size}"
+        )
+    
+    # Проверка: общая экспозиция не должна превышать max_exposure
+    total_exposure = sum(p.size for p in result.positions) / initial_balance
+    assert total_exposure <= max_exposure + 0.01, (
+        f"Общая экспозиция {total_exposure:.2%} не должна превышать {max_exposure:.2%}"
+    )
+    
+    print(f"\n[test_fixed_allocation_allows_many_small_positions] "
+          f"Открыто сделок: {result.stats.trades_executed}, "
+          f"отклонено: {result.stats.trades_skipped_by_risk}, "
+          f"размер позиции: {expected_size} SOL, "
+          f"общая экспозиция: {total_exposure:.2%}")
 
 
 

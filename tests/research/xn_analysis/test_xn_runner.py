@@ -106,3 +106,5 @@ def test_resolve_candles_path_priority_order():
         assert resolved == primary_file
         # Verify it's the primary format, not the old format
         assert resolved.read_text() == "primary\n"
+
+

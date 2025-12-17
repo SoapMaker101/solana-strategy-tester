@@ -5,11 +5,14 @@ from __future__ import annotations
 
 from typing import Dict, List, Any, Optional
 from pathlib import Path
+from datetime import datetime
 import pandas as pd
 import statistics
 import numpy as np
+import json
+import ast
 
-from .window_aggregator import aggregate_all_strategies, WINDOWS
+from .window_aggregator import aggregate_all_strategies, WINDOWS, load_trades_csv
 
 
 def calculate_stability_metrics(
@@ -85,19 +88,164 @@ def calculate_stability_metrics(
     }
 
 
+def calculate_runner_metrics(
+    trades_df: pd.DataFrame,
+    portfolio_summary_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """
+    Вычисляет Runner-специфичные метрики из trades DataFrame.
+    
+    :param trades_df: DataFrame с колонками entry_time, exit_time, pnl_pct, meta (JSON строка).
+    :param portfolio_summary_path: Опциональный путь к portfolio_summary.csv для max_drawdown_pct.
+    :return: Словарь с Runner метриками.
+    """
+    if len(trades_df) == 0:
+        return {
+            "hit_rate_x2": 0.0,
+            "hit_rate_x5": 0.0,
+            "p90_hold_days": 0.0,
+            "tail_contribution": 0.0,
+            "max_drawdown_pct": 0.0,
+        }
+    
+    # Парсим meta для получения levels_hit
+    total_trades = len(trades_df)
+    hit_x2_count = 0
+    hit_x5_count = 0
+    hold_days_list = []
+    pnl_list = []
+    
+    for _, row in trades_df.iterrows():
+        # Парсим meta (может быть JSON строка или dict)
+        meta_str = row.get("meta", "{}")
+        if isinstance(meta_str, str):
+            try:
+                meta = json.loads(meta_str)
+            except (json.JSONDecodeError, ValueError):
+                try:
+                    meta = ast.literal_eval(meta_str)
+                except (ValueError, SyntaxError):
+                    meta = {}
+        else:
+            meta = meta_str if isinstance(meta_str, dict) else {}
+        
+        # Проверяем levels_hit
+        levels_hit = meta.get("levels_hit", {})
+        if isinstance(levels_hit, str):
+            try:
+                levels_hit = json.loads(levels_hit)
+            except (json.JSONDecodeError, ValueError):
+                try:
+                    levels_hit = ast.literal_eval(levels_hit)
+                except (ValueError, SyntaxError):
+                    levels_hit = {}
+        
+        # Проверяем, достигнут ли уровень x2
+        if levels_hit:
+            # levels_hit может быть dict с ключами как строки "2.0" или числа
+            hit_levels = []
+            for k, v in levels_hit.items():
+                try:
+                    level = float(k)
+                    hit_levels.append(level)
+                except (ValueError, TypeError):
+                    continue
+            
+            if any(level >= 2.0 for level in hit_levels):
+                hit_x2_count += 1
+            if any(level >= 5.0 for level in hit_levels):
+                hit_x5_count += 1
+        
+        # Вычисляем время удержания в днях
+        entry_time = row.get("entry_time")
+        exit_time = row.get("exit_time")
+        if entry_time and exit_time:
+            if isinstance(entry_time, str):
+                entry_time = pd.to_datetime(entry_time, utc=True)
+            if isinstance(exit_time, str):
+                exit_time = pd.to_datetime(exit_time, utc=True)
+            
+            if isinstance(entry_time, datetime) and isinstance(exit_time, datetime):
+                hold_days = (exit_time - entry_time).total_seconds() / (24 * 3600)
+                hold_days_list.append(hold_days)
+        
+        # Собираем PnL для tail contribution
+        pnl = row.get("pnl_pct", 0.0)
+        if isinstance(pnl, (int, float)):
+            pnl_list.append(pnl)
+    
+    # Вычисляем hit rates
+    hit_rate_x2 = hit_x2_count / total_trades if total_trades > 0 else 0.0
+    hit_rate_x5 = hit_x5_count / total_trades if total_trades > 0 else 0.0
+    
+    # Вычисляем p90_hold_days
+    if hold_days_list:
+        p90_hold_days = np.percentile(hold_days_list, 90)
+    else:
+        p90_hold_days = 0.0
+    
+    # Вычисляем tail_contribution (доля PnL от top 5% сделок)
+    tail_contribution = 0.0
+    if pnl_list:
+        total_pnl = sum(pnl_list)
+        if total_pnl > 0:
+            # Сортируем по убыванию PnL
+            sorted_pnls = sorted(pnl_list, reverse=True)
+            top_5_percent_count = max(1, int(len(sorted_pnls) * 0.05))
+            top_5_percent_pnl = sum(sorted_pnls[:top_5_percent_count])
+            tail_contribution = top_5_percent_pnl / total_pnl if total_pnl > 0 else 0.0
+    
+    # Загружаем max_drawdown_pct из portfolio_summary (если доступен)
+    # Примечание: portfolio_summary обычно содержит одну строку на стратегию
+    # или агрегированные данные, поэтому берем первое значение
+    max_drawdown_pct = 0.0
+    if portfolio_summary_path and portfolio_summary_path.exists():
+        try:
+            portfolio_df = pd.read_csv(portfolio_summary_path)
+            if len(portfolio_df) > 0 and "max_drawdown_pct" in portfolio_df.columns:
+                # Берем первое значение (обычно portfolio_summary содержит одну строку)
+                max_drawdown_pct = float(portfolio_df.iloc[0]["max_drawdown_pct"])
+        except Exception:
+            pass  # Игнорируем ошибки при загрузке portfolio_summary
+    
+    return {
+        "hit_rate_x2": hit_rate_x2,
+        "hit_rate_x5": hit_rate_x5,
+        "p90_hold_days": p90_hold_days,
+        "tail_contribution": tail_contribution,
+        "max_drawdown_pct": max_drawdown_pct,
+    }
+
+
+def is_runner_strategy(strategy_name: str) -> bool:
+    """
+    Определяет, является ли стратегия Runner стратегией.
+    
+    :param strategy_name: Имя стратегии.
+    :return: True если стратегия Runner, False иначе.
+    """
+    strategy_lower = strategy_name.lower()
+    return "runner" in strategy_lower or strategy_name.startswith("Runner")
+
+
 def build_stability_table(
     aggregated_strategies: Dict[str, Dict[str, List[Dict[str, Any]]]],
     split_counts: Optional[List[int]] = None,
+    reports_dir: Optional[Path] = None,
 ) -> pd.DataFrame:
     """
     Строит единую таблицу устойчивости стратегий.
+    
+    Для Runner стратегий добавляет Runner-специфичные метрики.
     
     :param aggregated_strategies: Словарь {strategy_name: {window_name: [window_info_dict, ...]}}.
     :param split_counts: Опциональный список значений split_n для мульти-масштабного анализа.
                         Если указан, генерируется одна строка на (strategy, split_n).
                         Если None, используется DEFAULT_SPLITS из window_aggregator.
+    :param reports_dir: Опциональная директория с *_trades.csv файлами для Runner метрик.
     :return: DataFrame с колонками: strategy, split_count, survival_rate, pnl_variance, 
-             worst_window_pnl, best_window_pnl, median_window_pnl, windows_positive, windows_total.
+             worst_window_pnl, best_window_pnl, median_window_pnl, windows_positive, windows_total,
+             и для Runner: hit_rate_x2, hit_rate_x5, p90_hold_days, tail_contribution, max_drawdown_pct.
     """
     from .window_aggregator import DEFAULT_SPLITS
     
@@ -112,7 +260,7 @@ def build_stability_table(
         for split_n in split_counts:
             stability_metrics = calculate_stability_metrics(strategy_windows, split_n=split_n)
             
-            stability_rows.append({
+            row = {
                 "strategy": strategy_name,
                 "split_count": split_n,  # Используем split_count вместо split_n для ясности
                 "survival_rate": stability_metrics["survival_rate"],
@@ -122,7 +270,32 @@ def build_stability_table(
                 "median_window_pnl": stability_metrics["median_window_pnl"],
                 "windows_positive": stability_metrics["windows_positive"],
                 "windows_total": stability_metrics["windows_total"],
-            })
+            }
+            
+            # Для Runner стратегий добавляем Runner-метрики
+            if is_runner_strategy(strategy_name) and reports_dir:
+                trades_file = reports_dir / f"{strategy_name}_trades.csv"
+                portfolio_summary_file = reports_dir / "portfolio_summary.csv"
+                
+                if trades_file.exists():
+                    try:
+                        trades_df = load_trades_csv(trades_file)
+                        runner_metrics = calculate_runner_metrics(
+                            trades_df,
+                            portfolio_summary_path=portfolio_summary_file if portfolio_summary_file.exists() else None
+                        )
+                        row.update(runner_metrics)
+                    except Exception as e:
+                        # Если не удалось вычислить Runner метрики, используем значения по умолчанию
+                        row.update({
+                            "hit_rate_x2": 0.0,
+                            "hit_rate_x5": 0.0,
+                            "p90_hold_days": 0.0,
+                            "tail_contribution": 0.0,
+                            "max_drawdown_pct": 0.0,
+                        })
+            
+            stability_rows.append(row)
     
     if not stability_rows:
         # Создаём пустой DataFrame с правильными колонками
@@ -268,8 +441,12 @@ def generate_stability_table_from_reports(
         split_counts=split_counts
     )
     
-    # Строим таблицу устойчивости
-    stability_df = build_stability_table(aggregated_strategies, split_counts=split_counts)
+    # Строим таблицу устойчивости (передаем reports_dir для Runner метрик)
+    stability_df = build_stability_table(
+        aggregated_strategies, 
+        split_counts=split_counts,
+        reports_dir=reports_dir
+    )
     
     # Сохраняем если указан путь
     if output_path is None:
@@ -287,6 +464,8 @@ def generate_stability_table_from_reports(
         save_detailed_windows_table(detailed_df, detailed_output_path)
     
     return stability_df
+
+
 
 
 

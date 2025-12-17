@@ -6,24 +6,24 @@ backtest:
   # end_at: "2024-07-01T00:00:00Z"    # Конец окна бэктеста (опционально, закомментировано = без ограничений)
 
 data:
-  loader: "gecko"                 # Источник данных: "csv" (локальный файл) или "gecko" (онлайн через API GeckoTerminal)
+  loader: "csv"                 # Источник данных: "csv" (локальный файл) или "gecko" (онлайн через API GeckoTerminal)
   candles_dir: "data/candles/cached"  # Папка для хранения/поиска свечных данных (используется при csv и gecko кешировании)
   timeframe: "1m"                # Таймфрейм свечей: поддерживаются "1m" (минутные) и "15m" (агрегированные по 15 минут)
   before_minutes: 60             # Кол-во минут ДО сигнала, которые нужно загрузить (например, для входа по просадке)
   after_minutes: 43200           # Кол-во минут ПОСЛЕ сигнала (43200 минут = 30 дней) — максимальная длина позиции
   rate_limit:
-    enabled: true                # Включить rate limiting для API запросов
+    enabled: false                # Включить rate limiting для API запросов
     max_calls_per_minute: 30     # Максимальное количество запросов в минуту (лимит free API GeckoTerminal)
     on_429: "wait"               # Режим обработки 429: "wait" (ждать и повторять) или "fail" (выбросить исключение и остановить бэктест)
 
 portfolio:
   initial_balance_sol: 10.0       # Начальный баланс в SOL
   allocation_mode: "fixed"      # "fixed" или "dynamic" (размер позиции от начального/текущего баланса)
-  percent_per_trade: 0.02          # Доля капитала на одну сделку (2%)
-  max_exposure: 0.8               # Максимальная экспозиция портфеля (80% капитала в рынке)
-  max_open_positions: 40          # Максимальное количество одновременно открытых позиций
+  percent_per_trade: 0.01         # Доля капитала на одну сделку (1%)
+  max_exposure: 0.95               # Максимальная экспозиция портфеля (80% капитала в рынке)
+  max_open_positions: 100          # Максимальное количество одновременно открытых позиций
   runner_reset_enabled: false     # Режим Runner-XN: при достижении позицией XN закрываются все позиции
-  runner_reset_multiple: 5.0      # Множитель XN (например, 2.0 = x2, 3.0 = x3). Используется только если runner_reset_enabled=true
+  runner_reset_multiple: 1.2      # Множитель XN (например, 2.0 = x2, 3.0 = x3). Используется только если runner_reset_enabled=true
   execution_profile: "realistic"   # Профиль исполнения: "realistic" (по умолчанию), "stress", или "custom"
   fee:
     swap_fee_pct: 0.003          # Комиссия swap (0.3%)

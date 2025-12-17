@@ -25,8 +25,8 @@ def test_criteria_immutable():
 def test_default_criteria_values():
     """Проверяет значения DEFAULT_CRITERIA"""
     assert DEFAULT_CRITERIA.min_survival_rate == 0.6
-    assert DEFAULT_CRITERIA.max_pnl_variance == 0.10
-    assert DEFAULT_CRITERIA.min_worst_window_pnl == -0.20
+    assert DEFAULT_CRITERIA.max_pnl_variance == 0.3  # Обновлено: было 0.10, стало 0.3
+    assert DEFAULT_CRITERIA.min_worst_window_pnl == -0.15  # Обновлено: было -0.20, стало -0.15
     assert DEFAULT_CRITERIA.min_median_window_pnl == 0.0
     assert DEFAULT_CRITERIA.min_windows == 3
 
@@ -76,6 +76,8 @@ def test_criteria_equality():
     
     assert criteria1 == criteria2
     assert criteria1 != criteria3
+
+
 
 
 

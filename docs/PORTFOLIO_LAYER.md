@@ -255,6 +255,8 @@ portfolio:
   - Максимальное количество открытых позиций (max_open_positions)
 - Backtest window (ограничение по датам)
 - Equity curve (кривая баланса)
+- **Portfolio-level reset для Runner:** Закрытие всех позиций при достижении порога equity
+- **Runner частичные выходы:** Обработка частичного закрытия позиций на разных уровнях TP
 
 ## Архитектура
 
@@ -289,7 +291,8 @@ portfolio:
   percent_per_trade: 0.1          # Доля капитала на одну сделку (10%)
   max_exposure: 0.5               # Максимальная экспозиция (50%)
   max_open_positions: 10          # Максимальное количество открытых позиций
-  runner_reset_enabled: false     # Режим Runner-XN
+  runner_reset_enabled: false     # Portfolio-level reset для Runner (закрытие всех позиций при достижении порога equity)
+  runner_reset_multiple: 2.0     # Множитель XN для порога reset (например, 2.0 = x2)
   execution_profile: "realistic"   # Профиль исполнения: "realistic", "stress", или "custom"
   fee:
     swap_fee_pct: 0.003           # Комиссия swap (0.3%)
@@ -499,7 +502,14 @@ portfolio:
 
 ## Будущие улучшения
 
-- [ ] Режим Runner-XN (закрытие всего портфеля при достижении XN любой позицией)
+- [x] **Portfolio-level reset для Runner** (реализовано)
+  - Закрытие всех позиций при достижении порога: `equity >= cycle_start_equity * runner_reset_multiple`
+  - Обновление `cycle_start_equity` после reset
+  - Отслеживание метрик: `reset_count`, `last_reset_time`, `equity_peak_in_cycle`
+- [x] **Runner частичные выходы** (реализовано)
+  - Обработка частичного закрытия позиций на разных уровнях TP
+  - Применение slippage и fees к каждому частичному выходу
+  - Уменьшение `open_notional` и увеличение `balance`
 - [ ] Более сложные модели комиссий
 - [ ] Учет частичного закрытия позиций
 - [ ] Портфельная оптимизация

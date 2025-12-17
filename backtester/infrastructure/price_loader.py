@@ -37,6 +37,11 @@ class RateLimitExceededError(RuntimeError):
     pass
 
 
+class CorruptCandlesFileError(ValueError):
+    """Исключение, выбрасываемое при обнаружении поврежденного или пустого CSV файла со свечами."""
+    pass
+
+
 class RateLimiter:
     """
     Thread-safe rate limiter с использованием sliding window алгоритма.
@@ -267,15 +272,54 @@ class PriceLoader(ABC):
 
 # Загрузчик свечей из локального CSV-файла
 class CsvPriceLoader(PriceLoader):
-    def __init__(self, candles_dir: str, timeframe: str = "1m", strict_validation: bool = False):
+    def __init__(self, candles_dir: str, timeframe: str = "1m", strict_validation: bool = False, base_dir: str = "data/candles"):
         # Инициализация пути к папке с файлами и заданного таймфрейма (1m или 15m)
         self.candles_dir = Path(candles_dir)
         self.timeframe = timeframe
         self.strict_validation = strict_validation
+        self.base_dir = Path(base_dir)
+
+    def resolve_candles_path(self, contract: str, timeframe: str, base_dir: Optional[str] = None) -> Optional[Path]:
+        """
+        Разрешает путь к CSV файлу со свечами, проверяя различные форматы в порядке приоритета.
+        
+        Проверяет пути в следующем порядке:
+        a) {base_dir}/cached/{timeframe}/{contract}.csv     # основной формат проекта
+        b) {base_dir}/{contract}_{timeframe}.csv            # текущий legacy формат
+        c) {base_dir}/{contract}.csv
+        d) {base_dir}/cached/{contract}_{timeframe}.csv
+        e) {base_dir}/{timeframe}/{contract}.csv
+        
+        :param contract: Адрес контракта
+        :param timeframe: Таймфрейм (например, "1m", "15m")
+        :param base_dir: Базовая директория (по умолчанию используется self.base_dir)
+        :return: Path к найденному файлу или None, если файл не найден
+        """
+        if base_dir is None:
+            base_dir_path = self.base_dir
+        else:
+            base_dir_path = Path(base_dir)
+        
+        # Порядок проверки путей по приоритету
+        candidate_paths = [
+            base_dir_path / "cached" / timeframe / f"{contract}.csv",      # a) основной формат
+            base_dir_path / f"{contract}_{timeframe}.csv",                 # b) legacy формат
+            base_dir_path / f"{contract}.csv",                              # c) без таймфрейма
+            base_dir_path / "cached" / f"{contract}_{timeframe}.csv",      # d) cached + legacy
+            base_dir_path / timeframe / f"{contract}.csv",                 # e) timeframe как папка
+        ]
+        
+        # Возвращаем первый существующий путь
+        for path in candidate_paths:
+            if path.exists():
+                return path
+        
+        return None
 
     def _build_path(self, contract_address: str) -> Path:
         """
         Строит путь до CSV-файла по контракту и таймфрейму.
+        Устаревший метод, используется resolve_candles_path вместо него.
         """
         filename = f"{contract_address}_{self.timeframe}.csv"
         return self.candles_dir / filename
@@ -283,14 +327,61 @@ class CsvPriceLoader(PriceLoader):
     def load_prices(self, contract_address: str, start_time=None, end_time=None) -> List[Candle]:
         """
         Загружает свечи из локального CSV-файла, фильтрует по диапазону времени.
+        
+        При обнаружении пустого или поврежденного файла логирует ошибку и возвращает пустой список.
         """
-        path = self._build_path(contract_address)
-        if not path.exists():
-            raise FileNotFoundError(f"CSV file not found: {path}")
-
-        df = pd.read_csv(path)
-        df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-        df = df.sort_values("timestamp")
+        # Используем resolve_candles_path для поиска файла
+        path = self.resolve_candles_path(contract_address, self.timeframe)
+        if path is None:
+            # Файл не найден - возвращаем пустой список (не поднимаем исключение)
+            return []
+        
+        # Получаем размер файла для логирования
+        try:
+            file_size_bytes = path.stat().st_size
+        except OSError:
+            file_size_bytes = 0
+        
+        # Проверяем, что файл не пустой
+        if file_size_bytes == 0:
+            print(f"[ERROR] Empty CSV file: contract={contract_address}, timeframe={self.timeframe}, path={path}, file_size_bytes=0")
+            return []
+        
+        # Пытаемся прочитать CSV с обработкой различных ошибок
+        try:
+            df = pd.read_csv(path)
+        except pd.errors.EmptyDataError as e:
+            print(f"[ERROR] EmptyDataError parsing CSV: contract={contract_address}, timeframe={self.timeframe}, path={path}, file_size_bytes={file_size_bytes}, error={e}")
+            return []
+        except pd.errors.ParserError as e:
+            print(f"[ERROR] ParserError parsing CSV: contract={contract_address}, timeframe={self.timeframe}, path={path}, file_size_bytes={file_size_bytes}, error={e}")
+            return []
+        except UnicodeDecodeError as e:
+            print(f"[ERROR] UnicodeDecodeError parsing CSV: contract={contract_address}, timeframe={self.timeframe}, path={path}, file_size_bytes={file_size_bytes}, error={e}")
+            return []
+        except Exception as e:
+            # Ловим любые другие ошибки при чтении CSV
+            print(f"[ERROR] Unexpected error reading CSV: contract={contract_address}, timeframe={self.timeframe}, path={path}, file_size_bytes={file_size_bytes}, error={type(e).__name__}: {e}")
+            return []
+        
+        # Проверяем, что DataFrame не пустой
+        if df.empty:
+            print(f"[ERROR] CSV file contains no rows: contract={contract_address}, timeframe={self.timeframe}, path={path}, file_size_bytes={file_size_bytes}")
+            return []
+        
+        # Проверяем наличие обязательных колонок
+        required_columns = ["timestamp", "open", "high", "low", "close", "volume"]
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            print(f"[ERROR] CSV file missing required columns: contract={contract_address}, timeframe={self.timeframe}, path={path}, file_size_bytes={file_size_bytes}, missing={missing_columns}")
+            return []
+        
+        try:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+            df = df.sort_values("timestamp")
+        except Exception as e:
+            print(f"[ERROR] Error parsing timestamps: contract={contract_address}, timeframe={self.timeframe}, path={path}, file_size_bytes={file_size_bytes}, error={e}")
+            return []
 
         # Фильтрация по времени (если указано)
         if start_time is not None:
@@ -301,16 +392,22 @@ class CsvPriceLoader(PriceLoader):
         # Преобразуем строки в объекты Candle с валидацией
         candles = []
         for row in df.itertuples(index=False):  # type: ignore[attr-defined]
-            candle = Candle(
-                timestamp=row.timestamp.to_pydatetime(),  # type: ignore[attr-defined]
-                open=row.open,  # type: ignore[attr-defined]
-                high=row.high,  # type: ignore[attr-defined]
-                low=row.low,  # type: ignore[attr-defined]
-                close=row.close,  # type: ignore[attr-defined]
-                volume=row.volume,  # type: ignore[attr-defined]
-            )
-            if validate_candle(candle, strict_validation=self.strict_validation):
-                candles.append(candle)
+            try:
+                candle = Candle(
+                    timestamp=row.timestamp.to_pydatetime(),  # type: ignore[attr-defined]
+                    open=row.open,  # type: ignore[attr-defined]
+                    high=row.high,  # type: ignore[attr-defined]
+                    low=row.low,  # type: ignore[attr-defined]
+                    close=row.close,  # type: ignore[attr-defined]
+                    volume=row.volume,  # type: ignore[attr-defined]
+                )
+                if validate_candle(candle, strict_validation=self.strict_validation):
+                    candles.append(candle)
+            except Exception as e:
+                # Пропускаем битые строки, но логируем только первую
+                if len(candles) == 0:
+                    print(f"[WARNING] Error parsing candle row: contract={contract_address}, timeframe={self.timeframe}, path={path}, error={e}")
+                continue
         
         return candles
 
@@ -326,7 +423,7 @@ class GeckoTerminalPriceLoader(PriceLoader):
         max_retries: int = 3,
         retry_backoff_factor: float = 2.0,
         rate_limit_config: Optional[dict] = None,
-        prefer_cache_if_exists: bool = True
+        prefer_cache_if_exists: bool = False
     ):
         # Папка для кеша, целевой таймфрейм, допустимая свежесть кеша
         self.cache_dir = Path(cache_dir)

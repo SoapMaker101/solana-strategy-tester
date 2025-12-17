@@ -44,7 +44,9 @@ backtester/
 │   ├── strategy_base.py    # StrategyConfig + abstract Strategy interface
 │   ├── rr_strategy.py      # RR strategy (TP/SL on first candle after signal)
 │   ├── rrd_strategy.py     # RRD strategy (entry on drawdown, then TP/SL)
-│   ├── runner_strategy.py  # Runner strategy (buy & hold from first to last candle)
+│   ├── runner_strategy.py  # Runner strategy (ladder strategy with partial exits)
+│   ├── runner_ladder.py   # Core logic for Runner Ladder simulation
+│   ├── runner_config.py    # Runner configuration models
 │   ├── rr_utils.py         # Common RR logic (TP/SL, volatility, etc.)
 │   └── trade_features.py   # Trade features: market cap proxy, volume/volatility windows
 │
@@ -185,8 +187,11 @@ Entry on drawdown (waits for price to drop by X% from first candle after signal)
 Then applies TP/SL logic.
 
 RunnerStrategy (domain/runner_strategy.py)
-
-Simple buy & hold: enters on first candle, exits on last candle in window.
+  - Runner Ladder strategy with multiple TP levels
+  - Partial exits at different profit levels (e.g., 40% at 2x, 40% at 5x, 20% at 10x)
+  - Time stop for automatic remainder closure
+  - Portfolio-level reset support
+  - Stage B criteria: hit_rate_x2, hit_rate_x5, tail_contribution, max_drawdown
 
 Runner
 
@@ -361,9 +366,11 @@ python tools/generate_reports.py \
 
 ✅ **Phase 2 Complete:** Clean architecture, stable pipeline  
 ✅ **Phase 3 Complete:** Full RR/RRD implementation, commission & slippage  
-✅ **Phase 4 Complete:** Portfolio layer with risk management, runner reset  
+✅ **Phase 4 Complete:** Portfolio layer with risk management, portfolio-level reset
+✅ **Phase 5 Complete:** Stage B criteria for Runner strategies, Runner metrics in Stage A  
 ✅ **Trade Features:** Market cap proxy, volume/volatility windows  
 ✅ **Export:** Unified trades table for analysis  
+✅ **Signal Quality:** Analysis and filtering module for signal quality improvement  
 
 Next steps (roadmap)
 

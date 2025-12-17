@@ -26,6 +26,7 @@ from backtester.domain.strategy_base import StrategyConfig, Strategy
 from backtester.domain.rr_strategy import RRStrategy
 from backtester.domain.rrd_strategy import RRDStrategy
 from backtester.domain.runner_strategy import RunnerStrategy
+from backtester.domain.runner_config import RunnerConfig, create_runner_config_from_dict
 
 
 def parse_args():
@@ -137,11 +138,23 @@ def load_strategies(config_path: str) -> List[Strategy]:
     Загружает стратегии из YAML-файла и инициализирует каждый класс стратегии.
     """
     data = load_yaml(config_path)
-    return [build_strategy(StrategyConfig(
-        name=s["name"],
-        type=s["type"],
-        params=s.get("params", {})
-    )) for s in data]
+    strategies = []
+    for s in data:
+        strategy_type = s.get("type", "").upper()
+        name = s["name"]
+        params = s.get("params", {})
+        
+        # Для RUNNER создаем RunnerConfig, для остальных - обычный StrategyConfig
+        if strategy_type == "RUNNER":
+            config = create_runner_config_from_dict(name, params)
+        else:
+            config = StrategyConfig(
+                name=name,
+                type=s["type"],
+                params=params
+            )
+        strategies.append(build_strategy(config))
+    return strategies
 
 
 class ConditionalReporter:
@@ -306,7 +319,7 @@ def generate_portfolio_summary(
     summary_rows = []
     
     for strategy_name, p_result in portfolio_results.items():
-        summary_rows.append({
+        row = {
             "strategy": strategy_name,
             "final_balance_sol": p_result.stats.final_balance_sol,
             "total_return_pct": p_result.stats.total_return_pct,
@@ -314,7 +327,18 @@ def generate_portfolio_summary(
             "trades_executed": p_result.stats.trades_executed,
             "trades_skipped_by_risk": p_result.stats.trades_skipped_by_risk,
             "trades_skipped_by_reset": p_result.stats.trades_skipped_by_reset,
-        })
+        }
+        
+        # Добавляем поля для portfolio-level reset
+        row["reset_count"] = p_result.stats.reset_count
+        row["last_reset_time"] = (
+            p_result.stats.last_reset_time.isoformat() 
+            if p_result.stats.last_reset_time else None
+        )
+        row["cycle_start_equity"] = p_result.stats.cycle_start_equity
+        row["equity_peak_in_cycle"] = p_result.stats.equity_peak_in_cycle
+        
+        summary_rows.append(row)
     
     df = pd.DataFrame(summary_rows)
     summary_path = output_dir / "portfolio_summary.csv"
@@ -392,9 +416,12 @@ def main():
             rate_limit_config=rate_limit_config
         )
     else:
+        # Для CsvPriceLoader: base_dir можно указать в конфиге или использовать candles_dir как fallback
+        csv_base_dir = data_cfg.get("price_loader", {}).get("csv_base_dir") or candles_dir
         price_loader = CsvPriceLoader(
             candles_dir=candles_dir,
-            timeframe=timeframe
+            timeframe=timeframe,
+            base_dir=csv_base_dir
         )
 
     # Загружаем стратегии

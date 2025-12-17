@@ -102,13 +102,59 @@ backtester/
 
 ### `runner_strategy.py` — Runner стратегия
 
-**Ответственность:** Простая стратегия buy & hold (вход на первой свече, выход на последней).
+**Ответственность:** Runner стратегия с лестницей тейк-профитов (ladder strategy).
 
 **Основные компоненты:**
-- `RunnerStrategy` — класс стратегии
-- Минимальная логика, используется для sanity-check
+- `RunnerStrategy` — класс стратегии, реализует интерфейс `Strategy`
+- Интеграция с `RunnerLadderEngine` для симуляции частичных выходов
+- Конвертация `RunnerTradeResult` → `StrategyOutput`
 
-**Зависимости:** `strategy_base.py`, `trade_features.py`
+**Ключевые особенности:**
+- Несколько уровней TP (например, 2x, 5x, 10x)
+- Частичное закрытие позиции на каждом уровне
+- Time stop для автоматического закрытия остатка
+- Использование HIGH цены как триггера для TP
+
+**Зависимости:** `strategy_base.py`, `runner_ladder.py`, `runner_config.py`, `trade_features.py`
+
+---
+
+### `runner_ladder.py` — Core логика Runner Ladder
+
+**Ответственность:** Независимая симуляция Runner Ladder стратегии (без портфеля).
+
+**Основные компоненты:**
+- `RunnerLadderEngine` — статический класс с методом `simulate()`
+- `RunnerTradeResult` — результат симуляции одной сделки
+
+**Ключевые особенности:**
+- Сортирует уровни TP по `xn` возрастанию
+- Итерирует свечи, проверяет достижение уровней
+- Закрывает части позиции на каждом уровне
+- Обрабатывает time_stop для остатка
+- Не зависит от PortfolioEngine (чистая логика)
+
+**Зависимости:** `runner_config.py`, `models.py`
+
+---
+
+### `runner_config.py` — Конфигурация Runner
+
+**Ответственность:** Определение конфигурационных моделей для Runner стратегии.
+
+**Основные компоненты:**
+- `RunnerTakeProfitLevel` — dataclass для уровня TP (xn, fraction)
+- `RunnerConfig` — полная конфигурация Runner (наследуется от `StrategyConfig`)
+- `create_runner_config_from_dict()` — парсинг из YAML
+
+**Baseline параметры:**
+- `take_profit_levels`: `[(2.0, 0.4), (5.0, 0.4), (10.0, 0.2)]`
+- `time_stop_minutes`: `20160` (14 дней) или `30240` (21 день)
+- `use_high_for_targets`: `True`
+- `exit_on_first_tp`: `False`
+- `allow_partial_fills`: `True`
+
+**Зависимости:** `strategy_base.py`
 
 ---
 
@@ -178,9 +224,16 @@ backtester/
 - Учет всех комиссий (swap, LP, сеть)
 - Моделирование проскальзывания
 - Портфельные ограничения (max_exposure, max_open_positions)
-- Режим Runner-XN Reset (закрытие всех позиций при достижении XN)
+- **Portfolio-level reset:** Закрытие всех позиций при достижении порога equity
+  - Проверка: `equity >= cycle_start_equity * runner_reset_multiple`
+  - Обновление `cycle_start_equity` после reset
+  - Отслеживание `reset_count`, `last_reset_time`, `equity_peak_in_cycle`
+- **Runner частичные выходы:** Обработка частичного закрытия позиций на разных уровнях TP
+  - Метод `_process_runner_partial_exits()` обрабатывает каждый уровень
+  - Применяет slippage и fees к каждому частичному выходу
+  - Уменьшает `open_notional` и увеличивает `balance`
 
-**Зависимости:** `models.py`, `position.py`
+**Зависимости:** `models.py`, `position.py`, `execution_model.py`
 
 ---
 
@@ -373,6 +426,111 @@ backtester/
 
 ---
 
+### `signal_quality/` — Анализ и фильтрация сигналов
+
+**Ответственность:** Анализ качества сигналов и их фильтрация по market cap proxy для улучшения входных данных бэктестинга.
+
+**Основные модули:**
+
+#### `feature_extractor.py` — Извлечение признаков
+
+**Ответственность:** Вычисление признаков сигналов для анализа качества.
+
+**Основные функции:**
+- `load_signals()` — загрузка сигналов из CSV
+- `load_candles()` — загрузка свечей для контракта
+- `get_entry_price()` — получение цены входа (режимы `t` или `t+1m`)
+- `extract_signal_features()` — извлечение всех признаков для DataFrame сигналов
+
+**Вычисляемые признаки:**
+- `entry_price` — цена входа (на момент сигнала или t+1m)
+- `market_cap_proxy` — прокси market cap (`entry_price × 1_000_000_000`)
+- `max_xn` — максимальный множитель цены в окне анализа
+- `time_to_xn` — время до достижения уровней (2x, 3x, 5x, 7x, 10x)
+- `lived_minutes` — количество минут со свечами после entry
+- `status` — статус обработки (`ok`, `no_candles`, `no_entry`, `error`)
+
+**Зависимости:** `infrastructure.signal_loader`, `infrastructure.price_loader`, `domain.models`
+
+---
+
+#### `cap_thresholds.py` — Анализ порогов
+
+**Ответственность:** Анализ различных порогов `min_market_cap_proxy` для выбора оптимального фильтра.
+
+**Основные функции:**
+- `analyze_cap_thresholds()` — анализ порогов и вычисление метрик
+- `save_cap_threshold_report()` — сохранение отчёта в CSV
+
+**Метрики анализа:**
+- `kept_signals` — количество оставшихся сигналов
+- `kept_pct` — процент оставшихся сигналов
+- `kept_runners` — количество runner'ов, которые остались
+- `runner_recall_pct` — процент runner'ов, которые остались
+- `non_runner_removed_pct` — процент non-runner'ов, которые были отрезаны
+- `runner_share_before`, `runner_share_after` — доля runner'ов до и после фильтрации
+
+**Зависимости:** `pandas`
+
+---
+
+#### `filter_signals.py` — Фильтрация сигналов
+
+**Ответственность:** Фильтрация сигналов по порогам market cap proxy.
+
+**Основные функции:**
+- `filter_signals()` — фильтрация сигналов по `min_market_cap_proxy` и `status`
+- `save_filtered_signals()` — сохранение отфильтрованных сигналов в CSV
+- `generate_filter_summary()` — генерация summary фильтрации
+- `save_filter_summary()` — сохранение summary в JSON
+
+**Логика фильтрации:**
+- `market_cap_proxy >= min_market_cap_proxy`
+- Опционально: `status == "ok"`
+
+**Зависимости:** `infrastructure.signal_loader`, `pandas`
+
+---
+
+#### `run_signal_filter_pipeline.py` — CLI пайплайн
+
+**Ответственность:** Точка входа для запуска полного пайплайна фильтрации сигналов.
+
+**Основные функции:**
+- `main()` — главная функция CLI
+- `parse_args()` — разбор аргументов командной строки
+
+**Пайплайн:**
+1. Загрузка сигналов
+2. Извлечение признаков (`feature_extractor.py`)
+3. Анализ порогов (`cap_thresholds.py`)
+4. Фильтрация сигналов (`filter_signals.py`)
+5. Сохранение результатов и summary
+
+**Параметры командной строки:**
+- `--signals` — путь к CSV файлу с сигналами (обязательно)
+- `--candles-dir` — базовая директория со свечами
+- `--timeframe` — таймфрейм свечей (`1m`, `5m`, `15m`)
+- `--entry-mode` — режим поиска entry_price (`t` или `t+1m`)
+- `--horizon-days` — горизонт анализа в днях
+- `--use-high` — использовать high цену для max_xn
+- `--runner-xn-threshold` — порог для определения runner'а
+- `--thresholds` — список порогов для анализа
+- `--min-market-cap-proxy` — минимальный порог для фильтрации (обязательно)
+- `--output-dir` — директория для сохранения результатов
+
+**Выходные файлы:**
+- `signal_features.csv` — признаки всех сигналов
+- `cap_threshold_report.csv` — отчёт по порогам
+- `signals_filtered.csv` — отфильтрованные сигналы
+- `signal_filter_summary.json` — summary фильтрации
+
+**Зависимости:** `feature_extractor.py`, `cap_thresholds.py`, `filter_signals.py`
+
+**Документация:** `docs/SignalFiltering.md`
+
+---
+
 ## ✅ Decision Layer (Слой принятия решений)
 
 **Назначение:** Автоматический отбор стратегий на основе критериев.
@@ -476,6 +634,7 @@ backtester/
 ┌─────────────────────────────────────────────────────────────┐
 │                    Research Layer                            │
 │  window_aggregator │ strategy_stability │ run_stage_a        │
+│  signal_quality (feature_extractor, filter_signals, etc.)    │
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -615,4 +774,6 @@ strategy_selection.csv (with passed/failed)
 ---
 
 *Документ обновлен: 2025-12-14*
+
+
 

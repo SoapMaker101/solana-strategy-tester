@@ -11,12 +11,15 @@ from .strategy_selector import (
     load_stability_csv,
     select_strategies,
 )
-from .selection_rules import DEFAULT_CRITERIA
+from .selection_rules import DEFAULT_CRITERIA, DEFAULT_RUNNER_CRITERIA
+from .strategy_selector import is_runner_strategy
 
 
 def format_selection_summary(selection_df) -> str:
     """
     Форматирует краткий summary для вывода в консоль.
+    
+    Для Runner стратегий показывает Runner-метрики, для RR/RRD - стандартные.
     
     :param selection_df: DataFrame с результатами отбора.
     :return: Форматированная строка.
@@ -24,22 +27,32 @@ def format_selection_summary(selection_df) -> str:
     if len(selection_df) == 0:
         return "No strategies found in stability table."
     
-    lines = ["\n" + "="*80]
+    lines = ["\n" + "="*100]
     lines.append("Strategy Selection Results")
-    lines.append("="*80)
+    lines.append("="*100)
+    
+    # Заголовок для RR/RRD
     lines.append(f"{'Strategy':<30} {'Passed':<8} {'Survival':<10} {'Worst':<12} {'Variance':<12}")
-    lines.append("-"*80)
+    lines.append("-"*100)
     
     for _, row in selection_df.iterrows():
         strategy = str(row["strategy"])[:28]
         passed = "YES" if row["passed"] else "NO"
-        survival = f"{row['survival_rate']:.2f}"
-        worst = f"{row['worst_window_pnl']:.4f}"
-        variance = f"{row['pnl_variance']:.6f}"
         
-        lines.append(f"{strategy:<30} {passed:<8} {survival:<10} {worst:<12} {variance:<12}")
+        if is_runner_strategy(strategy):
+            # Для Runner стратегий показываем Runner-метрики
+            hit_x2 = f"{row.get('hit_rate_x2', 0.0):.2f}" if 'hit_rate_x2' in row else "N/A"
+            hit_x5 = f"{row.get('hit_rate_x5', 0.0):.2f}" if 'hit_rate_x5' in row else "N/A"
+            tail = f"{row.get('tail_contribution', 0.0):.2f}" if 'tail_contribution' in row else "N/A"
+            lines.append(f"{strategy:<30} {passed:<8} HitX2:{hit_x2:<6} HitX5:{hit_x5:<6} Tail:{tail:<6}")
+        else:
+            # Для RR/RRD стратегий показываем стандартные метрики
+            survival = f"{row.get('survival_rate', 0.0):.2f}" if 'survival_rate' in row else "N/A"
+            worst = f"{row.get('worst_window_pnl', 0.0):.4f}" if 'worst_window_pnl' in row else "N/A"
+            variance = f"{row.get('pnl_variance', 0.0):.6f}" if 'pnl_variance' in row else "N/A"
+            lines.append(f"{strategy:<30} {passed:<8} {survival:<10} {worst:<12} {variance:<12}")
     
-    lines.append("="*80)
+    lines.append("="*100)
     
     # Статистика
     total = len(selection_df)
@@ -85,11 +98,15 @@ def main():
     
     print(f"Stage B: Strategy Selection (Decision Layer)")
     print(f"Stability CSV: {stability_csv_path}")
-    print(f"Criteria: min_survival_rate={DEFAULT_CRITERIA.min_survival_rate}, "
+    print(f"RR/RRD Criteria: min_survival_rate={DEFAULT_CRITERIA.min_survival_rate}, "
           f"max_pnl_variance={DEFAULT_CRITERIA.max_pnl_variance}, "
           f"min_worst_window_pnl={DEFAULT_CRITERIA.min_worst_window_pnl}, "
           f"min_median_window_pnl={DEFAULT_CRITERIA.min_median_window_pnl}, "
           f"min_windows={DEFAULT_CRITERIA.min_windows}")
+    print(f"Runner Criteria: min_hit_rate_x2={DEFAULT_RUNNER_CRITERIA.min_hit_rate_x2}, "
+          f"min_hit_rate_x5={DEFAULT_RUNNER_CRITERIA.min_hit_rate_x5}, "
+          f"min_tail_contribution={DEFAULT_RUNNER_CRITERIA.min_tail_contribution}, "
+          f"max_drawdown_pct={DEFAULT_RUNNER_CRITERIA.max_drawdown_pct}")
     print("")
     
     # Генерируем таблицу отбора
@@ -99,6 +116,7 @@ def main():
             stability_csv_path=stability_csv_path,
             output_path=output_path,
             criteria=DEFAULT_CRITERIA,
+            runner_criteria=DEFAULT_RUNNER_CRITERIA,
         )
         
         # Печатаем summary
@@ -126,6 +144,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 

@@ -1,5 +1,294 @@
 # Changelog
 
+## [Feature: Signal Quality Analysis & Filtering] - 2025-01-XX
+
+### Модуль анализа и фильтрации сигналов
+
+#### 🎯 Цель изменений
+
+Реализован модуль `signal_quality` для анализа качества сигналов и их фильтрации по market cap proxy. Это позволяет улучшить качество входных сигналов для бэктестинга, не изменяя стратегии.
+
+#### ✨ Основные изменения
+
+##### 1. **Новый модуль `signal_quality`**
+
+**Файлы:**
+- `backtester/research/signal_quality/feature_extractor.py` — извлечение признаков сигналов
+- `backtester/research/signal_quality/filter_signals.py` — фильтрация сигналов по порогам
+- `backtester/research/signal_quality/cap_thresholds.py` — анализ порогов market cap
+- `backtester/research/signal_quality/run_signal_filter_pipeline.py` — CLI runner для пайплайна
+
+**Функциональность:**
+
+1. **Извлечение признаков (`feature_extractor.py`):**
+   - `entry_price` — цена входа (режимы `t` или `t+1m`)
+   - `market_cap_proxy` — прокси market cap (`entry_price × 1_000_000_000`)
+   - `max_xn` — максимальный множитель цены в окне анализа
+   - `time_to_xn` — время до достижения уровней (2x, 3x, 5x, 7x, 10x)
+   - `lived_minutes` — количество минут со свечами после entry
+   - `status` — статус обработки (`ok`, `no_candles`, `no_entry`, `error`)
+
+2. **Анализ порогов (`cap_thresholds.py`):**
+   - Анализ различных порогов `min_market_cap_proxy`
+   - Метрики: `kept_signals`, `kept_pct`, `kept_runners`, `runner_recall_pct`, `non_runner_removed_pct`
+   - Генерация отчёта для выбора оптимального порога
+
+3. **Фильтрация сигналов (`filter_signals.py`):**
+   - Фильтрация по `market_cap_proxy >= min_market_cap_proxy`
+   - Опциональная фильтрация по `status == "ok"`
+   - Генерация summary с метриками фильтрации
+
+4. **CLI пайплайн (`run_signal_filter_pipeline.py`):**
+   - Полный пайплайн: загрузка → извлечение признаков → анализ порогов → фильтрация
+   - Сохранение результатов в `output/signal_analysis/`
+
+**Преимущества:**
+- ✅ Улучшение качества сигналов без изменения стратегий
+- ✅ Детерминированная метрика (market cap proxy) без look-ahead bias
+- ✅ Анализ порогов для выбора оптимального фильтра
+- ✅ Полная интеграция в workflow бэктестинга
+
+##### 2. **Тесты для signal_quality**
+
+**Файлы:**
+- `tests/research/signal_quality/test_feature_extractor.py` — тесты извлечения признаков
+- `tests/research/signal_quality/test_filter_signals.py` — тесты фильтрации
+- `tests/research/signal_quality/test_cap_thresholds.py` — тесты анализа порогов
+
+**Покрытие:**
+- Вычисление `market_cap_proxy`
+- Получение `entry_price` (режимы `t` и `t+1m`)
+- Вычисление `max_xn` и `time_to_xn`
+- Анализ порогов
+- Фильтрация сигналов
+
+##### 3. **Документация**
+
+**Файл:** `docs/SignalFiltering.md`
+
+**Содержание:**
+- Обзор модуля фильтрации сигналов
+- Описание market cap proxy
+- Инструкции по запуску пайплайна
+- Рекомендации по выбору порога
+- Примеры использования
+
+##### 4. **Исправление типа в `filter_signals.py`**
+
+**Проблема:** Type checker выдавал ошибку на строке 67: `Type "DataFrame | Series | Unknown | Any" is not assignable to return type "DataFrame"`
+
+**Решение:** Добавлен `cast(pd.DataFrame, ...)` для явного указания типа результата
+
+**Файл:** `backtester/research/signal_quality/filter_signals.py` (строки 65-70)
+
+**Код:**
+```python
+# Убираем служебные колонки
+# Selecting multiple columns always returns a DataFrame, but type checker needs help
+result = cast(
+    pd.DataFrame,
+    filtered[["id", "contract_address", "timestamp", "source", "narrative"]].copy()
+)
+```
+
+#### 📊 Результаты
+
+**До изменений:**
+- Все сигналы использовались для бэктестинга без фильтрации
+- Невозможно было анализировать качество сигналов
+
+**После изменений:**
+- ✅ Можно анализировать качество сигналов по market cap proxy
+- ✅ Можно фильтровать сигналы по порогам
+- ✅ Можно выбирать оптимальный порог на основе метрик
+- ✅ Улучшение качества входных данных для бэктестинга
+
+#### 🔄 Обратная совместимость
+
+**Важно:** Все изменения полностью обратно совместимы:
+- Модуль `signal_quality` — новый, не влияет на существующий код
+- Фильтрация опциональна — можно продолжать использовать исходные сигналы
+- Существующие конфиги и скрипты работают без изменений
+
+#### 📁 Измененные файлы
+
+**Новые файлы:**
+- `backtester/research/signal_quality/__init__.py`
+- `backtester/research/signal_quality/feature_extractor.py`
+- `backtester/research/signal_quality/filter_signals.py`
+- `backtester/research/signal_quality/cap_thresholds.py`
+- `backtester/research/signal_quality/run_signal_filter_pipeline.py`
+- `tests/research/signal_quality/__init__.py`
+- `tests/research/signal_quality/test_feature_extractor.py`
+- `tests/research/signal_quality/test_filter_signals.py`
+- `tests/research/signal_quality/test_cap_thresholds.py`
+- `docs/SignalFiltering.md`
+
+**Обновленные файлы:**
+- `backtester/research/signal_quality/filter_signals.py` — исправление типа (добавлен `cast`)
+
+#### ✅ Критерии приемки
+
+Все требования выполнены:
+- ✅ Модуль `signal_quality` реализован и протестирован
+- ✅ CLI пайплайн работает корректно
+- ✅ Документация обновлена
+- ✅ Все тесты проходят
+- ✅ Обратная совместимость сохранена
+
+#### 🚀 Использование
+
+**Запуск пайплайна фильтрации:**
+```bash
+python -m backtester.research.signal_quality.run_signal_filter_pipeline \
+  --signals signals/my_signals.csv \
+  --min-market-cap-proxy 40000 \
+  --output-dir output/signal_analysis
+```
+
+**Использование отфильтрованных сигналов:**
+```bash
+python main.py \
+  --signals output/signal_analysis/signals_filtered.csv \
+  --strategies-config config/runner_baseline.yaml
+```
+
+---
+
+## [Feature: Portfolio-Level Reset & Stage B Criteria for Runner] - 2025-01-XX
+
+### Portfolio-Level Reset для Runner стратегий
+
+#### 🎯 Цель изменений
+
+Реализован portfolio-level reset для Runner стратегий: при достижении портфелем порога equity (`equity >= cycle_start_equity * runner_reset_multiple`) закрываются все открытые позиции и начинается новый цикл. Это заменяет старую логику reset на уровне отдельных позиций.
+
+#### ✨ Основные изменения
+
+##### 1. **Portfolio-Level Reset в PortfolioEngine**
+
+**Файл:** `backtester/domain/portfolio.py`
+
+**Что добавлено:**
+- Проверка порога equity перед обработкой каждой сделки
+- Закрытие всех открытых позиций при достижении порога
+- Обновление `cycle_start_equity` после reset
+- Отслеживание метрик: `reset_count`, `last_reset_time`, `equity_peak_in_cycle`
+
+**Логика:**
+```python
+if equity >= cycle_start_equity * runner_reset_multiple:
+    # Закрыть все открытые позиции
+    # Обновить cycle_start_equity = new equity
+    # Сбросить equity_peak_in_cycle
+```
+
+**Метрики в PortfolioStats:**
+- `reset_count: int` — количество срабатываний reset
+- `last_reset_time: Optional[datetime]` — время последнего reset
+- `cycle_start_equity: float` — equity в начале текущего цикла
+- `equity_peak_in_cycle: float` — пик equity в текущем цикле
+
+##### 2. **Обновлен portfolio_summary.csv**
+
+**Файл:** `main.py`
+
+**Добавленные поля:**
+- `reset_count`
+- `last_reset_time` (ISO формат)
+- `cycle_start_equity`
+- `equity_peak_in_cycle`
+
+##### 3. **Тесты для Portfolio-Level Reset**
+
+**Файл:** `tests/portfolio/test_portfolio_runner_reset_portfolio_level.py` (новый файл, 5 тестов)
+
+**Тесты:**
+- `test_portfolio_reset_closes_all_positions_on_threshold` — закрытие всех позиций при достижении порога
+- `test_portfolio_reset_updates_cycle_start_equity` — обновление cycle_start_equity
+- `test_portfolio_reset_disabled_does_not_trigger` — reset не срабатывает если disabled
+- `test_portfolio_reset_equity_peak_tracking` — отслеживание пика equity
+- `test_portfolio_reset_triggered_when_threshold_reached` — проверка срабатывания reset
+
+---
+
+### Stage B Критерии для Runner стратегий
+
+#### 🎯 Цель изменений
+
+Добавлены отдельные критерии отбора для Runner стратегий в Stage B. Runner стратегии теперь отбираются по специфичным метрикам (hit_rate_x2, hit_rate_x5, tail_contribution, max_drawdown), а не по стандартным критериям RR/RRD (survival_rate, variance).
+
+#### ✨ Основные изменения
+
+##### 1. **Расширен SelectionCriteria**
+
+**Файл:** `backtester/decision/selection_rules.py`
+
+**Добавленные поля для Runner:**
+- `min_hit_rate_x2: Optional[float]` — минимальный hit_rate для уровня x2
+- `min_hit_rate_x5: Optional[float]` — минимальный hit_rate для уровня x5
+- `min_p90_hold_days: Optional[float]` — минимальный 90-й перцентиль времени удержания
+- `max_p90_hold_days: Optional[float]` — максимальный 90-й перцентиль времени удержания
+- `min_tail_contribution: Optional[float]` — минимальная доля PnL от top 5% сделок
+- `max_drawdown_pct: Optional[float]` — максимальная просадка по equity curve
+
+**Создан DEFAULT_RUNNER_CRITERIA:**
+```python
+DEFAULT_RUNNER_CRITERIA = SelectionCriteria(
+    min_hit_rate_x2=0.30,      # 30% сделок должны достичь x2
+    min_hit_rate_x5=0.10,      # 10% сделок должны достичь x5
+    min_tail_contribution=0.3, # Минимум 30% PnL от top 5% сделок
+    max_drawdown_pct=-0.5,     # Максимальная просадка не более 50%
+    # ...
+)
+```
+
+##### 2. **Вычисление Runner метрик в Stage A**
+
+**Файл:** `backtester/research/strategy_stability.py`
+
+**Добавлена функция `calculate_runner_metrics()`:**
+- Парсит `levels_hit` из meta сделок для расчета `hit_rate_x2`, `hit_rate_x5`
+- Вычисляет `p90_hold_days` из `entry_time` и `exit_time`
+- Вычисляет `tail_contribution` (доля PnL от top 5% сделок)
+- Загружает `max_drawdown_pct` из `portfolio_summary.csv`
+
+**Интеграция:**
+- Автоматически вызывается для Runner стратегий в `build_stability_table()`
+- Метрики добавляются в `strategy_stability.csv`
+
+##### 3. **Условная проверка критериев в Stage B**
+
+**Файл:** `backtester/decision/strategy_selector.py`
+
+**Обновлена `check_strategy_criteria()`:**
+- Определяет тип стратегии через `is_runner_strategy()`
+- Для Runner применяет `DEFAULT_RUNNER_CRITERIA`
+- Для RR/RRD применяет `DEFAULT_CRITERIA`
+
+**Обновлен `run_stage_b.py`:**
+- Выводит оба набора критериев (RR/RRD и Runner)
+- Обновлен формат вывода для Runner метрик
+
+##### 4. **Baseline параметры Runner**
+
+**Файл:** `config/strategies_example.yaml`
+
+**Зафиксированы baseline параметры:**
+```yaml
+take_profit_levels:
+  - { xn: 2.0, fraction: 0.4 }   # 40% на 2x
+  - { xn: 5.0, fraction: 0.4 }   # 40% на 5x
+  - { xn: 10.0, fraction: 0.2 }  # 20% на 10x
+time_stop_minutes: 20160  # 14 дней
+use_high_for_targets: true
+exit_on_first_tp: false
+```
+
+**Примечание:** Остаток закрывается по `close` последней свечи окна (зафиксировано в реализации).
+
+---
+
 ## [Feature: Execution Profiles & Reason-based Slippage] - 2025-12-XX
 
 ### Execution Profiles с reason-based slippage multipliers

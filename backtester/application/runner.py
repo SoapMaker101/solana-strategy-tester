@@ -3,6 +3,7 @@ from __future__ import annotations  # Позволяет использоват�
 from datetime import timedelta, datetime
 from typing import Any, Dict, List, Sequence, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Импорты компонентов системы
 from ..infrastructure.signal_loader import SignalLoader  # Интерфейс загрузки торговых сигналов
@@ -52,6 +53,12 @@ class BacktestRunner:
         self.warn_dedup = WarnDedup()
         self.global_config["_warn_dedup"] = self.warn_dedup
         
+        # Счетчики для статистики обработки сигналов (потокобезопасные)
+        self._counters_lock = threading.Lock()
+        self.signals_processed = 0
+        self.signals_skipped_no_candles = 0
+        self.signals_skipped_corrupt_csv = 0
+        
         # Портфельные результаты (по стратегиям)
         self.portfolio_results: Dict[str, PortfolioResult] = {}
 
@@ -81,20 +88,34 @@ class BacktestRunner:
         end_time = ts + timedelta(minutes=self.after_minutes)
 
         # Загружаем свечи из ценового лоадера
-        candles: List[Candle] = self.price_loader.load_prices(
-            contract_address=contract,
-            start_time=start_time,
-            end_time=end_time,
-        )
+        try:
+            candles: List[Candle] = self.price_loader.load_prices(
+                contract_address=contract,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        except Exception as e:
+            # Если load_prices поднял исключение (не должно происходить после наших изменений, но на всякий случай)
+            print(f"[ERROR] Error loading candles for signal {sig.id}: {e}")
+            with self._counters_lock:
+                self.signals_skipped_corrupt_csv += 1
+            print(f"[signal] skipped: no candles/failed to parse (signal_id={sig.id}, contract={contract})")
+            return []
 
+        # Обрабатываем случай пустых свечей
+        if not candles:
+            with self._counters_lock:
+                self.signals_skipped_no_candles += 1
+            print(f"[signal] skipped: no candles/failed to parse (signal_id={sig.id}, contract={contract})")
+            return []
+        
         # Логируем диагностику по свечам
-        if candles:
-            print(f"[time] Candle range requested: {start_time} to {end_time}")
-            print(f"[candles] Candles available: {len(candles)}")
-            if candles[0].timestamp > ts:
-                print(f"[WARNING] WARNING: Signal time {ts} is earlier than first candle {candles[0].timestamp}")
-        else:
-            print(f"[WARNING] No candles found for signal at {ts}")
+        with self._counters_lock:
+            self.signals_processed += 1
+        print(f"[time] Candle range requested: {start_time} to {end_time}")
+        print(f"[candles] Candles available: {len(candles)}")
+        if candles[0].timestamp > ts:
+            print(f"[WARNING] WARNING: Signal time {ts} is earlier than first candle {candles[0].timestamp}")
 
         # Формируем единый объект с входными данными
         data = StrategyInput(
@@ -200,6 +221,17 @@ class BacktestRunner:
                 if summary.get('rate_limit_failures', 0) > 0:
                     print(f"rate_limit_failures: {summary.get('rate_limit_failures', 0)}")
                 print("="*60)
+        
+        # Выводим summary по обработке сигналов
+        total_signals = len(signals)
+        print("\n" + "="*60)
+        print("=== Signal Processing Summary ===")
+        print("="*60)
+        print(f"signals_processed: {self.signals_processed}")
+        print(f"signals_skipped_no_candles: {self.signals_skipped_no_candles}")
+        print(f"signals_skipped_corrupt_csv: {self.signals_skipped_corrupt_csv}")
+        print(f"total_signals: {total_signals}")
+        print("="*60)
         
         # Выводим summary по дедупликации предупреждений
         from ..domain.rr_utils import get_warn_summary
