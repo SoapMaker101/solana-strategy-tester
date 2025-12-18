@@ -8,3 +8,4 @@
 - filter_signals: фильтрация сигналов по порогам
 - run_signal_filter_pipeline: CLI runner для всего пайплайна
 """
+

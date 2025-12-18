@@ -241,3 +241,4 @@ class TestRunnerEmptyCandles:
             assert results[0]["signal_id"] == "sig2"
 
 
+

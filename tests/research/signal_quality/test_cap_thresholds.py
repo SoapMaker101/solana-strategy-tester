@@ -109,3 +109,4 @@ class TestAnalyzeCapThresholds:
         result = analyze_cap_thresholds(df, thresholds)
         
         assert result.empty
+

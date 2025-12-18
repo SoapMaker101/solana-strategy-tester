@@ -375,3 +375,4 @@ def test_no_candles_after_entry(base_time, entry_price):
     assert result.realized_multiple == pytest.approx(1.0, rel=1e-3)
 
 
+

@@ -381,3 +381,4 @@ def test_portfolio_reset_triggered_when_threshold_reached():
         assert len(reset_positions) > 0, "Должны быть позиции, закрытые по reset"
 
 
+

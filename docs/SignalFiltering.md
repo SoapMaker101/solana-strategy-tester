@@ -225,3 +225,4 @@ pytest tests/research/signal_quality/
 - Вычисление max_xn и time_to_xn
 - Анализ порогов
 - Фильтрацию сигналов
+

@@ -161,3 +161,4 @@ class TestGenerateFilterSummary:
         
         assert summary["removed_signals"] == 0
         assert summary["removed_pct"] == 0.0
+

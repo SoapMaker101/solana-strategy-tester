@@ -2,7 +2,7 @@ README.md
 
 # Solana Strategy Tester
 
-> Snapshot as of **2025-12-14**
+> Snapshot as of **2025-12-06**
 
 Local backtesting framework for testing trading strategies on Solana tokens based on external signals (Telegram, narrative feeds, etc.).  
 The goal: batch-test different strategies (RR, RRD, runner, etc.) on historical candles and find robust behaviour patterns.
@@ -39,21 +39,16 @@ backtester/
 │
 ├── domain/
 │   ├── models.py           # Signal, Candle, StrategyInput, StrategyOutput dataclasses
-│   ├── position.py         # Position model (for portfolio management)
-│   ├── portfolio.py        # PortfolioEngine with risk management & runner reset
+│   ├── position.py         # Position model (for future position manager / reports)
 │   ├── strategy_base.py    # StrategyConfig + abstract Strategy interface
 │   ├── rr_strategy.py      # RR strategy (TP/SL on first candle after signal)
-│   ├── rrd_strategy.py     # RRD strategy (entry on drawdown, then TP/SL)
-│   ├── runner_strategy.py  # Runner strategy (ladder strategy with partial exits)
-│   ├── runner_ladder.py   # Core logic for Runner Ladder simulation
-│   ├── runner_config.py    # Runner configuration models
-│   ├── rr_utils.py         # Common RR logic (TP/SL, volatility, etc.)
-│   └── trade_features.py   # Trade features: market cap proxy, volume/volatility windows
+│   ├── rrd_strategy.py     # RRD stub (Risk-Reward with Drawdown)
+│   └── runner_strategy.py  # Runner stub (hold from first to last candle in window)
 │
 ├── infrastructure/
 │   ├── signal_loader.py    # CsvSignalLoader → List[Signal]
-│   ├── price_loader.py     # CsvPriceLoader + GeckoTerminalPriceLoader (CSV/API)
-│   └── reporter.py         # Full reporting: metrics, CSV, HTML, trades table export
+│   ├── price_loader.py     # CsvPriceLoader  → List[Candle] from local CSV
+│   └── reporter.py         # Placeholder for future reporting / export
 │
 └── __init__.py
 
@@ -159,10 +154,6 @@ class StrategyOutput:
     pnl: float
     reason: Literal["tp", "sl", "timeout", "no_entry", "error"]
     meta: Dict[str, Any] = field(default_factory=dict)
-    # meta contains trade features:
-    # - Market cap proxy: entry_mcap_proxy, exit_mcap_proxy, mcap_change_pct, total_supply_used
-    # - Volume features: vol_sum_5m, vol_sum_15m, vol_sum_60m
-    # - Volatility features: range_pct_5m/15m/60m, volat_5m/15m/60m
 
 Base strategy
 class Strategy(ABC):
@@ -183,15 +174,11 @@ Exit on TP/SL or end of window.
 
 RRDStrategy (domain/rrd_strategy.py)
 
-Entry on drawdown (waits for price to drop by X% from first candle after signal).
-Then applies TP/SL logic.
+Currently stub: behaves like runner, but marked in meta["rrd_stub"] = True.
 
 RunnerStrategy (domain/runner_strategy.py)
-  - Runner Ladder strategy with multiple TP levels
-  - Partial exits at different profit levels (e.g., 40% at 2x, 40% at 5x, 20% at 10x)
-  - Time stop for automatic remainder closure
-  - Portfolio-level reset support
-  - Stage B criteria: hit_rate_x2, hit_rate_x5, tail_contribution, max_drawdown
+
+Stub: hold from first to last candle in window.
 
 Runner
 
@@ -224,39 +211,6 @@ strategy
 timestamp
 
 result (StrategyOutput)
-
-Reports & Exports
-
-After backtest, Reporter generates:
-
-1. Strategy-level reports (JSON, CSV, HTML, charts):
-   - Metrics: winrate, Sharpe ratio, max drawdown, profit factor, etc.
-   - Equity curves, PnL distributions, exit reasons
-
-2. Portfolio-level reports:
-   - Final balance, total return, max drawdown
-   - Position history with fees and slippage
-   - Equity curve over time
-
-3. Trades table (NEW):
-   - Unified CSV with all trades: `{strategy}_trades.csv`
-   - Includes flattened meta (trade features) for easy filtering/analysis
-   - Market cap proxy, volume windows (5m/15m/60m), volatility metrics
-
-All reports are saved to `output/reports/` and `output/charts/`.
-
-Trade Features
-
-Each StrategyOutput.meta now includes:
-
-Market Cap Proxy:
-- `entry_mcap_proxy`, `exit_mcap_proxy`, `mcap_change_pct`
-- `total_supply_used` (from Signal.extra["total_supply"] or default 1B)
-
-Volume & Volatility (windows before entry, no data leakage):
-- `vol_sum_5m`, `vol_sum_15m`, `vol_sum_60m` — sum of volumes
-- `range_pct_5m`, `range_pct_15m`, `range_pct_60m` — price range (max-min)/entry_price
-- `volat_5m`, `volat_15m`, `volat_60m` — volatility (std of returns)
 
 How to run
 1. Create virtualenv & install deps
@@ -292,98 +246,30 @@ config/strategies_example.yaml
 
 signals/example_signals.csv
 
-## Reporting Modes
-
-Для больших объемов данных (тысячи сигналов × тысячи стратегий) можно управлять генерацией отчетов через параметр `--report-mode`:
-
-### Режимы отчетности
-
-- **`none`** — сохраняет только `results.json`, никаких отчетов/графиков
-- **`summary`** (по умолчанию) — генерирует только агрегированные summary файлы (`strategy_summary.csv`, `portfolio_summary.csv`)
-- **`top`** — генерирует отчеты только для top-N стратегий (N задается через `--report-top-n`)
-- **`all`** — генерирует все отчеты для всех стратегий (как раньше)
-
-### Примеры использования
-
-**Быстрый массовый прогон без отчетов:**
-```bash
-python main.py \
-  --signals signals/signals_2025-07-01_to_2025-12-14.csv \
-  --strategies-config config/strategies_rr_rrd_grid.yaml \
-  --report-mode summary
-```
-
-**Совсем без репортов (только results.json):**
-```bash
-python main.py \
-  --signals signals/signals_2025-07-01_to_2025-12-14.csv \
-  --strategies-config config/strategies_rr_rrd_grid.yaml \
-  --report-mode none
-```
-
-**Отчёты только для top 30 стратегий (без графиков/HTML):**
-```bash
-python main.py \
-  --signals signals/signals_2025-07-01_to_2025-12-14.csv \
-  --strategies-config config/strategies_rr_rrd_grid.yaml \
-  --report-mode top \
-  --report-top-n 30 \
-  --report-metric portfolio_return \
-  --no-charts \
-  --no-html
-```
-
-**Генерация детальных отчетов после Stage B:**
-```bash
-python tools/generate_reports.py \
-  --input output/results.json \
-  --strategies output/strategy_selection.csv \
-  --with-charts \
-  --with-html
-```
-
-**Генерация отчетов для top-N из summary:**
-```bash
-python tools/generate_reports.py \
-  --input output/results.json \
-  --summary-csv output/reports/strategy_summary.csv \
-  --top-n 50 \
-  --metric portfolio_return \
-  --with-charts \
-  --with-html \
-  --signals signals/signals_2025-07-01_to_2025-12-14.csv
-```
-
-### Параметры CLI
-
-- `--report-mode` — режим генерации отчетов (`none`, `summary`, `top`, `all`, по умолчанию `summary`)
-- `--report-top-n` — количество топ стратегий для режима `top` (по умолчанию 50)
-- `--report-metric` — метрика для выбора top-N (`portfolio_return`, `strategy_total_pnl`, `sharpe`, по умолчанию `portfolio_return`)
-- `--no-charts` — не генерировать PNG графики (по умолчанию True для `none`/`summary`/`top`)
-- `--no-html` — не генерировать HTML отчеты (по умолчанию True для `none`/`summary`/`top`)
-
-## Current Status
-
-✅ **Phase 2 Complete:** Clean architecture, stable pipeline  
-✅ **Phase 3 Complete:** Full RR/RRD implementation, commission & slippage  
-✅ **Phase 4 Complete:** Portfolio layer with risk management, portfolio-level reset
-✅ **Phase 5 Complete:** Stage B criteria for Runner strategies, Runner metrics in Stage A  
-✅ **Trade Features:** Market cap proxy, volume/volatility windows  
-✅ **Export:** Unified trades table for analysis  
-✅ **Signal Quality:** Analysis and filtering module for signal quality improvement  
-
 Next steps (roadmap)
 
 Planned phases:
 
-Phase 5 — Advanced features:
+Phase 2.5 — data sources:
 
-- More data sources (DexScreener / GMGN / Axiom adapters)
-- Advanced portfolio strategies
-- Multi-strategy portfolio optimization
+DexScreener / GMGN / Axiom adapters for candles.
 
-Phase 6+ — Integration:
+Scripts to pre-download candles into data/candles/.
 
-- n8n / Telegram pipelines writing signals CSV/DB
-- Running batch backtests over large signal datasets
-- Real-time monitoring & alerting
+Phase 3 — full RR/RRD implementation:
+
+Proper drawdown-based entry (RRD).
+
+Commission & slippage modelling.
+
+Phase 4 — Positions & portfolio:
+
+Position manager over multiple signals.
+
+XN-style global exit / portfolio-level risk.
+
+Phase 5+ — Integration with real signals:
+
+n8n / Telegram pipelines writing signals CSV/DB.
+
+Running batch backtests over large signal datasets.
