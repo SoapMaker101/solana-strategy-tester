@@ -287,3 +287,4 @@ class TestMaxXN:
         assert max_xn == 0.0  # свеча вне горизонта
         assert time_to_levels == {}
 
+

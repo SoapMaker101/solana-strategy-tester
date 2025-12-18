@@ -396,3 +396,4 @@ def extract_signal_features(
     
     return pd.DataFrame(results)
 
+
