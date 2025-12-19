@@ -1,0 +1,12 @@
+#!/bin/sh
+max_size=$((50*1024*1024)) # 50 MB
+for file in $(git diff --cached --name-only); do
+  if [ -f "$file" ]; then
+    size=$(wc -c <"$file")
+    if [ $size -gt $max_size ]; then
+      echo "❌ File $file is larger than 50MB. Commit blocked."
+      exit 1
+    fi
+  fi
+done
+exit 0
