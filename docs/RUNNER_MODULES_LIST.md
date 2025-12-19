@@ -1,7 +1,8 @@
 # Полный список модулей и скриптов Runner
 
-**Версия:** 2.0  
-**Дата:** 2025-01-XX
+**Версия:** 2.1  
+**Дата:** 2025-01-XX  
+**Обновлено:** Исправлен расчет total_capital в fixed mode для множества мелких позиций
 
 ---
 
@@ -225,6 +226,7 @@
 - [XN_RUNNER_RESEARCH.md](./XN_RUNNER_RESEARCH.md) — документация по XN-анализу
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — общая архитектура системы
 - [PORTFOLIO_LAYER.md](./PORTFOLIO_LAYER.md) — документация портфельного слоя
+
 
 
 

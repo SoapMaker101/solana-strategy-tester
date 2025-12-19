@@ -91,15 +91,25 @@ data:
 
 portfolio:
   initial_balance_sol: 10.0
-  allocation_mode: "dynamic"
-  percent_per_trade: 0.1
-  max_exposure: 0.5
-  max_open_positions: 10
+  allocation_mode: "dynamic"  # или "fixed" для фиксированного размера позиций
+  percent_per_trade: 0.1  # 10% на сделку (0.002 = 0.2% для мелких позиций)
+  max_exposure: 0.5  # 50% максимальная экспозиция
+  max_open_positions: 10  # или 100 для множества мелких позиций
+  execution_profile: "realistic"  # "realistic" | "stress" | "custom"
   fee:
     swap_fee_pct: 0.003
     lp_fee_pct: 0.001
-    slippage_pct: 0.10
     network_fee_sol: 0.0005
+    profiles:  # Execution profiles (рекомендуется)
+      realistic:
+        base_slippage_pct: 0.03
+        slippage_multipliers:
+          entry: 1.0
+          exit_tp: 0.7
+          exit_sl: 1.2
+          exit_timeout: 0.3
+          exit_manual: 0.5
+    # slippage_pct: 0.10  # Legacy режим (если profiles не указаны)
 ```
 
 **config/strategies_example.yaml:**
@@ -431,6 +441,7 @@ python -m backtester.decision.run_stage_b
 ---
 
 *Документ обновлен: 2025-12-14*
+
 
 
 

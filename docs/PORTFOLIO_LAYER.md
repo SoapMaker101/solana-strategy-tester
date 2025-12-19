@@ -329,8 +329,12 @@ portfolio:
 - **allocation_mode**: 
   - `"fixed"` - размер позиции рассчитывается от начального баланса
   - `"dynamic"` - размер позиции рассчитывается от текущего баланса
-- **percent_per_trade**: Доля капитала на одну сделку (0.1 = 10%)
+- **percent_per_trade**: Доля капитала на одну сделку (0.1 = 10%, 0.002 = 0.2%)
+  - ⚠️ **Важно:** Используется как доля, не делится на 100 (0.002 = 0.2%, не 2%)
 - **max_exposure**: Максимальная доля капитала в открытых позициях (0.5 = 50%)
+  - **Формула проверки:** `(total_open_notional + new_size) / (total_capital + new_size) <= max_exposure`
+  - **В fixed mode:** `total_capital = initial_balance_sol` (размер позиции рассчитывается от начального баланса)
+  - **В dynamic mode:** `total_capital = available_balance + total_open_notional` (размер позиции рассчитывается от текущего баланса)
 - **max_open_positions**: Максимальное количество одновременно открытых позиций
 - **execution_profile**: Профиль исполнения (`"realistic"`, `"stress"`, или `"custom"`)
   - `"realistic"` (по умолчанию): Базовое проскальзывание 3% с разными multipliers
@@ -424,17 +428,40 @@ portfolio_result = engine.simulate(all_results, strategy_name="RR_10_20")
 - `{strategy_name}_portfolio_stats.json` - статистика портфеля
 - `{strategy_name}_portfolio_equity.png` - график equity curve
 
+### DEBUG-логирование
+
+Для отладки проблем с лимитами портфеля включите DEBUG-логирование:
+
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+```
+
+Перед каждой проверкой risk-check выводится DEBUG-лог с:
+- `balance` - текущий баланс
+- `position_size` - желаемый размер позиции
+- `open_notional` - сумма открытых позиций
+- `total_capital` - общий капитал (зависит от allocation_mode)
+- `max_allowed_exposure` - максимально допустимая экспозиция
+- `allocation_mode`, `percent_per_trade`, `max_exposure` - параметры конфигурации
+
 ## Логика работы
 
 1. **Фильтрация сделок**: Отбираются только сделки с валидными entry_time и exit_time в пределах backtest window
 2. **Сортировка**: Сделки сортируются по entry_time
 3. **Закрытие позиций**: Перед открытием новой позиции закрываются все позиции, у которых exit_time <= entry_time новой
 4. **Проверка лимитов**: 
-   - Проверяется количество открытых позиций
-   - Проверяется текущая экспозиция
+   - Проверяется количество открытых позиций (`max_open_positions`)
+   - Проверяется текущая экспозиция (`max_exposure`)
+   - **Важно:** В fixed mode `total_capital` = `initial_balance_sol` (размер позиции рассчитывается от начального баланса)
+   - В dynamic mode `total_capital` = `available_balance + total_open_notional` (размер позиции рассчитывается от текущего баланса)
 5. **Расчет размера позиции**: На основе allocation_mode и percent_per_trade
+   - `percent_per_trade` используется как доля (0.002 = 0.2%), не делится на 100
+   - Fixed mode: `position_size = initial_balance_sol * percent_per_trade`
+   - Dynamic mode: `position_size = current_balance * percent_per_trade`
 6. **Применение комиссий**: Из PnL вычитаются комиссии и проскальзывание
 7. **Обновление баланса**: Баланс обновляется при закрытии позиций
+8. **DEBUG-логирование**: Перед risk-check выводится DEBUG-лог с балансом, размером позиции, открытым нотионалом и максимально допустимой экспозицией
 
 ## Комиссии и Execution Profiles
 
@@ -500,8 +527,35 @@ portfolio:
   max_open_positions: 5  # Максимум 5 открытых позиций одновременно
 ```
 
-## Будущие улучшения
+### Множество мелких позиций (fixed mode)
 
+Для открытия множества мелких позиций используйте fixed mode с маленьким `percent_per_trade`:
+
+```yaml
+portfolio:
+  initial_balance_sol: 10.0
+  allocation_mode: "fixed"  # Размер позиции от начального баланса
+  percent_per_trade: 0.002  # 0.2% от начального баланса на сделку
+  max_exposure: 0.9  # 90% максимальная экспозиция
+  max_open_positions: 100  # До 100 открытых позиций
+```
+
+**Расчет:**
+- Размер каждой позиции = `10.0 * 0.002 = 0.02 SOL`
+- 100 позиций = `100 * 0.02 = 2.0 SOL`
+- Экспозиция = `2.0 / 10.0 = 20% < 90%` ✅
+
+**Важно:** В fixed mode `total_capital` = `initial_balance_sol`, что позволяет открывать много позиций без преждевременного ограничения экспозиции.
+
+## Исправления и улучшения
+
+- [x] **Исправление расчета total_capital в fixed mode** (2025-01-XX)
+  - В fixed mode `total_capital` теперь равен `initial_balance_sol` вместо `available_balance + total_open_notional`
+  - Это позволяет портфелю открывать много мелких позиций (например, 100 позиций при `percent_per_trade=0.002`)
+  - Исправлен баг, из-за которого открывалось только ~10 сделок вместо ожидаемых 100
+- [x] **DEBUG-логирование перед risk-check** (2025-01-XX)
+  - Добавлен DEBUG-лог с балансом, размером позиции, открытым нотионалом, total_capital и max_allowed_exposure
+  - Помогает отлаживать проблемы с лимитами портфеля
 - [x] **Portfolio-level reset для Runner** (реализовано)
   - Закрытие всех позиций при достижении порога: `equity >= cycle_start_equity * runner_reset_multiple`
   - Обновление `cycle_start_equity` после reset
@@ -510,8 +564,10 @@ portfolio:
   - Обработка частичного закрытия позиций на разных уровнях TP
   - Применение slippage и fees к каждому частичному выходу
   - Уменьшение `open_notional` и увеличение `balance`
+- [x] **Unit test для множества мелких позиций** (2025-01-XX)
+  - Добавлен тест `test_fixed_allocation_allows_many_small_positions`
+  - Проверяет открытие ≥50 сделок при `percent_per_trade=0.002`, `max_open_positions=100`
 - [ ] Более сложные модели комиссий
-- [ ] Учет частичного закрытия позиций
 - [ ] Портфельная оптимизация
 
 
