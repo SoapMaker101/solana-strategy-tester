@@ -10,6 +10,10 @@ __pycache__/
 .vscode/
 .idea/
 
+*.log
+run_crash.log
+run_full.log
+run_fault.log
 # Выходные данные
 output/
 logs/
@@ -17,10 +21,3 @@ logs/
 # Тяжёлые данные (свечки и т.п.)
 data/candles/
 data/sol_price/
-
-# logs
-*.log
-run_crash.log
-run_full.log
-run_fault.log
-
