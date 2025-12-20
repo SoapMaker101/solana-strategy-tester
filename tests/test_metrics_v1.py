@@ -43,8 +43,8 @@ def test_portfolio_summary_has_required_columns():
         trades_executed=5,
         trades_skipped_by_risk=2,
         trades_skipped_by_reset=0,
-        reset_count=0,
-        last_reset_time=None,
+        portfolio_reset_count=0,  # reset_count теперь property, доступен через portfolio_reset_count
+        last_portfolio_reset_time=None,  # last_reset_time теперь property, доступен через last_portfolio_reset_time
         cycle_start_equity=10.0,
         equity_peak_in_cycle=10.5,
     )

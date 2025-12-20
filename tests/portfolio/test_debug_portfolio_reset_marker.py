@@ -30,7 +30,7 @@ def test_debug_portfolio_reset_marker():
     """
     initial_balance = 10.0
     
-        config = PortfolioConfig(
+    config = PortfolioConfig(
             initial_balance_sol=initial_balance,
             allocation_mode="dynamic",
             percent_per_trade=0.2,  # 20% для быстрого роста equity
@@ -106,12 +106,12 @@ def test_debug_portfolio_reset_marker():
     print("DIAGNOSTIC INFO: Portfolio Reset Marker")
     print("="*80)
     
-        print(f"\nRunner reset count: {result.stats.runner_reset_count}")
-        print(f"Portfolio reset count: {result.stats.portfolio_reset_count}")
-        print(f"Reset count (legacy): {result.stats.reset_count}")
-        print(f"Cycle start equity: {result.stats.cycle_start_equity}")
-        print(f"Equity peak in cycle: {result.stats.equity_peak_in_cycle}")
-        print(f"Last portfolio reset time: {result.stats.last_portfolio_reset_time}")
+    print(f"\nRunner reset count: {result.stats.runner_reset_count}")
+    print(f"Portfolio reset count: {result.stats.portfolio_reset_count}")
+    print(f"Reset count (legacy): {result.stats.reset_count}")
+    print(f"Cycle start equity: {result.stats.cycle_start_equity}")
+    print(f"Equity peak in cycle: {result.stats.equity_peak_in_cycle}")
+    print(f"Last portfolio reset time: {result.stats.last_portfolio_reset_time}")
     
     print(f"\nTotal positions: {len(result.positions)}")
     
@@ -152,17 +152,17 @@ def test_debug_portfolio_reset_marker():
     
     print("\n" + "="*80)
     
-        # Базовые проверки
-        assert result.stats.portfolio_reset_count >= 0
-        assert result.stats.runner_reset_count >= 0
-        assert result.stats.cycle_start_equity > 0
-        
-        # Если был portfolio-level reset, проверяем детали
-        # Инвариант: portfolio_reset_count > 0 => есть позиции с closed_by_reset и triggered_portfolio_reset
-        if result.stats.portfolio_reset_count > 0:
-            assert result.stats.last_portfolio_reset_time is not None
-            assert len(reset_positions) > 0, "Должны быть позиции, закрытые по portfolio reset"
-            assert len(marker_positions) > 0, "Должна быть хотя бы одна marker позиция с triggered_portfolio_reset=True"
+    # Базовые проверки
+    assert result.stats.portfolio_reset_count >= 0
+    assert result.stats.runner_reset_count >= 0
+    assert result.stats.cycle_start_equity > 0
+    
+    # Если был portfolio-level reset, проверяем детали
+    # Инвариант: portfolio_reset_count > 0 => есть позиции с closed_by_reset и triggered_portfolio_reset
+    if result.stats.portfolio_reset_count > 0:
+        assert result.stats.last_portfolio_reset_time is not None
+        assert len(reset_positions) > 0, "Должны быть позиции, закрытые по portfolio reset"
+        assert len(marker_positions) > 0, "Должна быть хотя бы одна marker позиция с triggered_portfolio_reset=True"
 
 
 
