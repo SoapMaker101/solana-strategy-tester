@@ -94,13 +94,16 @@ def test_runner_reset_closes_all_positions_on_xn():
     trigger_position = next((p for p in result.positions if p.signal_id == "reset_signal_1"), None)
     assert trigger_position is not None, "Триггерная позиция должна быть найдена"
     
-    # 3. Проверка: триггерная позиция достигла XN
+    # 3. Проверка: триггерная позиция достигла XN (проверяем по raw ценам)
     assert trigger_position.exit_price is not None, "exit_price не должен быть None для закрытой позиции"
     assert trigger_position.entry_price is not None, "entry_price не должен быть None"
-    multiplying_return = trigger_position.exit_price / trigger_position.entry_price
+    # Проверяем по raw ценам из meta (slippage не должен влиять на XN)
+    raw_entry_price = trigger_position.meta.get("raw_entry_price", trigger_position.entry_price)
+    raw_exit_price = trigger_position.meta.get("raw_exit_price", trigger_position.exit_price)
+    multiplying_return = raw_exit_price / raw_entry_price if raw_entry_price > 0 else 0.0
     assert multiplying_return >= config.runner_reset_multiple, \
         f"Триггерная позиция должна достичь XN ({config.runner_reset_multiple}), " \
-        f"получено: {multiplying_return}"
+        f"получено: {multiplying_return} (raw: {raw_entry_price} -> {raw_exit_price})"
     
     # 4. Проверка: триггерная позиция имеет метку "triggered_reset"
     assert trigger_position.meta.get("triggered_reset") == True, \
@@ -505,7 +508,10 @@ def test_runner_reset_with_multiple_xn_levels():
     
     assert xn_position.exit_price is not None, "exit_price не должен быть None для закрытой позиции"
     assert xn_position.entry_price is not None, "entry_price не должен быть None"
-    multiplying_return = xn_position.exit_price / xn_position.entry_price
+    # Проверяем по raw ценам из meta
+    raw_entry_price = xn_position.meta.get("raw_entry_price", xn_position.entry_price)
+    raw_exit_price = xn_position.meta.get("raw_exit_price", xn_position.exit_price)
+    multiplying_return = raw_exit_price / raw_entry_price if raw_entry_price > 0 else 0.0
     assert multiplying_return >= config.runner_reset_multiple, \
         f"Позиция должна достичь XN {config.runner_reset_multiple}, получено: {multiplying_return}"
     

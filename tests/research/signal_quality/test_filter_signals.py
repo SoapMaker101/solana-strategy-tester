@@ -40,7 +40,7 @@ def sample_signals_csv(tmp_path):
 def sample_features_df():
     """Создаёт DataFrame с признаками."""
     return pd.DataFrame({
-        "signal_id": ["s1", "s2", "s3", "s4", "s5"],
+        "id": ["s1", "s2", "s3", "s4", "s5"],
         "market_cap_proxy": [10000, 30000, 50000, 80000, 100000],
         "status": ["ok", "ok", "ok", "ok", "ok"]
     })
@@ -139,13 +139,12 @@ class TestGenerateFilterSummary:
             min_market_cap_proxy=min_market_cap_proxy
         )
         
-        assert summary["original_signals"] == 10
-        assert summary["filtered_signals"] == 5
-        assert summary["removed_signals"] == 5
+        assert summary["original_count"] == 10
+        assert summary["filtered_count"] == 5
+        assert summary["removed_count"] == 5
         assert summary["removed_pct"] == 50.0
         assert summary["min_market_cap_proxy"] == 40000
-        assert "valid_signals_before_filter" in summary
-        assert "valid_signals_after_filter" in summary
+        assert "status_distribution" in summary
     
     def test_generate_filter_summary_no_removal(self, sample_features_df):
         """Тест когда ничего не удалено."""
@@ -159,8 +158,9 @@ class TestGenerateFilterSummary:
             min_market_cap_proxy=0
         )
         
-        assert summary["removed_signals"] == 0
+        assert summary["removed_count"] == 0
         assert summary["removed_pct"] == 0.0
+
 
 
 

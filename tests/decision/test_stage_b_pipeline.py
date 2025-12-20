@@ -13,7 +13,7 @@ from backtester.decision.strategy_selector import (
     load_stability_csv,
     select_strategies,
 )
-from backtester.decision.selection_rules import DEFAULT_CRITERIA
+from backtester.decision.selection_rules import DEFAULT_CRITERIA, DEFAULT_CRITERIA_V1, DEFAULT_RUNNER_CRITERIA_V1
 
 
 @pytest.fixture
@@ -27,9 +27,9 @@ def fake_stability_csv(tmp_path):
             "strategy_fail_variance",
             "strategy_fail_worst",
         ],
-        "survival_rate": [0.8, 0.75, 0.4, 0.7, 0.8],  # fail_survival < 0.6
-        "pnl_variance": [0.05, 0.08, 0.03, 0.15, 0.04],  # fail_variance > 0.10
-        "worst_window_pnl": [-0.1, -0.15, -0.05, -0.1, -0.25],  # fail_worst < -0.20
+        "survival_rate": [0.8, 0.75, 0.4, 0.7, 0.8],  # fail_survival < 0.60 (v1)
+        "pnl_variance": [0.05, 0.08, 0.03, 0.20, 0.04],  # fail_variance > 0.15 (v1: max=0.15)
+        "worst_window_pnl": [-0.1, -0.15, -0.05, -0.1, -0.30],  # fail_worst < -0.25 (v1: min=-0.25)
         "best_window_pnl": [0.2, 0.3, 0.15, 0.2, 0.1],
         "median_window_pnl": [0.05, 0.08, 0.02, 0.05, 0.03],
         "windows_positive": [4, 3, 2, 4, 4],
@@ -76,6 +76,8 @@ def test_stage_b_pipeline_selection_table_exists(fake_stability_csv):
     selection_df = generate_selection_table_from_stability(
         stability_csv_path=fake_stability_csv,
         output_path=fake_stability_csv.parent / "strategy_selection.csv",
+        criteria=DEFAULT_CRITERIA_V1,
+        runner_criteria=DEFAULT_RUNNER_CRITERIA_V1,
     )
     
     assert len(selection_df) == 5, "Should have all strategies"
@@ -101,6 +103,8 @@ def test_stage_b_pipeline_passed_strategies_less_than_input(fake_stability_csv):
     """Проверяет, что passed стратегий ≤ входных"""
     selection_df = generate_selection_table_from_stability(
         stability_csv_path=fake_stability_csv,
+        criteria=DEFAULT_CRITERIA_V1,
+        runner_criteria=DEFAULT_RUNNER_CRITERIA_V1,
     )
     
     total_strategies = len(selection_df)
@@ -108,10 +112,10 @@ def test_stage_b_pipeline_passed_strategies_less_than_input(fake_stability_csv):
     
     assert passed_count <= total_strategies, "Passed strategies should be <= total"
     
-    # С DEFAULT_CRITERIA должны пройти только strategy_pass_1 и strategy_pass_2
-    # strategy_fail_survival: survival_rate=0.4 < 0.6
-    # strategy_fail_variance: pnl_variance=0.15 > 0.10
-    # strategy_fail_worst: worst_window_pnl=-0.25 < -0.20
+    # С DEFAULT_CRITERIA_V1 должны пройти только strategy_pass_1 и strategy_pass_2
+    # strategy_fail_survival: survival_rate=0.4 < 0.60 (v1)
+    # strategy_fail_variance: pnl_variance=0.20 > 0.15 (v1)
+    # strategy_fail_worst: worst_window_pnl=-0.30 < -0.25 (v1)
     
     passed_strategies = selection_df[selection_df["passed"]]["strategy"].tolist()
     assert "strategy_pass_1" in passed_strategies
@@ -122,6 +126,8 @@ def test_stage_b_pipeline_failed_reasons_correct(fake_stability_csv):
     """Проверяет, что failed_reasons корректно заполнены"""
     selection_df = generate_selection_table_from_stability(
         stability_csv_path=fake_stability_csv,
+        criteria=DEFAULT_CRITERIA_V1,
+        runner_criteria=DEFAULT_RUNNER_CRITERIA_V1,
     )
     
     # strategy_fail_survival должна иметь failed_reasons с survival_rate
@@ -147,6 +153,8 @@ def test_stage_b_pipeline_no_sorting(fake_stability_csv):
     """Проверяет, что таблица НЕ отсортирована по pnl"""
     selection_df = generate_selection_table_from_stability(
         stability_csv_path=fake_stability_csv,
+        criteria=DEFAULT_CRITERIA_V1,
+        runner_criteria=DEFAULT_RUNNER_CRITERIA_V1,
     )
     
     # Загружаем оригинальный порядок из stability CSV
@@ -173,6 +181,8 @@ def test_stage_b_pipeline_empty_stability(tmp_path):
     
     selection_df = generate_selection_table_from_stability(
         stability_csv_path=empty_csv,
+        criteria=DEFAULT_CRITERIA_V1,
+        runner_criteria=DEFAULT_RUNNER_CRITERIA_V1,
     )
     
     assert len(selection_df) == 0

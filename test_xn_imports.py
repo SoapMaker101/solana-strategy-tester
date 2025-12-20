@@ -7,12 +7,12 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 try:
-    from backtester.research.xn_analysis import XNResult, XNConfig, XNAnalyzer, XNRunner
+    from backtester.research.xn_analysis import XNAnalysisConfig, XNSignalResult, XNSummaryStats, XNAnalyzer
     print("✓ All imports successful")
-    print(f"✓ XNResult: {XNResult}")
-    print(f"✓ XNConfig: {XNConfig}")
+    print(f"✓ XNAnalysisConfig: {XNAnalysisConfig}")
+    print(f"✓ XNSignalResult: {XNSignalResult}")
+    print(f"✓ XNSummaryStats: {XNSummaryStats}")
     print(f"✓ XNAnalyzer: {XNAnalyzer}")
-    print(f"✓ XNRunner: {XNRunner}")
 except Exception as e:
     print(f"❌ Import failed: {e}")
     import traceback

@@ -1,0 +1,2 @@
+strategy,survival_rate,pnl_variance,worst_window_pnl,median_window_pnl,windows_total,passed,failed_reasons
+test,0.7,0.2,-0.1,0.05,3,True,
