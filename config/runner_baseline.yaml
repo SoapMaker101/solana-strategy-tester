@@ -1,23 +1,140 @@
-- name: Runner_Ladder_2x_5x
+# Runner Universe v1 (12 configs)
+# Рекомендую прогонять в NO RESET режиме для отбора, потом top-2..4 прогнать с RESET.
+
+- name: Runner_Fast_2_3_7d
   type: RUNNER
   params:
     take_profit_levels:
-      - { xn: 2.0, fraction: 0.6 }
-      - { xn: 5.0, fraction: 0.4 }
-    time_stop_minutes: 20160
+      - { xn: 2.0, fraction: 0.70 }
+      - { xn: 3.0, fraction: 0.30 }
+    time_stop_minutes: 10080   # 7d
     use_high_for_targets: true
     exit_on_first_tp: false
     allow_partial_fills: true
 
-
-
-- name: Runner_Ladder_3x_7x
+- name: Runner_Fast_2_4_10d
   type: RUNNER
   params:
     take_profit_levels:
-      - { xn: 3.0, fraction: 0.5 }
-      - { xn: 7.0, fraction: 0.5 }
-    time_stop_minutes: 20160
+      - { xn: 2.0, fraction: 0.80 }
+      - { xn: 4.0, fraction: 0.20 }
+    time_stop_minutes: 14400   # 10d
+    use_high_for_targets: true
+    exit_on_first_tp: false
+    allow_partial_fills: true
+
+- name: Runner_Balanced_3_7_14d
+  type: RUNNER
+  params:
+    take_profit_levels:
+      - { xn: 3.0, fraction: 0.50 }
+      - { xn: 7.0, fraction: 0.50 }
+    time_stop_minutes: 20160   # 14d
+    use_high_for_targets: true
+    exit_on_first_tp: false
+    allow_partial_fills: true
+
+- name: Runner_Balanced_3_7_21d
+  type: RUNNER
+  params:
+    take_profit_levels:
+      - { xn: 3.0, fraction: 0.50 }
+      - { xn: 7.0, fraction: 0.50 }
+    time_stop_minutes: 30240   # 21d
+    use_high_for_targets: true
+    exit_on_first_tp: false
+    allow_partial_fills: true
+
+- name: Runner_Balanced_2_5_10_21d
+  type: RUNNER
+  params:
+    take_profit_levels:
+      - { xn: 2.0, fraction: 0.30 }
+      - { xn: 5.0, fraction: 0.40 }
+      - { xn: 10.0, fraction: 0.30 }
+    time_stop_minutes: 30240   # 21d
+    use_high_for_targets: true
+    exit_on_first_tp: false
+    allow_partial_fills: true
+
+- name: Runner_Balanced_2_4_7_21d
+  type: RUNNER
+  params:
+    take_profit_levels:
+      - { xn: 2.0, fraction: 0.40 }
+      - { xn: 4.0, fraction: 0.35 }
+      - { xn: 7.0, fraction: 0.25 }
+    time_stop_minutes: 30240   # 21d
+    use_high_for_targets: true
+    exit_on_first_tp: false
+    allow_partial_fills: true
+
+- name: Runner_Tail_2_5_10_30d
+  type: RUNNER
+  params:
+    take_profit_levels:
+      - { xn: 2.0, fraction: 0.20 }
+      - { xn: 5.0, fraction: 0.30 }
+      - { xn: 10.0, fraction: 0.50 }
+    time_stop_minutes: 43200   # 30d
+    use_high_for_targets: true
+    exit_on_first_tp: false
+    allow_partial_fills: true
+
+- name: Runner_Tail_3_7_15_45d
+  type: RUNNER
+  params:
+    take_profit_levels:
+      - { xn: 3.0, fraction: 0.20 }
+      - { xn: 7.0, fraction: 0.30 }
+      - { xn: 15.0, fraction: 0.50 }
+    time_stop_minutes: 64800   # 45d
+    use_high_for_targets: true
+    exit_on_first_tp: false
+    allow_partial_fills: true
+
+- name: Runner_Tail_2_7_20_60d
+  type: RUNNER
+  params:
+    take_profit_levels:
+      - { xn: 2.0, fraction: 0.20 }
+      - { xn: 7.0, fraction: 0.30 }
+      - { xn: 20.0, fraction: 0.50 }
+    time_stop_minutes: 86400   # 60d
+    use_high_for_targets: true
+    exit_on_first_tp: false
+    allow_partial_fills: true
+
+- name: Runner_Conservative_1_5_2_0_3_0_10d
+  type: RUNNER
+  params:
+    take_profit_levels:
+      - { xn: 1.5, fraction: 0.50 }
+      - { xn: 2.0, fraction: 0.30 }
+      - { xn: 3.0, fraction: 0.20 }
+    time_stop_minutes: 14400   # 10d
+    use_high_for_targets: true
+    exit_on_first_tp: false
+    allow_partial_fills: true
+
+- name: Runner_Conservative_2_0_3_0_14d
+  type: RUNNER
+  params:
+    take_profit_levels:
+      - { xn: 2.0, fraction: 0.70 }
+      - { xn: 3.0, fraction: 0.30 }
+    time_stop_minutes: 20160   # 14d
+    use_high_for_targets: true
+    exit_on_first_tp: false
+    allow_partial_fills: true
+
+- name: Runner_Conservative_2_0_4_0_21d
+  type: RUNNER
+  params:
+    take_profit_levels:
+      - { xn: 2.0, fraction: 0.80 }
+      - { xn: 4.0, fraction: 0.20 }
+    time_stop_minutes: 30240   # 21d
     use_high_for_targets: true
     exit_on_first_tp: false
     allow_partial_fills: true
