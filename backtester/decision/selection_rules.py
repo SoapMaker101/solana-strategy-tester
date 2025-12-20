@@ -52,6 +52,9 @@ class SelectionCriteria:
     
     max_drawdown_pct: Optional[float] = None
     """Максимальная допустимая просадка по equity curve портфеля (в процентах, отрицательное значение)."""
+    
+    max_tail_contribution: Optional[float] = None
+    """Максимальная допустимая доля PnL от сделок с realized_multiple >= 5x (tail contribution)."""
 
 
 # Базовые критерии для RR/RRD (DEFAULT)
@@ -69,6 +72,26 @@ DEFAULT_CRITERIA = SelectionCriteria(
     min_p90_hold_days=None,
     max_p90_hold_days=None,
     min_tail_contribution=None,
+    max_tail_contribution=None,
+    max_drawdown_pct=None,
+)
+
+# Критерии v1 для Stage A (split_count 3/4/5)
+# Пороги из ТЗ: survival_rate >= 0.60, worst_window_pnl >= -0.25, 
+# pnl_variance <= 0.15, median_window_pnl >= 0.00
+DEFAULT_CRITERIA_V1 = SelectionCriteria(
+    min_survival_rate=0.60,
+    max_pnl_variance=0.15,
+    min_worst_window_pnl=-0.25,
+    min_median_window_pnl=0.00,
+    min_windows=3,
+    # Runner критерии не заданы по умолчанию
+    min_hit_rate_x2=None,
+    min_hit_rate_x5=None,
+    min_p90_hold_days=None,
+    max_p90_hold_days=None,
+    min_tail_contribution=None,
+    max_tail_contribution=None,
     max_drawdown_pct=None,
 )
 
@@ -87,8 +110,31 @@ DEFAULT_RUNNER_CRITERIA = SelectionCriteria(
     min_p90_hold_days=None,  # Не ограничиваем минимальное время удержания
     max_p90_hold_days=None,  # Не ограничиваем максимальное время удержания (можно задать, например, 14 дней)
     min_tail_contribution=0.3,  # Минимум 30% PnL от top 5% сделок
+    max_tail_contribution=None,
     max_drawdown_pct=-0.5,  # Максимальная просадка не более 50%
 )
+
+# Runner критерии v1 (для fixed/1%/exposure=0.95/100 pos/no reset)
+# Пороги из ТЗ: hit_rate_x2 >= 0.35, hit_rate_x5 >= 0.08, 
+# tail_contribution <= 0.80, p90_hold_days <= 35
+DEFAULT_RUNNER_CRITERIA_V1 = SelectionCriteria(
+    # RR/RRD критерии не используются для Runner
+    min_survival_rate=0.0,
+    max_pnl_variance=float('inf'),
+    min_worst_window_pnl=-float('inf'),
+    min_median_window_pnl=-float('inf'),
+    min_windows=1,
+    # Runner критерии v1
+    min_hit_rate_x2=0.35,  # 35% сделок должны достичь x2
+    min_hit_rate_x5=0.08,  # 8% сделок должны достичь x5
+    min_p90_hold_days=None,  # Не ограничиваем минимальное время удержания
+    max_p90_hold_days=35.0,  # Максимум 35 дней (90-й перцентиль)
+    min_tail_contribution=None,  # Не ограничиваем минимум
+    max_tail_contribution=0.80,  # Максимум 80% PnL от сделок с realized_multiple >= 5x
+    max_drawdown_pct=-0.60,  # Максимальная просадка не более 60%
+)
+
+
 
 
 

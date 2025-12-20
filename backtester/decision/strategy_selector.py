@@ -80,7 +80,7 @@ def check_strategy_criteria(
                     f"p90_hold_days {p90_hold_days:.2f} > {runner_criteria.max_p90_hold_days}"
                 )
         
-        # Проверка 5: tail_contribution >= min_tail_contribution
+        # Проверка 5: tail_contribution >= min_tail_contribution (если задан)
         if runner_criteria.min_tail_contribution is not None:
             tail_contribution = row.get("tail_contribution", 0.0)
             if tail_contribution < runner_criteria.min_tail_contribution:
@@ -88,7 +88,15 @@ def check_strategy_criteria(
                     f"tail_contribution {tail_contribution:.3f} < {runner_criteria.min_tail_contribution}"
                 )
         
-        # Проверка 6: max_drawdown_pct >= max_drawdown_pct (max_drawdown_pct отрицательное)
+        # Проверка 6: tail_contribution <= max_tail_contribution (если задан)
+        if runner_criteria.max_tail_contribution is not None:
+            tail_contribution = row.get("tail_contribution", 0.0)
+            if tail_contribution > runner_criteria.max_tail_contribution:
+                failed_reasons.append(
+                    f"tail_contribution {tail_contribution:.3f} > {runner_criteria.max_tail_contribution}"
+                )
+        
+        # Проверка 7: max_drawdown_pct >= max_drawdown_pct (max_drawdown_pct отрицательное)
         if runner_criteria.max_drawdown_pct is not None:
             max_drawdown_pct = row.get("max_drawdown_pct", 0.0)
             if max_drawdown_pct < runner_criteria.max_drawdown_pct:
@@ -295,6 +303,8 @@ def generate_selection_table_from_stability(
         save_selection_table(selection_df, output_path)
     
     return selection_df
+
+
 
 
 

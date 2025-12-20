@@ -11,7 +11,7 @@ from .strategy_selector import (
     load_stability_csv,
     select_strategies,
 )
-from .selection_rules import DEFAULT_CRITERIA, DEFAULT_RUNNER_CRITERIA
+from .selection_rules import DEFAULT_CRITERIA, DEFAULT_RUNNER_CRITERIA, DEFAULT_CRITERIA_V1, DEFAULT_RUNNER_CRITERIA_V1
 from .strategy_selector import is_runner_strategy
 
 
@@ -98,25 +98,27 @@ def main():
     
     print(f"Stage B: Strategy Selection (Decision Layer)")
     print(f"Stability CSV: {stability_csv_path}")
-    print(f"RR/RRD Criteria: min_survival_rate={DEFAULT_CRITERIA.min_survival_rate}, "
-          f"max_pnl_variance={DEFAULT_CRITERIA.max_pnl_variance}, "
-          f"min_worst_window_pnl={DEFAULT_CRITERIA.min_worst_window_pnl}, "
-          f"min_median_window_pnl={DEFAULT_CRITERIA.min_median_window_pnl}, "
-          f"min_windows={DEFAULT_CRITERIA.min_windows}")
-    print(f"Runner Criteria: min_hit_rate_x2={DEFAULT_RUNNER_CRITERIA.min_hit_rate_x2}, "
-          f"min_hit_rate_x5={DEFAULT_RUNNER_CRITERIA.min_hit_rate_x5}, "
-          f"min_tail_contribution={DEFAULT_RUNNER_CRITERIA.min_tail_contribution}, "
-          f"max_drawdown_pct={DEFAULT_RUNNER_CRITERIA.max_drawdown_pct}")
+    print(f"Using v1 criteria (fixed/1%/exposure=0.95/100 pos/no reset)")
+    print(f"RR/RRD Criteria v1: min_survival_rate={DEFAULT_CRITERIA_V1.min_survival_rate}, "
+          f"max_pnl_variance={DEFAULT_CRITERIA_V1.max_pnl_variance}, "
+          f"min_worst_window_pnl={DEFAULT_CRITERIA_V1.min_worst_window_pnl}, "
+          f"min_median_window_pnl={DEFAULT_CRITERIA_V1.min_median_window_pnl}, "
+          f"min_windows={DEFAULT_CRITERIA_V1.min_windows}")
+    print(f"Runner Criteria v1: min_hit_rate_x2={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x2}, "
+          f"min_hit_rate_x5={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x5}, "
+          f"max_tail_contribution={DEFAULT_RUNNER_CRITERIA_V1.max_tail_contribution}, "
+          f"max_p90_hold_days={DEFAULT_RUNNER_CRITERIA_V1.max_p90_hold_days}, "
+          f"max_drawdown_pct={DEFAULT_RUNNER_CRITERIA_V1.max_drawdown_pct}")
     print("")
     
-    # Генерируем таблицу отбора
+    # Генерируем таблицу отбора (используем v1 критерии)
     try:
         output_path = Path(args.output_csv) if args.output_csv else None
         selection_df = generate_selection_table_from_stability(
             stability_csv_path=stability_csv_path,
             output_path=output_path,
-            criteria=DEFAULT_CRITERIA,
-            runner_criteria=DEFAULT_RUNNER_CRITERIA,
+            criteria=DEFAULT_CRITERIA_V1,
+            runner_criteria=DEFAULT_RUNNER_CRITERIA_V1,
         )
         
         # Печатаем summary
@@ -144,6 +146,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
 
 
 

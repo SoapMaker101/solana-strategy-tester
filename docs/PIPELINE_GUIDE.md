@@ -196,6 +196,11 @@ python -m backtester.research.run_stage_a \
 - `median_window_pnl` — медианный PnL окон
 - `pnl_variance` — дисперсия PnL окон
 - `windows_total` — общее количество окон
+- Для Runner стратегий дополнительно:
+  - `hit_rate_x2` — доля сделок, достигших уровня >=2x
+  - `hit_rate_x5` — доля сделок, достигших уровня >=5x
+  - `p90_hold_days` — 90-й перцентиль времени удержания позиции в днях
+  - `tail_contribution` — доля PnL от сделок с `realized_multiple >= 5x`
 
 ### Интерпретация результатов
 
@@ -258,15 +263,27 @@ python -m backtester.decision.run_stage_b \
 - `passed` — булево значение (прошла ли стратегия отбор)
 - `failed_reasons` — список причин отклонения (если не прошла)
 
-### Критерии по умолчанию
+### Критерии по умолчанию (v1)
 
+**Для RR/RRD стратегий (`DEFAULT_CRITERIA_V1`):**
 ```python
 SelectionCriteria(
-    min_survival_rate=0.5,           # 50% окон должны быть прибыльными
-    max_pnl_variance=0.1,            # Дисперсия не должна быть слишком высокой
-    min_worst_window_pnl=-0.2,       # Даже худший период не должен принести >20% потерь
-    min_median_window_pnl=0.0,       # Медианный результат должен быть неотрицательным
-    min_windows=4                    # Минимум 4 окна для статистической значимости
+    min_survival_rate=0.60,          # 60% окон должны быть прибыльными
+    max_pnl_variance=0.15,            # Дисперсия не должна быть слишком высокой
+    min_worst_window_pnl=-0.25,       # Даже худший период не должен принести >25% потерь
+    min_median_window_pnl=0.00,       # Медианный результат должен быть неотрицательным
+    min_windows=3                     # Минимум 3 окна для статистической значимости
+)
+```
+
+**Для Runner стратегий (`DEFAULT_RUNNER_CRITERIA_V1`):**
+```python
+SelectionCriteria(
+    min_hit_rate_x2=0.35,            # 35% сделок должны достичь x2
+    min_hit_rate_x5=0.08,             # 8% сделок должны достичь x5
+    max_p90_hold_days=35.0,          # 90-й перцентиль времени удержания <= 35 дней
+    max_tail_contribution=0.80,       # Максимум 80% PnL от сделок с realized_multiple >= 5x
+    max_drawdown_pct=-0.60,          # Максимальная просадка не более 60%
 )
 ```
 

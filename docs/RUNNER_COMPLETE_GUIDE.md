@@ -277,7 +277,7 @@ portfolio:
 - `hit_rate_x2`: Доля сделок, достигших x2 (из `levels_hit` в meta)
 - `hit_rate_x5`: Доля сделок, достигших x5 (из `levels_hit` в meta)
 - `p90_hold_days`: 90-й перцентиль времени удержания позиции
-- `tail_contribution`: Доля PnL от top 5% сделок
+- `tail_contribution`: Доля PnL от сделок с `realized_multiple >= 5x` (v1)
 - `max_drawdown_pct`: Максимальная просадка из `portfolio_summary.csv`
 
 **Результат:** `strategy_stability.csv` содержит Runner метрики для Runner стратегий.
@@ -289,6 +289,13 @@ portfolio:
 - `min_hit_rate_x5: 0.10` — минимум 10% сделок должны достичь x5
 - `min_tail_contribution: 0.3` — минимум 30% PnL от top 5% сделок
 - `max_drawdown_pct: -0.5` — максимальная просадка не более 50%
+
+**Критерии v1 (`DEFAULT_RUNNER_CRITERIA_V1`) для fixed/1%/exposure=0.95/100 pos/no reset:**
+- `min_hit_rate_x2: 0.35` — минимум 35% сделок должны достичь x2
+- `min_hit_rate_x5: 0.08` — минимум 8% сделок должны достичь x5
+- `max_p90_hold_days: 35.0` — 90-й перцентиль времени удержания <= 35 дней
+- `max_tail_contribution: 0.80` — максимум 80% PnL от сделок с `realized_multiple >= 5x`
+- `max_drawdown_pct: -0.60` — максимальная просадка не более 60%
 
 **Логика отбора:**
 - Runner стратегии проверяются по Runner критериям

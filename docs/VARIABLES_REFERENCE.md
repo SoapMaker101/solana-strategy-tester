@@ -652,6 +652,42 @@
 - **Используется в:** `check_strategy_criteria()`, `select_strategies()`
 - **Статус:** 🟢 stable
 
+#### `DEFAULT_CRITERIA_V1`
+
+- **Где:** `backtester/decision/selection_rules.py`
+- **Тип:** `SelectionCriteria` (dataclass)
+- **Значение по умолчанию:**
+  ```python
+  SelectionCriteria(
+      min_survival_rate=0.60,       # 60%
+      max_pnl_variance=0.15,        # 0.15
+      min_worst_window_pnl=-0.25,   # -25%
+      min_median_window_pnl=0.00,   # 0%
+      min_windows=3,                 # 3 окна
+  )
+  ```
+- **Назначение:** Критерии v1 для Stage A (split_count 3/4/5) - более строгие пороги
+- **Используется в:** Stage B по умолчанию (v1 режим)
+- **Статус:** 🟢 stable
+
+#### `DEFAULT_RUNNER_CRITERIA_V1`
+
+- **Где:** `backtester/decision/selection_rules.py`
+- **Тип:** `SelectionCriteria` (dataclass)
+- **Значение по умолчанию:**
+  ```python
+  SelectionCriteria(
+      min_hit_rate_x2=0.35,         # 35% сделок должны достичь x2
+      min_hit_rate_x5=0.08,         # 8% сделок должны достичь x5
+      max_p90_hold_days=35.0,       # 90-й перцентиль <= 35 дней
+      max_tail_contribution=0.80,    # Максимум 80% PnL от сделок с realized_multiple >= 5x
+      max_drawdown_pct=-0.60,       # Максимальная просадка не более 60%
+  )
+  ```
+- **Назначение:** Критерии v1 для Runner стратегий (fixed/1%/exposure=0.95/100 pos/no reset)
+- **Используется в:** Stage B для Runner стратегий по умолчанию (v1 режим)
+- **Статус:** 🟢 stable
+
 ---
 
 ## 7. CLI аргументы

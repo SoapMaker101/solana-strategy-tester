@@ -1,5 +1,126 @@
 # Changelog
 
+## [Feature: Metrics v1 + Runner Stability Metrics + Stage B Reasons] - 2025-01-15
+
+### Метрики v1 для Runner-bot (fixed/1%/exposure=0.95/100 pos/no reset)
+
+#### 🎯 Цель изменений
+
+Обеспечение наличия и корректного расчета метрик v1 на всех этапах пайплайна:
+- `main.py` → `output/reports/*_trades.csv` + `portfolio_summary.csv`
+- Stage A → `strategy_stability.csv` (и детальная таблица окон)
+- Stage B → `strategy_selection.csv` с pass/fail и причинами
+
+#### ✨ Основные изменения
+
+##### 1. **Исправлен расчет `tail_contribution` для Runner стратегий**
+
+**Файл:** `backtester/research/strategy_stability.py`
+
+**Изменения:**
+- `tail_contribution` теперь считается как доля PnL от сделок с `realized_multiple >= 5x` (вместо top 5% сделок)
+- Использует `meta_realized_multiple` из trades CSV или `meta.realized_multiple`
+- Соответствует определению "tail" как сделки с высоким multiple
+
+##### 2. **Добавлены критерии v1 для Stage A и Stage B**
+
+**Файл:** `backtester/decision/selection_rules.py`
+
+**Новые константы:**
+- `DEFAULT_CRITERIA_V1`: Критерии для Stage A (split_count 3/4/5)
+  - `min_survival_rate=0.60`
+  - `max_pnl_variance=0.15`
+  - `min_worst_window_pnl=-0.25`
+  - `min_median_window_pnl=0.00`
+  - `min_windows=3`
+
+- `DEFAULT_RUNNER_CRITERIA_V1`: Критерии для Runner стратегий v1
+  - `min_hit_rate_x2=0.35` (35% сделок должны достичь x2)
+  - `min_hit_rate_x5=0.08` (8% сделок должны достичь x5)
+  - `max_p90_hold_days=35.0` (90-й перцентиль времени удержания <= 35 дней)
+  - `max_tail_contribution=0.80` (максимум 80% PnL от сделок с realized_multiple >= 5x)
+  - `max_drawdown_pct=-0.60` (максимальная просадка не более 60%)
+
+**Изменения:**
+- Добавлено поле `max_tail_contribution` в `SelectionCriteria`
+- Stage B по умолчанию использует v1 критерии
+
+##### 3. **Обновлен Stage B для использования v1 критериев**
+
+**Файл:** `backtester/decision/run_stage_b.py`
+
+**Изменения:**
+- По умолчанию использует `DEFAULT_CRITERIA_V1` и `DEFAULT_RUNNER_CRITERIA_V1`
+- Выводит информацию о используемых критериях v1
+
+##### 4. **Добавлены тесты для метрик v1**
+
+**Файл:** `tests/test_metrics_v1.py` (новый)
+
+**Тесты:**
+- `test_portfolio_summary_has_required_columns`: Проверяет наличие всех колонок в portfolio_summary.csv
+- `test_stage_a_stability_has_required_columns`: Проверяет наличие всех колонок в strategy_stability.csv
+- `test_runner_metrics_computation`: Проверяет корректность расчета Runner метрик (hit_rate_x2/x5, p90_hold_days, tail_contribution)
+- `test_stage_b_reasons_present`: Проверяет наличие `passed` и `failed_reasons` в strategy_selection.csv
+- `test_is_runner_strategy`: Проверяет функцию определения Runner стратегий
+
+##### 5. **Обновлена документация**
+
+**Файлы:**
+- `docs/CHANGELOG.md`: Добавлена запись о метриках v1
+- `docs/VARIABLES_REFERENCE.md`: Добавлены `DEFAULT_CRITERIA_V1` и `DEFAULT_RUNNER_CRITERIA_V1`
+- `docs/RUNNER_COMPLETE_GUIDE.md`: Обновлена информация о `tail_contribution` (теперь считается по `realized_multiple >= 5x`) и критериях v1
+- `docs/PIPELINE_GUIDE.md`: Обновлены критерии по умолчанию и колонки в `strategy_stability.csv`
+
+#### 📊 Метрики v1
+
+##### Portfolio (portfolio_summary.csv)
+- ✅ `final_balance_sol`
+- ✅ `total_return_pct`
+- ✅ `max_drawdown_pct`
+- ✅ `trades_executed`
+- ✅ `trades_skipped_by_risk`
+- ✅ `trades_skipped_by_reset`
+- ✅ `reset_count`, `last_reset_time`, `cycle_start_equity`, `equity_peak_in_cycle`
+
+##### Stage A (strategy_stability.csv)
+- ✅ `survival_rate`
+- ✅ `worst_window_pnl`
+- ✅ `median_window_pnl`
+- ✅ `pnl_variance`
+- ✅ `windows_total`
+- ✅ Для Runner: `hit_rate_x2`, `hit_rate_x5`, `p90_hold_days`, `tail_contribution`
+
+##### Stage B (strategy_selection.csv)
+- ✅ `passed` (bool)
+- ✅ `failed_reasons` (список причин отказа)
+
+#### 🔧 Технические детали
+
+- Все изменения минимально-инвазивны (не меняют логику сделок и симуляции)
+- Используется существующая структура meta Runner (levels_hit/fractions_exited/realized_multiple)
+- Обратная совместимость сохранена (старые критерии доступны как `DEFAULT_CRITERIA` и `DEFAULT_RUNNER_CRITERIA`)
+- `tail_contribution` теперь корректно считается по `realized_multiple >= 5x` вместо top 5% сделок
+- Stage B по умолчанию использует v1 критерии для более строгого отбора стратегий
+
+#### 📝 Измененные файлы
+
+**Код:**
+- `backtester/research/strategy_stability.py` - исправлен расчет `tail_contribution`
+- `backtester/decision/selection_rules.py` - добавлены `DEFAULT_CRITERIA_V1` и `DEFAULT_RUNNER_CRITERIA_V1`
+- `backtester/decision/strategy_selector.py` - добавлена проверка `max_tail_contribution`
+- `backtester/decision/run_stage_b.py` - обновлен для использования v1 критериев по умолчанию
+
+**Тесты:**
+- `tests/test_metrics_v1.py` - новый файл с тестами для всех метрик v1
+
+**Документация:**
+- `docs/CHANGELOG.md` - добавлена запись о метриках v1
+- `docs/VARIABLES_REFERENCE.md` - добавлены критерии v1
+- `docs/RUNNER_COMPLETE_GUIDE.md` - обновлена информация о метриках
+
+---
+
 ## [Feature: Execution Profiles & Reason-based Slippage] - 2025-12-XX
 
 ### Execution Profiles с reason-based slippage multipliers

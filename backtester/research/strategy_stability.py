@@ -184,16 +184,42 @@ def calculate_runner_metrics(
     else:
         p90_hold_days = 0.0
     
-    # Вычисляем tail_contribution (доля PnL от top 5% сделок)
+    # Вычисляем tail_contribution (доля PnL от сделок с realized_multiple >= 5x)
     tail_contribution = 0.0
     if pnl_list:
         total_pnl = sum(pnl_list)
         if total_pnl > 0:
-            # Сортируем по убыванию PnL
-            sorted_pnls = sorted(pnl_list, reverse=True)
-            top_5_percent_count = max(1, int(len(sorted_pnls) * 0.05))
-            top_5_percent_pnl = sum(sorted_pnls[:top_5_percent_count])
-            tail_contribution = top_5_percent_pnl / total_pnl if total_pnl > 0 else 0.0
+            # Собираем PnL от сделок с realized_multiple >= 5x
+            tail_pnl = 0.0
+            for idx, row in trades_df.iterrows():
+                # Парсим meta для получения realized_multiple
+                meta_str = row.get("meta", "{}")
+                if isinstance(meta_str, str):
+                    try:
+                        meta = json.loads(meta_str)
+                    except (json.JSONDecodeError, ValueError):
+                        try:
+                            meta = ast.literal_eval(meta_str)
+                        except (ValueError, SyntaxError):
+                            meta = {}
+                else:
+                    meta = meta_str if isinstance(meta_str, dict) else {}
+                
+                # Проверяем realized_multiple (может быть в meta или meta_realized_multiple)
+                realized_multiple = meta.get("realized_multiple", row.get("meta_realized_multiple", 1.0))
+                if isinstance(realized_multiple, str):
+                    try:
+                        realized_multiple = float(realized_multiple)
+                    except (ValueError, TypeError):
+                        realized_multiple = 1.0
+                
+                # Если realized_multiple >= 5x, добавляем PnL этой сделки
+                if realized_multiple >= 5.0:
+                    pnl_val = row.get("pnl_pct", 0.0)
+                    if isinstance(pnl_val, (int, float)):
+                        tail_pnl += pnl_val
+            
+            tail_contribution = tail_pnl / total_pnl if total_pnl > 0 else 0.0
     
     # Загружаем max_drawdown_pct из portfolio_summary (если доступен)
     # Примечание: portfolio_summary обычно содержит одну строку на стратегию
@@ -464,6 +490,8 @@ def generate_stability_table_from_reports(
         save_detailed_windows_table(detailed_df, detailed_output_path)
     
     return stability_df
+
+
 
 
 
