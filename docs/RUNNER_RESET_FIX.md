@@ -141,3 +141,23 @@ exit_pnl_sol = exit_size * exit_pnl_pct
 - ❌ НЕ менять Stage A/B
 - ✅ Исправление только в PortfolioEngine (`backtester/domain/portfolio.py`)
 
+---
+
+## [2025-01-XX] Исправление потери reset-флагов
+
+### Проблема
+
+После предыдущего исправления была обнаружена проблема потери reset-флагов (`closed_by_reset`, `triggered_portfolio_reset`) при закрытии позиций. Флаги устанавливались в `_process_portfolio_level_reset()`, но терялись в финальном блоке закрытия из-за использования `pos.meta = pos.meta or {}`.
+
+### Решение
+
+1. **Добавлен helper `_ensure_meta(pos)`** - гарантирует существование `meta` без перезаписи
+2. **Удалены все `pos.meta = pos.meta or {}`** - заменены на `_ensure_meta()` + `update()`
+3. **Добавлена защита в критическом месте** - сохранение и восстановление reset-флагов при обновлении `meta`
+4. **Исправлен тест** - проверка reset как события, а не обязательного side-effect
+
+### Детали
+
+См. раздел "[Fix: Portfolio Reset Flags Preservation]" в `docs/CHANGELOG.md`.
+
+
