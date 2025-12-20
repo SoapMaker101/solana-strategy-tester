@@ -11,6 +11,12 @@ from typing import Any, Dict, List, Literal, Optional
 from .position import Position
 from .models import StrategyOutput
 from .execution_model import ExecutionProfileConfig, ExecutionModel
+from .portfolio_reset import (
+    PortfolioState,
+    PortfolioResetContext,
+    ResetReason,
+    apply_portfolio_reset,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +84,26 @@ class PortfolioStats:
     trades_executed: int
     trades_skipped_by_risk: int
     trades_skipped_by_reset: int = 0  # Сделки, пропущенные из-за runner reset
-    reset_count: int = 0  # Количество срабатываний portfolio-level reset
-    last_reset_time: Optional[datetime] = None  # Время последнего reset
+    
+    # Runner reset tracking (по XN)
+    runner_reset_count: int = 0  # Количество срабатываний runner reset (по XN)
+    last_runner_reset_time: Optional[datetime] = None  # Время последнего runner reset
+    
+    # Portfolio-level reset tracking (по equity threshold)
+    portfolio_reset_count: int = 0  # Количество срабатываний portfolio-level reset (по equity)
+    last_portfolio_reset_time: Optional[datetime] = None  # Время последнего portfolio-level reset
+    
+    # Обратная совместимость: reset_count означает portfolio-level reset
+    @property
+    def reset_count(self) -> int:
+        """Обратная совместимость: reset_count = portfolio_reset_count"""
+        return self.portfolio_reset_count
+    
+    @property
+    def last_reset_time(self) -> Optional[datetime]:
+        """Обратная совместимость: last_reset_time = last_portfolio_reset_time"""
+        return self.last_portfolio_reset_time
+    
     cycle_start_equity: float = 0.0  # Equity в начале текущего цикла
     equity_peak_in_cycle: float = 0.0  # Пик equity в текущем цикле
 
@@ -199,163 +223,34 @@ class PortfolioEngine:
         else:
             base = current_balance
         return max(0.0, base * self.config.percent_per_trade)
-
-    def _process_portfolio_level_reset(
+    
+    def _apply_reset(
         self,
-        trigger_pos: Position,
+        state: PortfolioState,
+        marker_position: Position,
         reset_time: datetime,
-        other_positions_to_force_close: List[Position],
-        balance: float,
-        equity_curve: List[Dict[str, Any]],
-        closed_positions: List[Position],
-        open_positions: List[Position],
-        cycle_start_equity: float,
-        equity_peak_in_cycle: float,
-        reset_count: int,
-        last_reset_time: Optional[datetime],
-        marker_pos: Optional[Position] = None,
-    ) -> Dict[str, Any]:
+        positions_to_force_close: List[Position],
+        reason: ResetReason,
+    ) -> None:
         """
-        Обрабатывает portfolio-level reset по equity threshold.
+        Helper-метод для применения reset к PortfolioState.
         
-        Поведение:
-        - Force-close все позиции из other_positions_to_force_close (pnl=0)
-        - Помечает marker_pos (или trigger_pos, если marker_pos=None) флагами:
-          closed_by_reset=True и triggered_portfolio_reset=True
-        - marker_pos НЕ должна быть force-closed - она либо уже закрыта, либо закроется нормально позже
-        - Увеличивает reset_count и обновляет tracking переменные
+        Это единственная точка в PortfolioEngine, где вызывается apply_portfolio_reset().
         
         Args:
-            trigger_pos: Позиция, которая вызвала reset (используется для определения времени reset)
-            marker_pos: Позиция, которая будет помечена флагами reset (должна быть в closed_positions
-                       или будет закрыта нормально позже). Если None, используется trigger_pos.
-            other_positions_to_force_close: Позиции, которые нужно принудительно закрыть (pnl=0)
-        
-        Returns:
-            Dict с обновленными значениями: balance, peak_balance, cycle_start_equity, 
-            equity_peak_in_cycle, reset_count, last_reset_time, open_positions
+            state: Состояние портфеля (изменяется in-place)
+            marker_position: Позиция-маркер для reset
+            reset_time: Время reset
+            positions_to_force_close: Позиции для принудительного закрытия
+            reason: Причина reset
         """
-        peak_balance = balance
-        
-        self._dbg(
-            "process_portfolio_level_reset_start",
+        context = PortfolioResetContext(
+            reason=reason,
             reset_time=reset_time,
-            trigger_pos=trigger_pos,
-            marker_pos=marker_pos,
-            other_positions_to_force_close=other_positions_to_force_close,
-            reset_count=reset_count,
-            cycle_start_equity=cycle_start_equity,
-            equity_peak_in_cycle=equity_peak_in_cycle,
-            balance=balance,
-            in_open=[p.signal_id for p in open_positions],
-            in_closed=[p.signal_id for p in closed_positions],
+            marker_position=marker_position,
+            positions_to_force_close=positions_to_force_close,
         )
-        
-        # 1. Если есть другие позиции для forced-close - закрываем их принудительно
-        if len(other_positions_to_force_close) > 0:
-            for other_pos in other_positions_to_force_close:
-                # Принудительное закрытие по exec_entry_price для правильного расчета баланса
-                effective_exit_price = other_pos.meta.get("exec_entry_price", other_pos.entry_price)
-                exit_pnl_pct = 0.0  # PnL = 0 для принудительного закрытия
-                exit_pnl_sol = 0.0
-                
-                # Применяем fees к возвращаемому нотионалу (только размер позиции)
-                notional_returned = other_pos.size
-                notional_after_fees = self.execution_model.apply_fees(notional_returned)
-                fees_total = notional_returned - notional_after_fees
-                network_fee_exit = self.execution_model.network_fee()
-                
-                # Возвращаем капитал
-                balance += notional_after_fees
-                balance -= network_fee_exit
-                
-                # Обновляем позицию (exit_price остается raw для проверки reset, exec цена в meta)
-                other_pos.exit_time = reset_time
-                other_pos.exit_price = other_pos.exit_price  # Сохраняем raw exit_price
-                m = self._ensure_meta(other_pos)
-                m["exec_exit_price"] = effective_exit_price
-                other_pos.pnl_pct = exit_pnl_pct
-                other_pos.status = "closed"
-                m.update({
-                    "pnl_sol": exit_pnl_sol,
-                    "fees_total_sol": fees_total,
-                    "closed_by_reset": True,
-                })
-                m["network_fee_sol"] = m.get("network_fee_sol", 0.0) + network_fee_exit
-                
-                self._dbg(
-                    "force_close_position",
-                    pos=other_pos,
-                    reset_time=reset_time,
-                )
-                
-                closed_positions.append(other_pos)
-                peak_balance = max(peak_balance, balance)
-                equity_curve.append({"timestamp": reset_time, "balance": balance})
-            
-            # Удаляем закрытые позиции из open_positions
-            open_positions = [p for p in open_positions if p not in other_positions_to_force_close]
-        
-        # 2. Определяем позицию для маркировки reset (marker position)
-        # marker_pos должна быть уже закрыта или будет закрыта нормально позже
-        # НЕ force-close marker_pos - только ставим флаги
-        marker_position = marker_pos if marker_pos is not None else trigger_pos
-        
-        # 3. Помечаем marker_position флагами reset
-        # Важно: marker_position должна быть уже в closed_positions или попадет туда при нормальном закрытии
-        self._dbg_meta(marker_position, "BEFORE_SETTING_FLAGS_in_process_portfolio_level_reset")
-        m = self._ensure_meta(marker_position)
-        m.update({
-            "closed_by_reset": True,
-            "triggered_portfolio_reset": True,
-        })
-        self._dbg_meta(marker_position, "AFTER_SETTING_FLAGS_in_process_portfolio_level_reset")
-        
-        self._dbg(
-            "marker_position_flagged",
-            marker_pos=marker_position,
-            reset_time=reset_time,
-        )
-        
-        # 4. Обновляем tracking переменные
-        old_reset_count = reset_count
-        reset_count += 1
-        
-        self._dbg(
-            "reset_count_incremented",
-            old_reset_count=old_reset_count,
-            new_reset_count=reset_count,
-            reset_time=reset_time,
-            marker_pos=marker_position,
-        )
-        if last_reset_time is None or (reset_time and reset_time > last_reset_time):
-            last_reset_time = reset_time
-        # Обновляем cycle_start_equity на текущую equity после reset
-        cycle_start_equity = balance
-        equity_peak_in_cycle = cycle_start_equity
-        
-        self._dbg(
-            "process_portfolio_level_reset_end",
-            reset_count=reset_count,
-            cycle_start_equity=cycle_start_equity,
-            equity_peak_in_cycle=equity_peak_in_cycle,
-            marker_pos=marker_position,
-            in_open=[p.signal_id for p in open_positions],
-            in_closed=[p.signal_id for p in closed_positions],
-        )
-        
-        # Финальная проверка marker_pos после установки флагов
-        self._dbg_meta(marker_position, "FINAL_CHECK_marker_pos_at_end_of_process_portfolio_level_reset")
-        
-        return {
-            "balance": balance,
-            "peak_balance": peak_balance,
-            "cycle_start_equity": cycle_start_equity,
-            "equity_peak_in_cycle": equity_peak_in_cycle,
-            "reset_count": reset_count,
-            "last_reset_time": last_reset_time,
-            "open_positions": open_positions,
-        }
+        apply_portfolio_reset(context, state, self.execution_model)
 
     def _process_runner_partial_exits(
         self,
@@ -638,27 +533,25 @@ class PortfolioEngine:
         # 2. Сортировка по entry_time
         trades.sort(key=lambda r: (r["result"].entry_time or datetime.min))  # type: ignore
 
-        balance = self.config.initial_balance_sol
-        peak_balance = balance
-
-        open_positions: List[Position] = []
-        closed_positions: List[Position] = []
-        equity_curve: List[Dict[str, Any]] = []
+        # Инициализация состояния портфеля
+        initial_balance = self.config.initial_balance_sol
+        state = PortfolioState(
+            balance=initial_balance,
+            peak_balance=initial_balance,
+            open_positions=[],
+            closed_positions=[],
+            equity_curve=[],
+            cycle_start_equity=initial_balance,  # Начало цикла = начальный баланс
+            equity_peak_in_cycle=initial_balance,  # Пик equity в текущем цикле
+        )
 
         # стартовая точка equity-кривой
         first_time = trades[0]["result"].entry_time  # type: ignore
         if first_time:
-            equity_curve.append({"timestamp": first_time, "balance": balance})
+            state.equity_curve.append({"timestamp": first_time, "balance": state.balance})
 
         skipped_by_risk = 0
         skipped_by_reset = 0
-        reset_until: Optional[datetime] = None  # Время, до которого игнорируем входы после reset
-        
-        # Portfolio-level reset tracking
-        reset_count = 0
-        last_reset_time: Optional[datetime] = None
-        cycle_start_equity = balance  # Начало цикла = начальный баланс
-        equity_peak_in_cycle = balance  # Пик equity в текущем цикле
 
         for row in trades:
             out: StrategyOutput = row["result"]
@@ -667,8 +560,7 @@ class PortfolioEngine:
             
             # Обновляем equity_peak_in_cycle перед обработкой (для portfolio-level reset tracking)
             if self.config.runner_reset_enabled:
-                current_equity = balance + sum(p.size for p in open_positions)
-                equity_peak_in_cycle = max(equity_peak_in_cycle, current_equity)
+                state.update_equity_peak()
 
             # 3. Закрываем позиции, у которых exit_time <= entry_time
             # Для Runner стратегий обрабатываем частичные выходы
@@ -678,7 +570,7 @@ class PortfolioEngine:
             
             # Первый проход: находим позиции, которые нужно закрыть, и проверяем reset
             positions_to_close_now: List[Position] = []
-            for pos in open_positions:
+            for pos in state.open_positions:
                 # Проверяем, является ли позиция Runner с частичными выходами
                 is_runner = pos.meta.get("runner_ladder", False)
                 
@@ -696,12 +588,12 @@ class PortfolioEngine:
                         partial_exits_processed = self._process_runner_partial_exits(
                             pos=pos,
                             current_time=entry_time,
-                            balance=balance,
-                            equity_curve=equity_curve,
-                            closed_positions=closed_positions,
+                            balance=state.balance,
+                            equity_curve=state.equity_curve,
+                            closed_positions=state.closed_positions,
                         )
-                        balance = partial_exits_processed["balance"]
-                        peak_balance = max(peak_balance, balance)
+                        state.balance = partial_exits_processed["balance"]
+                        state.peak_balance = max(state.peak_balance, state.balance)
                     
                     # Если позиция полностью закрыта (size <= 0), удаляем из open
                     if pos.size <= 1e-9:  # Учитываем погрешности float
@@ -725,72 +617,35 @@ class PortfolioEngine:
                             if multiplying_return >= self.config.runner_reset_multiple:
                                 trigger_position = pos
                                 reset_time_current = pos.exit_time
-                                # Помечаем триггерную позицию
-                                m = self._ensure_meta(pos)
-                                m["triggered_reset"] = True
+                                # Флаг triggered_reset будет установлен в _apply_reset()
                 else:
                     still_open.append(pos)
             
             # Второй проход: закрываем позиции, которые должны закрыться
-            # Если есть reset, сначала закрываем все остальные открытые позиции
+            # Если есть runner reset по XN, применяем его через новый механизм
             if trigger_position is not None and reset_time_current is not None:
-                # Закрываем все остальные открытые позиции (кроме триггерной)
-                for other_pos in still_open:
-                    if other_pos.signal_id != trigger_position.signal_id:
-                        # Принудительное закрытие по exec_entry_price для правильного расчета баланса
-                        effective_exit_price = other_pos.meta.get("exec_entry_price", other_pos.entry_price)
-                        exit_pnl_pct = 0.0  # PnL = 0 для принудительного закрытия
-                        exit_pnl_sol = 0.0
-                        
-                        # Применяем fees к возвращаемому нотионалу (только размер позиции)
-                        notional_returned = other_pos.size
-                        notional_after_fees = self.execution_model.apply_fees(notional_returned)
-                        fees_total = notional_returned - notional_after_fees
-                        network_fee_exit = self.execution_model.network_fee()
-                        
-                        # Возвращаем капитал
-                        balance += notional_after_fees
-                        balance -= network_fee_exit
-                        
-                        # Обновляем позицию (exit_price остается raw для проверки reset, exec цена в meta)
-                        other_pos.exit_time = reset_time_current
-                        other_pos.exit_price = other_pos.exit_price  # Сохраняем raw exit_price
-                        m = self._ensure_meta(other_pos)
-                        m["exec_exit_price"] = effective_exit_price  # Исполненная цена в meta
-                        other_pos.pnl_pct = exit_pnl_pct
-                        other_pos.status = "closed"
-                        m.update({
-                            "pnl_sol": exit_pnl_sol,
-                            "fees_total_sol": fees_total,
-                            "closed_by_reset": True,
-                        })
-                        m["network_fee_sol"] = m.get("network_fee_sol", 0.0) + network_fee_exit
-                        
-                        self._dbg(
-                            "runner_reset_force_close",
-                            pos=other_pos,
-                            reset_time=reset_time_current,
-                            trigger_pos=trigger_position,
-                        )
-                        
-                        closed_positions.append(other_pos)
-                        peak_balance = max(peak_balance, balance)
-                        if reset_time_current:
-                            equity_curve.append({"timestamp": reset_time_current, "balance": balance})
+                # Формируем список позиций для принудительного закрытия (кроме триггерной)
+                positions_to_force_close = [
+                    p for p in still_open 
+                    if p.signal_id != trigger_position.signal_id
+                ]
                 
-                # Удаляем закрытые позиции из still_open (триггерная позиция останется в positions_to_close_now)
+                # Применяем runner reset через единый механизм
+                self._apply_reset(
+                    state=state,
+                    marker_position=trigger_position,
+                    reset_time=reset_time_current,
+                    positions_to_force_close=positions_to_force_close,
+                    reason=ResetReason.RUNNER_XN,
+                )
+                
+                # Обновляем still_open после reset
                 still_open = [p for p in still_open if p.status != "closed"]
-                
-                # Устанавливаем reset_until для игнорирования входов ПОСЛЕ reset
-                reset_until = reset_time_current
-                old_reset_count = reset_count
-                reset_count += 1
-                last_reset_time = reset_time_current
                 
                 self._dbg(
                     "runner_reset_count_incremented",
-                    old_reset_count=old_reset_count,
-                    new_reset_count=reset_count,
+                    old_reset_count=state.runner_reset_count - 1,
+                    new_reset_count=state.runner_reset_count,
                     reset_time=reset_time_current,
                     trigger_pos=trigger_position,
                 )
@@ -798,7 +653,7 @@ class PortfolioEngine:
             # Проверка: игнорируем входы до следующего сигнала после reset
             # Должна быть ПОСЛЕ обработки закрытий позиций, когда reset_until уже может быть установлен
             # Reset должен влиять на сделки, которые начинаются в момент reset или раньше (entry_time <= reset_until)
-            if self.config.runner_reset_enabled and reset_until is not None and entry_time <= reset_until:
+            if self.config.runner_reset_enabled and state.reset_until is not None and entry_time <= state.reset_until:
                 skipped_by_reset += 1
                 continue
             
@@ -816,8 +671,8 @@ class PortfolioEngine:
                 notional_after_fees = self.execution_model.apply_fees(notional_returned)
                 fees_total = notional_returned - notional_after_fees
                 
-                balance += notional_after_fees  # Возвращаем размер + PnL минус fees
-                balance -= network_fee_exit  # Network fee при выходе
+                state.balance += notional_after_fees  # Возвращаем размер + PnL минус fees
+                state.balance -= network_fee_exit  # Network fee при выходе
                 m = self._ensure_meta(pos)
                 m.update({
                     "pnl_sol": trade_pnl_sol,
@@ -827,68 +682,52 @@ class PortfolioEngine:
                 m["network_fee_sol"] = m.get("network_fee_sol", 0.0) + network_fee_exit
                 
                 pos.status = "closed"
-                closed_positions.append(pos)
+                state.closed_positions.append(pos)
                 last_closed_position = pos  # Сохраняем для возможного использования в portfolio-level reset
 
-                peak_balance = max(peak_balance, balance)
+                state.peak_balance = max(state.peak_balance, state.balance)
                 if pos.exit_time:
-                    equity_curve.append(
-                        {"timestamp": pos.exit_time, "balance": balance}
+                    state.equity_curve.append(
+                        {"timestamp": pos.exit_time, "balance": state.balance}
                     )
                 
                 # Обновляем equity_peak_in_cycle после закрытия позиции (для portfolio-level reset)
                 if self.config.runner_reset_enabled:
-                    current_equity = balance + sum(p.size for p in open_positions if p.signal_id != pos.signal_id)
-                    equity_peak_in_cycle = max(equity_peak_in_cycle, current_equity)
+                    state.update_equity_peak()
                     
                     # Проверка portfolio-level reset по equity (независимо от runner reset по XN)
-                    reset_threshold = cycle_start_equity * self.config.runner_reset_multiple
-                    if equity_peak_in_cycle >= reset_threshold:
+                    reset_threshold = state.cycle_start_equity * self.config.runner_reset_multiple
+                    if state.equity_peak_in_cycle >= reset_threshold:
                         # Формируем список позиций для принудительного закрытия (кроме уже закрытой)
                         positions_to_force_close = [
-                            p for p in open_positions 
+                            p for p in state.open_positions 
                             if p.signal_id != pos.signal_id and p.status == "open" and not p.meta.get("closed_by_reset")
                         ]
                         
-                        # Используем helper-функцию для обработки portfolio-level reset
+                        # Используем новый метод для обработки portfolio-level reset
                         # pos уже закрыта и в closed_positions - используем её как marker
                         reset_time_portfolio = pos.exit_time if pos.exit_time else datetime.now(timezone.utc)
-                        reset_result = self._process_portfolio_level_reset(
-                            trigger_pos=pos,
+                        self._apply_reset(
+                            state=state,
+                            marker_position=pos,  # pos уже закрыта, используем как marker
                             reset_time=reset_time_portfolio,
-                            other_positions_to_force_close=positions_to_force_close,
-                            balance=balance,
-                            equity_curve=equity_curve,
-                            closed_positions=closed_positions,
-                            open_positions=open_positions,
-                            cycle_start_equity=cycle_start_equity,
-                            equity_peak_in_cycle=equity_peak_in_cycle,
-                            reset_count=reset_count,
-                            last_reset_time=last_reset_time,
-                            marker_pos=pos,  # pos уже закрыта, используем как marker
+                            positions_to_force_close=positions_to_force_close,
+                            reason=ResetReason.EQUITY_THRESHOLD,
                         )
                         self._dbg_meta(pos, "AFTER_process_portfolio_level_reset_line_846_main_loop")
-                        balance = reset_result["balance"]
-                        peak_balance = max(peak_balance, reset_result["peak_balance"])
-                        cycle_start_equity = reset_result["cycle_start_equity"]
-                        equity_peak_in_cycle = reset_result["equity_peak_in_cycle"]
-                        reset_count = reset_result["reset_count"]
-                        last_reset_time = reset_result["last_reset_time"]
-                        open_positions = reset_result["open_positions"]
             
-            open_positions = still_open
+            state.open_positions = still_open
             
             # Обновляем equity_peak_in_cycle после обработки позиций
-            current_equity = balance + sum(p.size for p in open_positions)
-            equity_peak_in_cycle = max(equity_peak_in_cycle, current_equity)
+            state.update_equity_peak()
             
             # Проверка portfolio-level reset по equity (независимо от runner reset по XN)
             # Если equity_peak_in_cycle >= cycle_start_equity * runner_reset_multiple, закрываем все позиции
             if self.config.runner_reset_enabled:
-                reset_threshold = cycle_start_equity * self.config.runner_reset_multiple
-                if equity_peak_in_cycle >= reset_threshold:
+                reset_threshold = state.cycle_start_equity * self.config.runner_reset_multiple
+                if state.equity_peak_in_cycle >= reset_threshold:
                     # Формируем список позиций для принудительного закрытия
-                    positions_to_force_close = [p for p in open_positions if p.status == "open"]
+                    positions_to_force_close = [p for p in state.open_positions if p.status == "open"]
                     
                     reset_time_portfolio = entry_time  # Используем текущее время события
                     
@@ -899,57 +738,40 @@ class PortfolioEngine:
                     if last_closed_position is not None:
                         # Используем последнюю закрытую позицию как marker
                         marker_position = last_closed_position
-                        trigger_pos_for_reset = last_closed_position
                         other_positions_to_force_close = positions_to_force_close
                     elif positions_to_force_close:
                         # Нет закрытых позиций, но есть открытые - используем первую открытую как marker
                         marker_position = positions_to_force_close[0]
-                        trigger_pos_for_reset = positions_to_force_close[0]
                         # Исключаем marker из списка forced-close (она будет закрыта нормально позже)
                         other_positions_to_force_close = [p for p in positions_to_force_close if p.signal_id != marker_position.signal_id]
                     else:
                         # Нет ни закрытых, ни открытых позиций - skip reset (не должно происходить, но на всякий случай)
                         marker_position = None
-                        trigger_pos_for_reset = None
                     
                     # Выполняем reset только если есть позиция для marker
-                    if marker_position is not None and trigger_pos_for_reset is not None:
-                        reset_result = self._process_portfolio_level_reset(
-                            trigger_pos=trigger_pos_for_reset,
+                    if marker_position is not None:
+                        self._apply_reset(
+                            state=state,
+                            marker_position=marker_position,
                             reset_time=reset_time_portfolio,
-                            other_positions_to_force_close=other_positions_to_force_close,
-                            balance=balance,
-                            equity_curve=equity_curve,
-                            closed_positions=closed_positions,
-                            open_positions=open_positions,
-                            cycle_start_equity=cycle_start_equity,
-                            equity_peak_in_cycle=equity_peak_in_cycle,
-                            reset_count=reset_count,
-                            last_reset_time=last_reset_time,
-                            marker_pos=marker_position,
+                            positions_to_force_close=other_positions_to_force_close,
+                            reason=ResetReason.EQUITY_THRESHOLD,
                         )
                         if marker_position is not None:
                             self._dbg_meta(marker_position, "AFTER_process_portfolio_level_reset_line_911_main_loop_last_closed")
-                        balance = reset_result["balance"]
-                        peak_balance = max(peak_balance, reset_result["peak_balance"])
-                        cycle_start_equity = reset_result["cycle_start_equity"]
-                        equity_peak_in_cycle = reset_result["equity_peak_in_cycle"]
-                        reset_count = reset_result["reset_count"]
-                        last_reset_time = reset_result["last_reset_time"]
-                        open_positions = reset_result["open_positions"]
 
 
             # 4. Проверка лимитов портфеля
 
             # лимит по количеству позиций
-            if len(open_positions) >= self.config.max_open_positions:
+            if len(state.open_positions) >= self.config.max_open_positions:
                 skipped_by_risk += 1
                 continue
 
             # текущая экспозиция (учитываем, что баланс уже уменьшен на открытые позиции)
-            total_open_notional = sum(p.size for p in open_positions)
+            total_open_notional = sum(p.size for p in state.open_positions)
             # Доступный баланс = текущий баланс (уже уменьшенный на открытые позиции)
-            available_balance = balance
+            available_balance = state.balance
             
             # В fixed mode total_capital должен быть равен initial_balance_sol,
             # так как размер позиции рассчитывается от начального баланса.
@@ -1027,8 +849,8 @@ class PortfolioEngine:
             net_pnl_pct = effective_pnl_pct
             
             # 6. Вычитаем размер позиции и network fee из баланса при открытии
-            balance -= size  # Платим полный размер позиции
-            balance -= network_fee  # Network fee при входе
+            state.balance -= size  # Платим полный размер позиции
+            state.balance -= network_fee  # Network fee при входе
             
             # 7. Создаем Position с эффективными ценами
             # Проверяем, является ли стратегия Runner
@@ -1075,14 +897,14 @@ class PortfolioEngine:
                 status="open",
                 meta=pos_meta,
             )
-            open_positions.append(pos)
+            state.open_positions.append(pos)
             
             # Обновляем equity curve при открытии позиции
-            equity_curve.append({"timestamp": entry_time, "balance": balance})
+            state.equity_curve.append({"timestamp": entry_time, "balance": state.balance})
 
         # 8. Закрываем все оставшиеся открытые позиции
         # Сортируем позиции по exit_time для корректной обработки reset
-        positions_to_close = sorted([p for p in open_positions if p.exit_time is not None], 
+        positions_to_close = sorted([p for p in state.open_positions if p.exit_time is not None], 
                                    key=lambda p: p.exit_time if p.exit_time else datetime.max)
         
         # Обрабатываем позиции по времени закрытия, проверяя reset
@@ -1096,12 +918,12 @@ class PortfolioEngine:
                     partial_result = self._process_runner_partial_exits(
                         pos=pos,
                         current_time=pos.exit_time,
-                        balance=balance,
-                        equity_curve=equity_curve,
-                        closed_positions=closed_positions,
+                        balance=state.balance,
+                        equity_curve=state.equity_curve,
+                        closed_positions=state.closed_positions,
                     )
-                    balance = partial_result["balance"]
-                    peak_balance = max(peak_balance, balance)
+                    state.balance = partial_result["balance"]
+                    state.peak_balance = max(state.peak_balance, state.balance)
                     
                     # Если позиция уже закрыта частичными выходами, пропускаем
                     if pos.size <= 1e-9:
@@ -1113,43 +935,28 @@ class PortfolioEngine:
             
             # Обновляем equity_peak_in_cycle перед закрытием позиции (для portfolio-level reset)
             if self.config.runner_reset_enabled:
-                current_equity = balance + sum(p.size for p in open_positions if p.signal_id != pos.signal_id)
-                equity_peak_in_cycle = max(equity_peak_in_cycle, current_equity)
+                state.update_equity_peak()
                 
                 # Проверка portfolio-level reset по equity (независимо от runner reset по XN)
-                reset_threshold = cycle_start_equity * self.config.runner_reset_multiple
-                if equity_peak_in_cycle >= reset_threshold:
+                reset_threshold = state.cycle_start_equity * self.config.runner_reset_multiple
+                if state.equity_peak_in_cycle >= reset_threshold:
                     # Формируем список позиций для принудительного закрытия (кроме той, которую уже закрываем)
                     positions_to_force_close = [
-                        p for p in open_positions 
+                        p for p in state.open_positions 
                         if p.signal_id != pos.signal_id and p.status == "open" and not p.meta.get("closed_by_reset")
                     ]
                     
-                    # Используем helper-функцию для обработки portfolio-level reset
+                    # Используем новый метод для обработки portfolio-level reset
                     # pos еще открыта, но будет закрыта нормально сразу после этого - используем её как marker
                     reset_time_portfolio = pos.exit_time if pos.exit_time else datetime.now(timezone.utc)
-                    reset_result = self._process_portfolio_level_reset(
-                        trigger_pos=pos,
+                    self._apply_reset(
+                        state=state,
+                        marker_position=pos,  # pos будет закрыта нормально, используем как marker
                         reset_time=reset_time_portfolio,
-                        other_positions_to_force_close=positions_to_force_close,
-                        balance=balance,
-                        equity_curve=equity_curve,
-                        closed_positions=closed_positions,
-                        open_positions=open_positions,
-                        cycle_start_equity=cycle_start_equity,
-                        equity_peak_in_cycle=equity_peak_in_cycle,
-                        reset_count=reset_count,
-                        last_reset_time=last_reset_time,
-                        marker_pos=pos,  # pos будет закрыта нормально, используем как marker
+                        positions_to_force_close=positions_to_force_close,
+                        reason=ResetReason.EQUITY_THRESHOLD,
                     )
                     self._dbg_meta(pos, "AFTER_process_portfolio_level_reset_line_1118_final_close")
-                    balance = reset_result["balance"]
-                    peak_balance = max(peak_balance, reset_result["peak_balance"])
-                    cycle_start_equity = reset_result["cycle_start_equity"]
-                    equity_peak_in_cycle = reset_result["equity_peak_in_cycle"]
-                    reset_count = reset_result["reset_count"]
-                    last_reset_time = reset_result["last_reset_time"]
-                    open_positions = reset_result["open_positions"]
             
             # Проверка runner reset: если позиция достигает XN, закрываем все остальные открытые позиции
             # Проверяем по raw ценам, а не по effective (slippage не должен влиять на XN)
@@ -1162,63 +969,24 @@ class PortfolioEngine:
                     if multiplying_return >= self.config.runner_reset_multiple:
                         should_trigger_reset = True
                         reset_time_final = pos.exit_time
-                        # Помечаем триггерную позицию
-                        m = self._ensure_meta(pos)
-                        m["triggered_reset"] = True
+                        # Флаг triggered_reset будет установлен в _apply_reset()
                         
-                        # Закрываем все остальные открытые позиции
+                        # Закрываем все остальные открытые позиции через новый механизм
                         other_positions = [p for p in positions_to_close if p.signal_id != pos.signal_id and not p.meta.get("closed_by_reset")]
-                        for other_pos in other_positions:
-                            # Принудительное закрытие по exec_entry_price для правильного расчета баланса
-                            effective_exit_price = other_pos.meta.get("exec_entry_price", other_pos.entry_price)
-                            exit_pnl_pct = 0.0  # PnL = 0 для принудительного закрытия
-                            exit_pnl_sol = 0.0
-                            
-                            # Применяем fees к возвращаемому нотионалу (только размер позиции)
-                            notional_returned = other_pos.size
-                            notional_after_fees = self.execution_model.apply_fees(notional_returned)
-                            fees_total = notional_returned - notional_after_fees
-                            network_fee_exit = self.execution_model.network_fee()
-                            
-                            # Возвращаем капитал
-                            balance += notional_after_fees
-                            balance -= network_fee_exit
-                            
-                            # Обновляем позицию (exit_price остается raw для проверки reset, exec цена в meta)
-                            other_pos.exit_time = reset_time_final
-                            other_pos.exit_price = other_pos.exit_price  # Сохраняем raw exit_price
-                            m = self._ensure_meta(other_pos)
-                            m["exec_exit_price"] = effective_exit_price  # Исполненная цена в meta
-                            other_pos.pnl_pct = exit_pnl_pct
-                            other_pos.status = "closed"
-                            m.update({
-                                "pnl_sol": exit_pnl_sol,
-                                "fees_total_sol": fees_total,
-                                "closed_by_reset": True,
-                            })
-                            m["network_fee_sol"] = m.get("network_fee_sol", 0.0) + network_fee_exit
-                            
-                            self._dbg(
-                                "runner_reset_final_force_close",
-                                pos=other_pos,
-                                reset_time=reset_time_final,
-                                trigger_pos=pos,
-                            )
-                            
-                            closed_positions.append(other_pos)
-                            peak_balance = max(peak_balance, balance)
-                            if reset_time_final:
-                                equity_curve.append({"timestamp": reset_time_final, "balance": balance})
                         
-                        old_reset_count = reset_count
-                        reset_count += 1
-                        if last_reset_time is None or (reset_time_final and reset_time_final > last_reset_time):
-                            last_reset_time = reset_time_final
+                        # Применяем runner reset через единый механизм
+                        self._apply_reset(
+                            state=state,
+                            marker_position=pos,
+                            reset_time=reset_time_final,
+                            positions_to_force_close=other_positions,
+                            reason=ResetReason.RUNNER_XN,
+                        )
                         
                         self._dbg(
                             "runner_reset_final_count_incremented",
-                            old_reset_count=old_reset_count,
-                            new_reset_count=reset_count,
+                            old_reset_count=state.runner_reset_count - 1,
+                            new_reset_count=state.runner_reset_count,
                             reset_time=reset_time_final,
                             trigger_pos=pos,
                         )
@@ -1236,8 +1004,8 @@ class PortfolioEngine:
             notional_after_exit_fees = self.execution_model.apply_fees(notional_after_entry_fees)
             fees_total = notional_returned - notional_after_exit_fees
             
-            balance += notional_after_exit_fees  # Возвращаем размер + PnL минус fees (round-trip)
-            balance -= network_fee_exit  # Network fee при выходе
+            state.balance += notional_after_exit_fees  # Возвращаем размер + PnL минус fees (round-trip)
+            state.balance -= network_fee_exit  # Network fee при выходе
             
             # КРИТИЧЕСКОЕ МЕСТО: используем _ensure_meta чтобы НЕ потерять reset-флаги
             # НЕ создаем новый dict, только обновляем существующий
@@ -1259,24 +1027,24 @@ class PortfolioEngine:
             m["network_fee_sol"] = m.get("network_fee_sol", 0.0) + network_fee_exit
             
             pos.status = "closed"
-            closed_positions.append(pos)
+            state.closed_positions.append(pos)
 
-            peak_balance = max(peak_balance, balance)
+            state.peak_balance = max(state.peak_balance, state.balance)
             if pos.exit_time:
-                equity_curve.append({"timestamp": pos.exit_time, "balance": balance})
+                state.equity_curve.append({"timestamp": pos.exit_time, "balance": state.balance})
 
         # 9. Сортируем equity curve по времени для корректного расчета drawdown
-        equity_curve.sort(key=lambda x: x["timestamp"] if x.get("timestamp") else datetime.min)
+        state.equity_curve.sort(key=lambda x: x["timestamp"] if x.get("timestamp") else datetime.min)
         
         # 10. Статистика
-        final_balance = balance
+        final_balance = state.balance
         total_return_pct = (final_balance - self.config.initial_balance_sol) / self.config.initial_balance_sol
 
         max_drawdown_pct = 0.0
-        if equity_curve:
-            peak = equity_curve[0]["balance"]
+        if state.equity_curve:
+            peak = state.equity_curve[0]["balance"]
             max_dd = 0.0
-            for point in equity_curve:
+            for point in state.equity_curve:
                 bal = point["balance"]
                 if bal > peak:
                     peak = bal
@@ -1286,45 +1054,47 @@ class PortfolioEngine:
             max_drawdown_pct = max_dd
 
         # Обновляем equity_peak_in_cycle для финального значения
-        final_equity = balance + sum(p.size for p in open_positions)
-        equity_peak_in_cycle = max(equity_peak_in_cycle, final_equity)
+        state.update_equity_peak()
         
         stats = PortfolioStats(
             final_balance_sol=final_balance,
             total_return_pct=total_return_pct,
             max_drawdown_pct=max_drawdown_pct,
-            trades_executed=len(closed_positions),
+            trades_executed=len(state.closed_positions),
             trades_skipped_by_risk=skipped_by_risk,
             trades_skipped_by_reset=skipped_by_reset,
-            reset_count=reset_count,
-            last_reset_time=last_reset_time,
-            cycle_start_equity=cycle_start_equity,
-            equity_peak_in_cycle=equity_peak_in_cycle,
+            runner_reset_count=state.runner_reset_count,
+            last_runner_reset_time=state.last_runner_reset_time,
+            portfolio_reset_count=state.portfolio_reset_count,
+            last_portfolio_reset_time=state.last_portfolio_reset_time,
+            cycle_start_equity=state.cycle_start_equity,
+            equity_peak_in_cycle=state.equity_peak_in_cycle,
         )
 
         # Все позиции помечаем closed для консистентности
-        for pos in closed_positions:
+        for pos in state.closed_positions:
             pos.status = "closed"
 
         # Логируем момент возврата результата
-        reset_positions = [p for p in closed_positions if p.meta.get("closed_by_reset", False)]
+        reset_positions = [p for p in state.closed_positions if p.meta.get("closed_by_reset", False)]
         self._dbg(
             "result_return",
-            positions_count=len(closed_positions),
+            positions_count=len(state.closed_positions),
             reset_positions_count=len(reset_positions),
             reset_positions_signal_ids=[p.signal_id for p in reset_positions],
-            reset_count=reset_count,
-            cycle_start_equity=cycle_start_equity,
-            equity_peak_in_cycle=equity_peak_in_cycle,
+            runner_reset_count=state.runner_reset_count,
+            portfolio_reset_count=state.portfolio_reset_count,
+            cycle_start_equity=state.cycle_start_equity,
+            equity_peak_in_cycle=state.equity_peak_in_cycle,
         )
         
         # Финальная проверка всех позиций перед возвратом
-        for pos in closed_positions:
+        for pos in state.closed_positions:
             self._dbg_meta(pos, f"FINAL_CHECK_before_return_signal_id={pos.signal_id}")
 
         return PortfolioResult(
-            equity_curve=equity_curve,
-            positions=closed_positions,
+            equity_curve=state.equity_curve,
+            positions=state.closed_positions,
             stats=stats,
         )
 
