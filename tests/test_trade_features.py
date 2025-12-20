@@ -14,6 +14,7 @@ from backtester.domain.rr_strategy import RRStrategy
 from backtester.domain.rrd_strategy import RRDStrategy
 from backtester.domain.runner_strategy import RunnerStrategy
 from backtester.domain.strategy_base import StrategyConfig
+from backtester.domain.runner_config import RunnerConfig, RunnerTakeProfitLevel
 from backtester.domain.models import StrategyInput
 
 
@@ -334,10 +335,19 @@ def test_rrd_strategy_includes_features_in_meta():
 
 def test_runner_strategy_includes_features_in_meta():
     """Проверка наличия features в meta для RunnerStrategy"""
-    config = StrategyConfig(
+    config = RunnerConfig(
         name="test_runner",
-        type="Runner",
-        params={}
+        type="RUNNER",
+        params={},
+        take_profit_levels=[
+            RunnerTakeProfitLevel(xn=2.0, fraction=0.5),
+            RunnerTakeProfitLevel(xn=5.0, fraction=0.3),
+            RunnerTakeProfitLevel(xn=10.0, fraction=0.2),
+        ],
+        time_stop_minutes=None,
+        use_high_for_targets=True,
+        exit_on_first_tp=False,
+        allow_partial_fills=True
     )
     strategy = RunnerStrategy(config)
     
@@ -384,11 +394,6 @@ def test_runner_strategy_includes_features_in_meta():
     assert "vol_sum_5m" in result.meta
     assert "vol_sum_15m" in result.meta
     assert "vol_sum_60m" in result.meta
-
-
-
-
-
 
 
 

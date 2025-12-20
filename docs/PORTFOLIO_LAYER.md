@@ -557,9 +557,12 @@ portfolio:
   - Добавлен DEBUG-лог с балансом, размером позиции, открытым нотионалом, total_capital и max_allowed_exposure
   - Помогает отлаживать проблемы с лимитами портфеля
 - [x] **Portfolio-level reset для Runner** (реализовано)
-  - Закрытие всех позиций при достижении порога: `equity >= cycle_start_equity * runner_reset_multiple`
-  - Обновление `cycle_start_equity` после reset
-  - Отслеживание метрик: `reset_count`, `last_reset_time`, `equity_peak_in_cycle`
+  - Закрытие всех позиций при достижении XN позицией: `raw_exit_price / raw_entry_price >= runner_reset_multiple`
+  - Reset проверяется **только при закрытии позиции** (exit_time), а не при открытии
+  - Проверка выполняется по **raw ценам** из StrategyOutput, а не по исполненным (с slippage)
+  - При срабатывании reset все открытые позиции закрываются принудительно с `meta["closed_by_reset"]=True`
+  - Отслеживание метрик: `reset_count`, `last_reset_time`, `trades_skipped_by_reset`
+  - **Важно:** `Position.entry_price` и `Position.exit_price` содержат raw цены, исполненные цены хранятся в `meta["exec_entry_price"]` и `meta["exec_exit_price"]`
 - [x] **Runner частичные выходы** (реализовано)
   - Обработка частичного закрытия позиций на разных уровнях TP
   - Применение slippage и fees к каждому частичному выходу
