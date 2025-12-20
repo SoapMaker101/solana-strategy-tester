@@ -92,9 +92,21 @@ def test_round_trip_realistic_profile():
     
     pos = result.positions[0]
     
-    # Проверяем что эффективные цены отличаются от исходных (slippage применен)
-    assert pos.entry_price > 1.0  # Entry slippage увеличивает цену
-    assert pos.exit_price < 1.0   # Exit slippage уменьшает цену
+    # Проверяем RAW цены (должны совпадать со StrategyOutput)
+    assert pos.entry_price == 1.0, f"entry_price должен быть RAW ценой (1.0), получено: {pos.entry_price}"
+    assert pos.exit_price == 1.0, f"exit_price должен быть RAW ценой (1.0), получено: {pos.exit_price}"
+    
+    # Проверяем исполненные цены (с slippage)
+    assert "exec_entry_price" in pos.meta
+    assert "exec_exit_price" in pos.meta
+    exec_entry_price = pos.meta["exec_entry_price"]
+    exec_exit_price = pos.meta["exec_exit_price"]
+    
+    # Entry slippage увеличивает цену (для long: платим больше)
+    assert exec_entry_price > 1.0, f"exec_entry_price должен быть больше raw (1.0), получено: {exec_entry_price}"
+    
+    # Exit slippage уменьшает цену (для long: получаем меньше)
+    assert exec_exit_price < 1.0, f"exec_exit_price должен быть меньше raw (1.0), получено: {exec_exit_price}"
     
     # Проверяем метаданные
     assert "slippage_entry_pct" in pos.meta
@@ -252,19 +264,42 @@ def test_slippage_applied_once():
     assert result.stats.trades_executed == 1
     pos = result.positions[0]
     
-    # Проверяем что slippage применен к ценам
-    assert pos.entry_price > 1.0  # Entry slippage
-    assert pos.exit_price < 1.05  # Exit slippage (TP multiplier 0.7)
+    # Проверяем RAW цены (должны совпадать со StrategyOutput)
+    assert pos.entry_price == 1.0, f"entry_price должен быть RAW ценой (1.0), получено: {pos.entry_price}"
+    assert pos.exit_price == 1.05, f"exit_price должен быть RAW ценой (1.05), получено: {pos.exit_price}"
     
-    # Проверяем метаданные
+    # Проверяем исполненные цены (с slippage)
+    assert "exec_entry_price" in pos.meta
+    assert "exec_exit_price" in pos.meta
+    exec_entry_price = pos.meta["exec_entry_price"]
+    exec_exit_price = pos.meta["exec_exit_price"]
+    
+    # Entry slippage увеличивает цену (для long: платим больше)
+    assert exec_entry_price > 1.0, f"exec_entry_price должен быть больше raw (1.0), получено: {exec_entry_price}"
+    
+    # Exit slippage уменьшает цену (для long: получаем меньше)
+    assert exec_exit_price < 1.05, f"exec_exit_price должен быть меньше raw (1.05), получено: {exec_exit_price}"
+    
+    # Проверяем метаданные slippage
     entry_slippage = pos.meta["slippage_entry_pct"]
     exit_slippage = pos.meta["slippage_exit_pct"]
     
     # Entry slippage должен быть ~3% (base * 1.0)
-    assert abs(entry_slippage - 0.03) < 0.001
+    assert abs(entry_slippage - 0.03) < 0.001, f"entry_slippage должен быть ~0.03, получено: {entry_slippage}"
     
     # Exit slippage для TP должен быть ~2.1% (base * 0.7)
-    assert abs(exit_slippage - 0.021) < 0.001
+    assert abs(exit_slippage - 0.021) < 0.001, f"exit_slippage должен быть ~0.021, получено: {exit_slippage}"
+    
+    # Проверяем, что slippage применен один раз:
+    # exec_entry_price = raw_entry_price * (1 + entry_slippage)
+    expected_exec_entry = 1.0 * (1 + entry_slippage)
+    assert abs(exec_entry_price - expected_exec_entry) < 0.0001, \
+        f"exec_entry_price должен быть raw * (1 + slippage) = {expected_exec_entry}, получено: {exec_entry_price}"
+    
+    # exec_exit_price = raw_exit_price * (1 - exit_slippage) для long
+    expected_exec_exit = 1.05 * (1 - exit_slippage)
+    assert abs(exec_exit_price - expected_exec_exit) < 0.0001, \
+        f"exec_exit_price должен быть raw * (1 - slippage) = {expected_exec_exit}, получено: {exec_exit_price}"
 
 
 def test_legacy_config_compatibility():
