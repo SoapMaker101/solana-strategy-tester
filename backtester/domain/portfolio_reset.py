@@ -50,7 +50,7 @@ class PortfolioResetContext:
         if self.marker_position is None:
             raise ValueError("marker_position не может быть None")
         
-        # Проверяем, что marker не в списке для force-close
+        # Проверяем, что marker не в списке для force-close (архитектурный инвариант)
         marker_id = self.marker_position.signal_id
         if any(p.signal_id == marker_id for p in self.positions_to_force_close):
             raise ValueError(
@@ -213,11 +213,19 @@ def apply_portfolio_reset(
         pos.status = "closed"
         
         # ВАЖНО: используем setdefault/update, никогда не присваиваем meta = ...
+        # Маппинг ResetReason -> каноническое значение для meta/CSV
+        reset_reason_str = {
+            ResetReason.EQUITY_THRESHOLD: "profit",
+            ResetReason.CAPACITY_PRESSURE: "capacity",
+            ResetReason.RUNNER_XN: "runner",
+            ResetReason.MANUAL: "manual",
+        }.get(context.reason, context.reason.value)
+        
         pos.meta.update({
             "pnl_sol": exit_pnl_sol,
             "fees_total_sol": fees_total,
             "closed_by_reset": True,
-            "reset_reason": context.reason.value,
+            "reset_reason": reset_reason_str,
         })
         pos.meta["network_fee_sol"] = pos.meta.get("network_fee_sol", 0.0) + network_fee_exit
         
@@ -243,10 +251,55 @@ def apply_portfolio_reset(
         marker.meta.setdefault("triggered_portfolio_reset", True)
         marker.meta.setdefault("reset_reason", "profit")
     elif context.reason == ResetReason.CAPACITY_PRESSURE:
-        # Portfolio-level capacity reset: marker помечается как триггер
-        marker.meta.setdefault("closed_by_reset", True)
-        marker.meta.setdefault("triggered_portfolio_reset", True)
-        marker.meta.setdefault("reset_reason", "capacity")
+        # Portfolio-level capacity reset: marker закрывается отдельно через market close
+        # (marker не в positions_to_force_close из-за архитектурного инварианта)
+        
+        # Закрываем marker через market close (как и остальные позиции)
+        raw_exit_price = get_mark_price_for_position(marker, context.reset_time)
+        effective_exit_price = execution_model.apply_exit(raw_exit_price, "manual")
+        
+        # Вычисляем PnL на основе исполненных цен (market close)
+        exec_entry_price = marker.meta.get("exec_entry_price", marker.entry_price)
+        exit_pnl_pct = (effective_exit_price - exec_entry_price) / exec_entry_price if exec_entry_price > 0 else 0.0
+        exit_pnl_sol = marker.size * exit_pnl_pct
+        
+        # Применяем fees к возвращаемому нотионалу
+        notional_returned = marker.size + exit_pnl_sol
+        notional_after_fees = execution_model.apply_fees(notional_returned)
+        fees_total = notional_returned - notional_after_fees
+        network_fee_exit = execution_model.network_fee()
+        
+        # Возвращаем капитал
+        state.balance += notional_after_fees
+        state.balance -= network_fee_exit
+        
+        # Обновляем позицию
+        marker.exit_time = context.reset_time
+        marker.exit_price = raw_exit_price  # Сохраняем raw цену
+        marker.meta.setdefault("exec_exit_price", effective_exit_price)
+        marker.pnl_pct = exit_pnl_pct
+        marker.status = "closed"
+        
+        # Устанавливаем флаги для marker (канонические значения)
+        marker.meta.update({
+            "pnl_sol": exit_pnl_sol,
+            "fees_total_sol": fees_total,
+            "closed_by_reset": True,
+            "triggered_portfolio_reset": True,
+            "reset_reason": "capacity",  # Каноническое значение для capacity reset
+        })
+        marker.meta["network_fee_sol"] = marker.meta.get("network_fee_sol", 0.0) + network_fee_exit
+        
+        # Добавляем marker в closed_positions
+        state.closed_positions.append(marker)
+        state.peak_balance = max(state.peak_balance, state.balance)
+        state.equity_curve.append({"timestamp": context.reset_time, "balance": state.balance})
+        
+        # Удаляем marker из open_positions
+        state.open_positions = [
+            p for p in state.open_positions 
+            if p.signal_id != marker.signal_id
+        ]
     elif context.reason == ResetReason.RUNNER_XN:
         # Runner XN reset: триггерная позиция НЕ имеет closed_by_reset (она закрывается нормально с прибылью)
         # Только остальные позиции force-close и получают closed_by_reset=True

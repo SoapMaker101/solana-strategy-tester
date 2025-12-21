@@ -1,5 +1,81 @@
 # Changelog
 
+## [Fix: Capacity Reset Marker Invariant] - 2025-01-XX
+
+### Исправление архитектурного инварианта marker в capacity reset
+
+#### 🎯 Цель изменений
+
+Исправлена проблема с нарушением архитектурного инварианта в `PortfolioResetContext`: marker позиция не должна находиться в `positions_to_force_close` ни при каком типе reset. Для capacity reset marker теперь закрывается отдельно через market close, сохраняя инвариант.
+
+#### 🐛 Проблема
+
+**Root Cause:** При capacity reset marker позиция включалась в `positions_to_force_close`, что нарушало архитектурный инвариант в `PortfolioResetContext.__post_init__`.
+
+**Симптомы:**
+- Тест `test_capacity_reset_triggers` падал с ошибкой: `ValueError: marker_position не должна быть в positions_to_force_close`
+- Marker позиция не закрывалась корректно при capacity reset
+
+#### ✨ Решение
+
+##### 1. **Исключение marker из positions_to_force_close**
+
+**Файл:** `backtester/domain/portfolio.py`
+
+**Изменения в `_check_capacity_reset()`:**
+```python
+# БЫЛО:
+positions_to_force_close = state.open_positions.copy()  # включал marker
+
+# СТАЛО:
+marker_position = state.open_positions[0]
+positions_to_force_close = [
+    p for p in state.open_positions
+    if p.signal_id != marker_position.signal_id  # marker исключен
+]
+```
+
+##### 2. **Отдельное закрытие marker через market close**
+
+**Файл:** `backtester/domain/portfolio_reset.py`
+
+**Изменения в `apply_portfolio_reset()`:**
+- Для capacity reset добавлено отдельное закрытие marker позиции через ExecutionModel
+- Marker закрывается с реалистичным PnL, slippage и fees (market close)
+- Marker получает правильные флаги: `closed_by_reset=True`, `triggered_portfolio_reset=True`, `reset_reason="capacity"`
+
+##### 3. **Восстановление строгой проверки инварианта**
+
+**Файл:** `backtester/domain/portfolio_reset.py`
+
+**Изменения в `PortfolioResetContext.__post_init__()`:**
+- Восстановлена строгая проверка: marker никогда не должен быть в `positions_to_force_close`
+- Инвариант сохранен для всех типов reset (capacity, profit, runner, manual)
+
+#### ✅ Инварианты после исправления
+
+1. **Архитектурный инвариант сохранен:** marker никогда не в `positions_to_force_close`
+2. **Capacity reset закрывает все позиции:** остальные через цикл, marker отдельно
+3. **Meta-флаги установлены корректно:**
+   - Для marker: `closed_by_reset=True`, `triggered_portfolio_reset=True`, `reset_reason="capacity"`
+   - Для остальных: `closed_by_reset=True`, `reset_reason="capacity"`
+4. **Market close через ExecutionModel:** все позиции закрываются с реалистичным PnL
+
+#### 📝 Измененные файлы
+
+- `backtester/domain/portfolio.py` - исключение marker из positions_to_force_close
+- `backtester/domain/portfolio_reset.py` - отдельное закрытие marker для capacity reset, восстановление строгой проверки
+
+#### 🧪 Тесты
+
+Все тесты проходят:
+```bash
+python -m pytest tests/portfolio/test_portfolio_capacity_reset.py::test_capacity_reset_triggers -q  # 1 passed
+python -m pytest tests/ -q  # 0 failed
+```
+
+---
+
 ## [Feature: Capacity-aware Portfolio Reset + Market Close + Dual Reporting] - v1.6 - 2025-01-XX
 
 ### Capacity Reset и Market Close для Portfolio Reset

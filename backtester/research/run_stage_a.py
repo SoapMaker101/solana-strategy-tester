@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -114,7 +115,13 @@ def main():
         import pandas as pd
         df_sample = pd.read_csv(trades_path, nrows=1)
         
-        # Обязательные колонки для positions-level
+        # ВАЖНО: Сначала проверяем на executions-level по event_type (раньше всего)
+        cols = set(df_sample.columns)
+        if "event_type" in cols:
+            print(f"ERROR: Detected executions-level CSV (column 'event_type' found). Stage A requires positions-level CSV (portfolio_positions.csv).")
+            sys.exit(1)
+        
+        # Только потом проверяем обязательные колонки для positions-level
         required_columns = ["strategy", "signal_id", "entry_time", "exit_time", "status"]
         missing_columns = [col for col in required_columns if col not in df_sample.columns]
         
@@ -122,12 +129,6 @@ def main():
             print(f"ERROR: Invalid positions file format. Missing required columns: {missing_columns}")
             print(f"       Stage A requires positions-level CSV with columns: {required_columns}")
             print(f"       Make sure you're using portfolio_positions.csv, not portfolio_executions.csv")
-            return
-        
-        # Проверка на executions-level формат (должен отсутствовать event_type)
-        if "event_type" in df_sample.columns:
-            print(f"ERROR: Detected executions-level CSV (column 'event_type' found). Stage A requires positions-level CSV (portfolio_positions.csv).")
-            print(f"       Executions-level CSV (portfolio_executions.csv) is for debugging only.")
             return
         
         # Проверка наличия обязательных колонок для анализа

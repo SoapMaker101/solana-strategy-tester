@@ -62,10 +62,10 @@ def test_capacity_reset_triggers():
     trades = []
     
     # Первые 2 сигнала - открываем позиции (портфель заполняется)
-    # Делаем их долгими, чтобы avg_hold_days стал большим
+    # Делаем их долгими, чтобы avg_hold_days стал большим (elapsed time)
     for i in range(2):
-        entry_time = base_time + timedelta(hours=i)
-        exit_time = entry_time + timedelta(days=1)  # Долгие позиции (1 день, чтобы avg_hold_days >= 0.5)
+        entry_time = base_time + timedelta(hours=i)  # 0h, 1h
+        exit_time = entry_time + timedelta(days=1)  # Долгие позиции (1 день)
         
         strategy_output = StrategyOutput(
             entry_time=entry_time,
@@ -88,8 +88,10 @@ def test_capacity_reset_triggers():
     # Нужно чтобы blocked_ratio >= 0.4 (40%)
     # Если window_size=5, то нужно минимум 2 отклоненных из 5 сигналов (2/5 = 0.4)
     # Создаем 3 отклоненных сигнала из 5, чтобы ratio = 3/5 = 0.6 >= 0.4
+    # ВАЖНО: Сдвигаем их так, чтобы прошло минимум 12+ часов от открытия первых позиций
+    # На 13-й час: позиция1 age ≈ 13h = 0.54 days, позиция2 age ≈ 12h = 0.50 days, avg ≈ 0.52 days >= 0.5 ✅
     for i in range(3):
-        entry_time = base_time + timedelta(hours=2+i)
+        entry_time = base_time + timedelta(hours=13+i)  # 13h, 14h, 15h (чтобы avg_hold_days >= 0.5)
         exit_time = entry_time + timedelta(hours=2)
         
         strategy_output = StrategyOutput(

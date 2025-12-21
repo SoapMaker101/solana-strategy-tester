@@ -257,6 +257,10 @@ portfolio:
 - Equity curve (кривая баланса)
 - **Portfolio-level reset (profit):** Закрытие всех позиций при достижении порога equity (market close)
 - **Capacity reset (v1.6):** Закрытие всех позиций при capacity pressure (портфель заполнен, мало закрытий, много отклонений)
+  - Все позиции закрываются через market close (ExecutionModel)
+  - Marker позиция исключается из `positions_to_force_close` (архитектурный инвариант) и закрывается отдельно
+  - Все закрытые позиции получают `closed_by_reset=True`, `reset_reason="capacity"`
+  - Marker дополнительно получает `triggered_portfolio_reset=True`
 - **Runner-XN reset:** Закрытие всех позиций при достижении позицией XN уровня
 - **Runner частичные выходы:** Обработка частичного закрытия позиций на разных уровнях TP
 - **Dual reporting (v1.6):** Positions-level и executions-level таблицы для разных целей анализа
@@ -573,6 +577,8 @@ portfolio:
 - [x] **Capacity reset (v1.6)** (реализовано)
   - Закрытие всех позиций при capacity pressure (портфель заполнен, много отклоненных сигналов, мало закрытий)
   - Независим от profit reset, имеет собственные счетчики: `portfolio_reset_capacity_count`
+  - **Архитектурный инвариант:** marker позиция исключается из `positions_to_force_close` и закрывается отдельно через market close
+  - Все закрытые позиции получают `closed_by_reset=True`, `reset_reason="capacity"`; marker дополнительно получает `triggered_portfolio_reset=True`
   - Закрытие происходит **market close** (по текущей цене через execution_model)
   - Триггеры: `open_ratio >= capacity_open_ratio_threshold`, `blocked_window >= capacity_blocked_signals_threshold`, `turnover_window <= capacity_min_turnover_threshold`
 - [x] **Runner-XN reset** (реализовано)

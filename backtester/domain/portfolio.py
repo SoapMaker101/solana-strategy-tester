@@ -311,7 +311,12 @@ class PortfolioEngine:
             return None  # Нет открытых позиций (не должно происходить)
         
         marker_position = state.open_positions[0]
-        positions_to_force_close = state.open_positions[1:] if len(state.open_positions) > 1 else []
+        # Исключаем marker из positions_to_force_close (архитектурный инвариант)
+        # Marker будет закрыт отдельно в apply_portfolio_reset
+        positions_to_force_close = [
+            p for p in state.open_positions
+            if p.signal_id != marker_position.signal_id
+        ]
         
         context = PortfolioResetContext(
             reason=ResetReason.CAPACITY_PRESSURE,
