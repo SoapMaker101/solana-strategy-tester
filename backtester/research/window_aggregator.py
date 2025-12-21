@@ -24,27 +24,97 @@ WINDOWS = {
 }
 
 
-def load_trades_csv(csv_path: Path) -> pd.DataFrame:
+def validate_trades_table(df: pd.DataFrame, csv_path: Optional[Path] = None) -> None:
+    """
+    Валидирует trades table для Stage A.
+    
+    Проверяет наличие required columns, парсинг entry_time/exit_time, наличие pnl_sol,
+    и что status==closed для всех строк.
+    
+    :param df: DataFrame с trades table
+    :param csv_path: Опциональный путь к CSV файлу (для сообщений об ошибках)
+    :raises ValueError: Если валидация не проходит
+    """
+    path_str = str(csv_path) if csv_path else "trades table"
+    
+    # Обязательные колонки для portfolio trades
+    required_cols = [
+        "strategy", "signal_id", "contract_address",
+        "entry_time", "exit_time", "status",
+        "pnl_sol",  # Обязательно! Это портфельный PnL
+        "exec_entry_price", "exec_exit_price",
+    ]
+    
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns in {path_str}: {missing_cols}")
+    
+    # Проверяем что entry_time/exit_time парсятся
+    try:
+        df["entry_time"] = pd.to_datetime(df["entry_time"], utc=True)
+        df["exit_time"] = pd.to_datetime(df["exit_time"], utc=True)
+    except Exception as e:
+        raise ValueError(f"Failed to parse entry_time/exit_time in {path_str}: {e}")
+    
+    # Проверяем что pnl_sol числовой
+    if not pd.api.types.is_numeric_dtype(df["pnl_sol"]):
+        raise ValueError(f"Column pnl_sol must be numeric in {path_str}")
+    
+    # Проверяем что status == "closed" для всех строк
+    if len(df) > 0:
+        invalid_status = df[df["status"] != "closed"]
+        if len(invalid_status) > 0:
+            raise ValueError(
+                f"Found {len(invalid_status)} rows with status != 'closed' in {path_str}. "
+                f"Stage A only processes executed (closed) trades."
+            )
+    
+    # Проверяем что entry_time и exit_time не пустые для закрытых позиций
+    if len(df) > 0:
+        missing_times = df[df["entry_time"].isna() | df["exit_time"].isna()]
+        if len(missing_times) > 0:
+            raise ValueError(
+                f"Found {len(missing_times)} rows with missing entry_time or exit_time in {path_str}"
+            )
+
+
+def load_trades_csv(csv_path: Path, validate: bool = True) -> pd.DataFrame:
     """
     Загружает trades table из CSV файла.
     
+    Для portfolio trades (executed) использует pnl_sol и обязательные колонки согласно Stage A requirements.
+    Для legacy strategy-level trades (deprecated) использует pnl_pct.
+    
     :param csv_path: Путь к CSV файлу с trades table.
-    :return: DataFrame с обязательными колонками: entry_time, exit_time, pnl_pct, reason.
+    :param validate: Если True, выполняет валидацию через validate_trades_table.
+    :return: DataFrame с обязательными колонками для portfolio trades или legacy trades.
     """
     if not csv_path.exists():
         raise FileNotFoundError(f"Trades CSV not found: {csv_path}")
     
     df = pd.read_csv(csv_path)
     
-    # Проверяем обязательные колонки
-    required_cols = ["entry_time", "exit_time", "pnl_pct", "reason"]
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        raise ValueError(f"Missing required columns in {csv_path}: {missing_cols}")
-    
-    # Конвертируем временные колонки в datetime
-    df["entry_time"] = pd.to_datetime(df["entry_time"], utc=True)
-    df["exit_time"] = pd.to_datetime(df["exit_time"], utc=True)
+    if validate:
+        # Определяем тип таблицы: portfolio trades или legacy strategy trades
+        has_pnl_sol = "pnl_sol" in df.columns
+        has_strategy = "strategy" in df.columns
+        
+        if has_pnl_sol and has_strategy:
+            # Это portfolio trades - используем строгую валидацию
+            validate_trades_table(df, csv_path)
+        else:
+            # Legacy mode: strategy-level trades (deprecated, но поддерживается для обратной совместимости)
+            required_cols = ["entry_time", "exit_time", "pnl_pct", "reason"]
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                raise ValueError(
+                    f"Missing required columns in {csv_path}: {missing_cols}. "
+                    f"For portfolio trades, use pnl_sol instead of pnl_pct."
+                )
+            
+            # Конвертируем временные колонки в datetime
+            df["entry_time"] = pd.to_datetime(df["entry_time"], utc=True)
+            df["exit_time"] = pd.to_datetime(df["exit_time"], utc=True)
     
     return df
 
@@ -53,7 +123,12 @@ def calculate_window_metrics(trades_df: pd.DataFrame) -> Dict[str, Any]:
     """
     Вычисляет метрики для окна сделок.
     
-    :param trades_df: DataFrame с колонками entry_time, exit_time, pnl_pct, reason.
+    Поддерживает два режима:
+    1. Portfolio trades (executed): использует pnl_sol (обязательно)
+    2. Legacy strategy trades: использует pnl_pct (deprecated, для обратной совместимости)
+    
+    :param trades_df: DataFrame с колонками entry_time, exit_time, и либо pnl_sol (для portfolio trades),
+                      либо pnl_pct (для legacy strategy trades).
     :return: Словарь с метриками.
     """
     if len(trades_df) == 0:
@@ -61,6 +136,7 @@ def calculate_window_metrics(trades_df: pd.DataFrame) -> Dict[str, Any]:
             "trades_count": 0,
             "winrate": 0.0,
             "total_pnl": 0.0,
+            "total_pnl_sol": 0.0,  # Для portfolio trades
             "median_pnl": 0.0,
             "max_drawdown": 0.0,
             "profit_factor": 0.0,
@@ -68,8 +144,17 @@ def calculate_window_metrics(trades_df: pd.DataFrame) -> Dict[str, Any]:
             "best_trade": 0.0,
         }
     
-    # pnl_pct в долях (0.1 = 10%)
-    pnls = trades_df["pnl_pct"].tolist()
+    # Определяем режим: portfolio trades (pnl_sol) или legacy (pnl_pct)
+    use_pnl_sol = "pnl_sol" in trades_df.columns
+    
+    if use_pnl_sol:
+        # Portfolio trades режим: используем pnl_sol (в SOL)
+        pnls = trades_df["pnl_sol"].tolist()
+        # Для обратной совместимости с существующим кодом, также вычисляем total_pnl как сумму pnl_sol
+        # Но это уже в SOL, не в процентах
+    else:
+        # Legacy режим: используем pnl_pct (в долях, 0.1 = 10%)
+        pnls = trades_df["pnl_pct"].tolist()
     
     # Базовые метрики
     trades_count = len(pnls)
@@ -95,16 +180,22 @@ def calculate_window_metrics(trades_df: pd.DataFrame) -> Dict[str, Any]:
     total_loss = abs(sum(losing_pnls)) if losing_pnls else 0.0
     profit_factor = total_profit / total_loss if total_loss > 0 else (float('inf') if total_profit > 0 else 0.0)
     
-    return {
+    result = {
         "trades_count": trades_count,
         "winrate": winrate,
-        "total_pnl": total_pnl,
+        "total_pnl": total_pnl,  # В legacy режиме это pnl_pct сумма, в portfolio режиме - pnl_sol сумма
         "median_pnl": median_pnl,
         "max_drawdown": max_drawdown,
         "profit_factor": profit_factor,
         "worst_trade": worst_trade,
         "best_trade": best_trade,
     }
+    
+    # Для portfolio trades добавляем явное поле total_pnl_sol
+    if use_pnl_sol:
+        result["total_pnl_sol"] = total_pnl
+    
+    return result
 
 
 def split_into_windows(
@@ -343,6 +434,8 @@ def aggregate_all_strategies(
             continue
     
     return result
+
+
 
 
 

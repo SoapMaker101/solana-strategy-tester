@@ -12,7 +12,10 @@ import numpy as np
 import json
 import ast
 
-from .window_aggregator import aggregate_all_strategies, WINDOWS, load_trades_csv
+from .window_aggregator import (
+    aggregate_all_strategies, WINDOWS, load_trades_csv,
+    split_into_equal_windows, calculate_window_metrics
+)
 
 
 def calculate_stability_metrics(
@@ -22,6 +25,10 @@ def calculate_stability_metrics(
     """
     Вычисляет показатели устойчивости стратегии на основе агрегированных окон.
     
+    Поддерживает два режима:
+    1. Portfolio trades: использует total_pnl_sol (если доступен) или total_pnl
+    2. Legacy strategy trades: использует total_pnl (pnl_pct сумма)
+    
     :param strategy_windows: Словарь {window_name: [window_info_dict, ...]}.
                             Каждый window_info_dict содержит window_index, window_start, window_end, metrics.
     :param split_n: Опциональное значение split_n для мульти-масштабного анализа.
@@ -29,6 +36,7 @@ def calculate_stability_metrics(
     :return: Словарь с показателями устойчивости.
     """
     # Собираем все total_pnl из всех окон (включая пустые окна)
+    # Используем total_pnl_sol если доступен (portfolio trades), иначе total_pnl (legacy)
     all_window_pnls = []
     
     # Если указан split_n, используем только соответствующее окно
@@ -38,14 +46,15 @@ def calculate_stability_metrics(
             window_list = strategy_windows[window_name]
             for window_info in window_list:
                 metrics = window_info.get("metrics", {})
-                total_pnl = metrics.get("total_pnl", 0.0)
+                # Для portfolio trades используем total_pnl_sol, для legacy - total_pnl
+                total_pnl = metrics.get("total_pnl_sol", metrics.get("total_pnl", 0.0))
                 all_window_pnls.append(total_pnl)
     else:
         # Старое поведение: собираем все окна (для legacy режима)
         for window_name, window_list in strategy_windows.items():
             for window_info in window_list:
                 metrics = window_info.get("metrics", {})
-                total_pnl = metrics.get("total_pnl", 0.0)
+                total_pnl = metrics.get("total_pnl_sol", metrics.get("total_pnl", 0.0))
                 all_window_pnls.append(total_pnl)
     
     if not all_window_pnls:
@@ -391,6 +400,9 @@ def build_detailed_windows_table(
                 for window_info in window_list:
                     metrics = window_info.get("metrics", {})
                     
+                    # Используем total_pnl_sol для portfolio trades, иначе total_pnl (legacy)
+                    window_pnl = metrics.get("total_pnl_sol", metrics.get("total_pnl", 0.0))
+                    
                     detailed_rows.append({
                         "strategy": strategy_name,
                         "split_count": split_n,
@@ -398,7 +410,7 @@ def build_detailed_windows_table(
                         "window_start": window_info.get("window_start"),
                         "window_end": window_info.get("window_end"),
                         "window_trades": metrics.get("trades_count", 0),
-                        "window_pnl": metrics.get("total_pnl", 0.0),
+                        "window_pnl": window_pnl,
                     })
     
     if not detailed_rows:
@@ -473,6 +485,127 @@ def generate_stability_table_from_reports(
         split_counts=split_counts,
         reports_dir=reports_dir
     )
+    
+    # Сохраняем если указан путь
+    if output_path is None:
+        output_path = reports_dir / "strategy_stability.csv"
+    
+    if len(stability_df) > 0:
+        save_stability_table(stability_df, output_path)
+    
+    # Генерируем детальную таблицу с окнами
+    if detailed_output_path is None:
+        detailed_output_path = reports_dir / "stage_a_summary.csv"
+    
+    detailed_df = build_detailed_windows_table(aggregated_strategies, split_counts=split_counts)
+    if len(detailed_df) > 0:
+        save_detailed_windows_table(detailed_df, detailed_output_path)
+    
+    return stability_df
+
+
+def generate_stability_table_from_portfolio_trades(
+    trades_path: Path,
+    reports_dir: Path,
+    output_path: Optional[Path] = None,
+    detailed_output_path: Optional[Path] = None,
+    split_counts: Optional[List[int]] = None,
+) -> pd.DataFrame:
+    """
+    Генерирует таблицу устойчивости из единого portfolio_trades.csv файла.
+    
+    Это основной метод для Stage A - работает на portfolio executed trades, а не на strategy-level trades.
+    
+    :param trades_path: Путь к portfolio_trades.csv файлу с исполненными портфельными сделками.
+    :param reports_dir: Директория для output файлов и опциональных дополнительных данных (например, portfolio_summary.csv).
+    :param output_path: Опциональный путь для сохранения CSV. Если None, сохраняется в reports_dir/strategy_stability.csv.
+    :param detailed_output_path: Опциональный путь для детального CSV с окнами. Если None, сохраняется в reports_dir/stage_a_summary.csv.
+    :param split_counts: Опциональный список значений split_n для мульти-масштабного анализа.
+                        Если None, используется DEFAULT_SPLITS.
+    :return: DataFrame с таблицей устойчивости.
+    """
+    from .window_aggregator import DEFAULT_SPLITS, validate_trades_table
+    
+    trades_path = Path(trades_path)
+    reports_dir = Path(reports_dir)
+    
+    if split_counts is None:
+        split_counts = DEFAULT_SPLITS
+    
+    print(f"[stage_a] Loading portfolio trades from: {trades_path}")
+    
+    # Загружаем и валидируем trades table
+    trades_df = load_trades_csv(trades_path, validate=True)
+    
+    print(f"[stage_a] Trades loaded: {len(trades_df)}")
+    
+    # Фильтруем только закрытые позиции (должно быть уже отфильтровано, но на всякий случай)
+    filtered_df = trades_df[trades_df["status"] == "closed"].copy()
+    removed_count = len(trades_df) - len(filtered_df)
+    if removed_count > 0:
+        print(f"[stage_a] Trades after filters (closed-only): {len(filtered_df)} (removed {removed_count} non-closed)")
+    
+    if len(filtered_df) == 0:
+        print(f"[stage_a] WARNING: No executed trades found in portfolio_trades.csv")
+        # Возвращаем пустой DataFrame с правильными колонками
+        columns = [
+            "strategy", "split_count", "survival_rate", "pnl_variance",
+            "worst_window_pnl", "best_window_pnl", "median_window_pnl",
+            "windows_positive", "windows_total", "trades_total",
+        ]
+        return pd.DataFrame({col: [] for col in columns})
+    
+    # Получаем уникальные стратегии
+    unique_strategies = filtered_df["strategy"].unique()
+    print(f"[stage_a] Strategies: {len(unique_strategies)} ({', '.join(unique_strategies)})")
+    print(f"[stage_a] Splits: {split_counts}")
+    
+    # Агрегируем по стратегиям
+    aggregated_strategies = {}
+    
+    for strategy_name in unique_strategies:
+        strategy_trades = filtered_df[filtered_df["strategy"] == strategy_name].copy()
+        
+        print(f"[stage_a] Strategy '{strategy_name}': {len(strategy_trades)} executed trades")
+        
+        # Агрегируем окна для этой стратегии
+        strategy_windows = {}
+        
+        for split_n in split_counts:
+            window_list = split_into_equal_windows(strategy_trades, split_n)
+            
+            window_infos = []
+            for window_info in window_list:
+                window_trades = window_info["trades"]
+                metrics = calculate_window_metrics(window_trades)
+                
+                window_infos.append({
+                    "window_index": window_info["window_index"],
+                    "window_start": window_info["window_start"],
+                    "window_end": window_info["window_end"],
+                    "metrics": metrics,
+                })
+            
+            window_name = f"split_{split_n}"
+            strategy_windows[window_name] = window_infos
+        
+        aggregated_strategies[strategy_name] = strategy_windows
+    
+    # Строим таблицу устойчивости
+    stability_df = build_stability_table(
+        aggregated_strategies,
+        split_counts=split_counts,
+        reports_dir=reports_dir,  # Для Runner метрик если нужно
+    )
+    
+    # Добавляем trades_total для каждой стратегии (общее количество исполненных сделок)
+    if len(stability_df) > 0:
+        trades_total_map = {}
+        for strategy_name in unique_strategies:
+            strategy_trades = filtered_df[filtered_df["strategy"] == strategy_name]
+            trades_total_map[strategy_name] = len(strategy_trades)
+        
+        stability_df["trades_total"] = stability_df["strategy"].map(trades_total_map).fillna(0).astype(int)
     
     # Сохраняем если указан путь
     if output_path is None:

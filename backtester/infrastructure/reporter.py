@@ -720,3 +720,121 @@ class Reporter:
         except Exception as e:
             print(f"[WARNING] Failed to plot portfolio equity curve: {e}")
             return None
+
+    def save_portfolio_trades_table(self, portfolio_results: Dict[str, Any]) -> None:
+        """
+        Сохраняет единую таблицу portfolio trades для всех стратегий в CSV.
+        
+        Это таблица исполненных портфельных сделок (executed trades), где каждая строка = закрытая позиция.
+        Используется Stage A для анализа устойчивости стратегий.
+        
+        Обязательные колонки:
+        - strategy: название стратегии
+        - signal_id: идентификатор сигнала
+        - contract_address: адрес контракта
+        - entry_time: время входа (ISO)
+        - exit_time: время выхода (ISO)
+        - status: статус (должен быть "closed")
+        - size: размер позиции в SOL
+        - pnl_sol: портфельный PnL в SOL (обязательно!)
+        - fees_total_sol: суммарные комиссии
+        - exec_entry_price: исполненная цена входа (с slippage)
+        - exec_exit_price: исполненная цена выхода (с slippage)
+        - raw_entry_price: сырая цена входа (без slippage, для диагностики)
+        - raw_exit_price: сырая цена выхода (без slippage)
+        - closed_by_reset: закрыта ли позиция по reset (bool)
+        - triggered_reset: триггернула ли reset (bool)
+        - triggered_portfolio_reset: триггернула ли portfolio-level reset (bool)
+        
+        :param portfolio_results: Словарь {strategy_name: PortfolioResult}
+        """
+        import pandas as pd
+        from ..domain.portfolio import PortfolioResult
+        
+        trades_rows = []
+        
+        for strategy_name, portfolio_result in portfolio_results.items():
+            if not isinstance(portfolio_result, PortfolioResult):
+                continue
+            
+            for pos in portfolio_result.positions:
+                # Включаем только закрытые позиции с валидными временами
+                if pos.status != "closed" or not pos.entry_time or not pos.exit_time:
+                    continue
+                
+                # Получаем pnl_sol из meta (должен быть обязательно для закрытых позиций)
+                pnl_sol = pos.meta.get("pnl_sol") if pos.meta else None
+                if pnl_sol is None:
+                    # Fallback: вычисляем если отсутствует
+                    # Но лучше гарантировать что reporter всегда пишет pnl_sol
+                    if pos.pnl_pct is not None:
+                        pnl_sol = pos.size * pos.pnl_pct
+                    else:
+                        pnl_sol = 0.0
+                
+                # Получаем исполненные цены из meta
+                exec_entry_price = pos.meta.get("exec_entry_price", pos.entry_price) if pos.meta else pos.entry_price
+                exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+                
+                # Получаем сырые цены
+                raw_entry_price = pos.meta.get("raw_entry_price", pos.entry_price) if pos.meta else pos.entry_price
+                raw_exit_price = pos.meta.get("raw_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+                
+                # Считаем комиссии
+                network_fee_sol = pos.meta.get("network_fee_sol", 0.0) if pos.meta else 0.0
+                # Полные комиссии включают network_fee при входе и выходе, плюс swap/lp fees
+                # Для простоты берем из meta если есть, иначе оцениваем
+                fees_total_sol = pos.meta.get("fees_total_sol")
+                if fees_total_sol is None:
+                    # Fallback: оцениваем через размер позиции и комиссии
+                    # Это приблизительно, но лучше чем ничего
+                    fees_total_sol = network_fee_sol * 2  # вход + выход
+                
+                # Флаги reset
+                closed_by_reset = pos.meta.get("closed_by_reset", False) if pos.meta else False
+                triggered_reset = pos.meta.get("triggered_reset", False) if pos.meta else False
+                triggered_portfolio_reset = pos.meta.get("triggered_portfolio_reset", False) if pos.meta else False
+                
+                trade_row = {
+                    "strategy": strategy_name,
+                    "signal_id": pos.signal_id,
+                    "contract_address": pos.contract_address,
+                    "entry_time": pos.entry_time.isoformat(),
+                    "exit_time": pos.exit_time.isoformat(),
+                    "status": pos.status,
+                    "size": pos.size,
+                    "pnl_sol": pnl_sol,
+                    "fees_total_sol": fees_total_sol,
+                    "exec_entry_price": exec_entry_price,
+                    "exec_exit_price": exec_exit_price,
+                    "raw_entry_price": raw_entry_price,
+                    "raw_exit_price": raw_exit_price,
+                    "closed_by_reset": closed_by_reset,
+                    "triggered_reset": triggered_reset,
+                    "triggered_portfolio_reset": triggered_portfolio_reset,
+                }
+                
+                trades_rows.append(trade_row)
+        
+        # Создаем DataFrame
+        if trades_rows:
+            df = pd.DataFrame(trades_rows)
+            # Сортируем по entry_time для консистентности
+            df["entry_time_dt"] = pd.to_datetime(df["entry_time"], utc=True)
+            df = df.sort_values("entry_time_dt")
+            df = df.drop("entry_time_dt", axis=1)
+        else:
+            # Создаем пустой DataFrame с правильными колонками
+            df = pd.DataFrame(columns=[
+                "strategy", "signal_id", "contract_address",
+                "entry_time", "exit_time", "status",
+                "size", "pnl_sol", "fees_total_sol",
+                "exec_entry_price", "exec_exit_price",
+                "raw_entry_price", "raw_exit_price",
+                "closed_by_reset", "triggered_reset", "triggered_portfolio_reset",
+            ])
+        
+        # Сохраняем
+        trades_path = self.output_dir / "portfolio_trades.csv"
+        df.to_csv(trades_path, index=False)
+        print(f"📊 Saved portfolio trades table to {trades_path} ({len(df)} executed trades)")
