@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Literal, Optional
 
 from .position import Position
@@ -74,6 +74,15 @@ class PortfolioConfig:
     # Флаги для Policy-уровня
     runner_reset_enabled: bool = False
     runner_reset_multiple: float = 2.0  # XN multiplier (например, 2.0 = x2)
+    
+    # Capacity reset конфигурация
+    capacity_reset_enabled: bool = True
+    capacity_open_ratio_threshold: float = 1.0  # Порог заполненности портфеля (1.0 = 100%)
+    capacity_window_days: int = 7  # Окно времени для capacity метрик (в днях)
+    capacity_blocked_signals_threshold: int = 200  # Порог количества отклоненных сигналов за окно
+    capacity_min_turnover_threshold: int = 2  # Минимальное количество закрытий за окно
+    capacity_window_mode: Literal["time", "signals"] = "time"  # Режим окна: по времени или по количеству сигналов
+    capacity_window_signals: int = 300  # Количество сигналов для окна (если mode="signals")
 
 
 @dataclass
@@ -89,9 +98,21 @@ class PortfolioStats:
     runner_reset_count: int = 0  # Количество срабатываний runner reset (по XN)
     last_runner_reset_time: Optional[datetime] = None  # Время последнего runner reset
     
-    # Portfolio-level reset tracking (по equity threshold)
-    portfolio_reset_count: int = 0  # Количество срабатываний portfolio-level reset (по equity)
+    # Portfolio-level reset tracking (по equity threshold и capacity)
+    portfolio_reset_count: int = 0  # Количество срабатываний portfolio-level reset (profit + capacity)
     last_portfolio_reset_time: Optional[datetime] = None  # Время последнего portfolio-level reset
+    
+    # Разделение счетчиков portfolio reset (опционально, для детализации)
+    portfolio_reset_profit_count: int = 0  # Количество profit reset (по equity threshold)
+    portfolio_reset_capacity_count: int = 0  # Количество capacity reset
+    
+    def __post_init__(self):
+        """Инициализация счетчиков reset."""
+        # Если счетчики не были явно установлены, инициализируем их
+        if not hasattr(self, 'portfolio_reset_profit_count'):
+            self.portfolio_reset_profit_count = 0
+        if not hasattr(self, 'portfolio_reset_capacity_count'):
+            self.portfolio_reset_capacity_count = 0
     
     # Обратная совместимость: reset_count означает portfolio-level reset
     @property
@@ -121,6 +142,16 @@ class PortfolioEngine:
     - принимает StrategyOutput'ы
     - применяет размер позиции, лимиты, комиссии
     - считает баланс и equity кривую
+    
+    ПРОБЛЕМА CAPACITY CHOKE (v1.6):
+    Портфель может перестать открывать новые сделки (capacity choke):
+    - open_positions долго == max_open_positions
+    - новые сигналы отклоняются (max_open_positions/max_exposure)
+    - turnover маленький → прибыльный profit reset может не наступить, портфель "висит"
+    
+    РЕШЕНИЕ:
+    - Profit reset (по equity threshold) - сохраняется, показал прибыльность
+    - Capacity reset (новый механизм) - срабатывает при capacity pressure независимо от profit reset
     """
 
     def __init__(self, config: PortfolioConfig) -> None:
@@ -223,6 +254,135 @@ class PortfolioEngine:
         else:
             base = current_balance
         return max(0.0, base * self.config.percent_per_trade)
+    
+    def _check_capacity_reset(
+        self,
+        state: PortfolioState,
+        current_time: datetime,
+        capacity_tracking: Dict[str, Any],
+    ) -> Optional[PortfolioResetContext]:
+        """
+        Проверяет, должен ли сработать capacity reset.
+        
+        Триггер capacity reset:
+        1. open_positions / max_open_positions >= capacity_open_ratio_threshold
+        2. blocked_by_capacity_in_window >= capacity_blocked_signals_threshold
+        3. closed_in_window <= capacity_min_turnover_threshold
+        
+        Args:
+            state: Состояние портфеля
+            current_time: Текущее время
+            capacity_tracking: Dict с метриками capacity (blocked_by_capacity_in_window, closed_in_window, window_start, window_end)
+            
+        Returns:
+            PortfolioResetContext если reset должен сработать, иначе None
+        """
+        if not self.config.capacity_reset_enabled:
+            return None
+        
+        # Вычисляем open_ratio
+        max_open = self.config.max_open_positions
+        if max_open <= 0:
+            return None
+        
+        open_ratio = len(state.open_positions) / max_open
+        if open_ratio < self.config.capacity_open_ratio_threshold:
+            return None  # Портфель не заполнен
+        
+        # Проверяем метрики окна
+        blocked_window = capacity_tracking.get("blocked_by_capacity_in_window", 0)
+        closed_window = capacity_tracking.get("closed_in_window", 0)
+        
+        if blocked_window < self.config.capacity_blocked_signals_threshold:
+            return None  # Недостаточно отклоненных сигналов
+        
+        if closed_window > self.config.capacity_min_turnover_threshold:
+            return None  # Есть turnover, reset не нужен
+        
+        # Все условия выполнены - capacity reset должен сработать
+        # Выбираем marker position (первая открытая позиция)
+        if not state.open_positions:
+            return None  # Нет открытых позиций (не должно происходить)
+        
+        marker_position = state.open_positions[0]
+        positions_to_force_close = state.open_positions[1:] if len(state.open_positions) > 1 else []
+        
+        context = PortfolioResetContext(
+            reason=ResetReason.CAPACITY_PRESSURE,
+            reset_time=current_time,
+            marker_position=marker_position,
+            positions_to_force_close=positions_to_force_close,
+            open_ratio=open_ratio,
+            blocked_window=blocked_window,
+            turnover_window=closed_window,
+            window_start=capacity_tracking.get("window_start"),
+            window_end=capacity_tracking.get("window_end"),
+        )
+        
+        return context
+    
+    def _update_capacity_tracking(
+        self,
+        capacity_tracking: Dict[str, Any],
+        current_time: datetime,
+        signal_blocked_by_capacity: bool,
+        position_closed: bool,
+    ) -> None:
+        """
+        Обновляет метрики capacity tracking.
+        
+        Args:
+            capacity_tracking: Dict для хранения метрик (изменяется in-place)
+            current_time: Текущее время
+            signal_blocked_by_capacity: Был ли сигнал отклонен по capacity
+            position_closed: Была ли закрыта позиция
+        """
+        # Инициализация если нужно
+        if "window_start" not in capacity_tracking:
+            capacity_tracking["window_start"] = current_time
+            capacity_tracking["blocked_by_capacity_in_window"] = 0
+            capacity_tracking["closed_in_window"] = 0
+            capacity_tracking["signals_in_window"] = 0
+        
+        window_start = capacity_tracking["window_start"]
+        
+        # Определяем границы окна
+        if self.config.capacity_window_mode == "time":
+            # Окно по времени
+            window_duration = timedelta(days=self.config.capacity_window_days)
+            window_end = window_start + window_duration
+        else:
+            # Окно по количеству сигналов
+            window_end = None  # Будет обновляться по количеству сигналов
+        
+        # Обновляем счетчики
+        if signal_blocked_by_capacity:
+            capacity_tracking["blocked_by_capacity_in_window"] = capacity_tracking.get("blocked_by_capacity_in_window", 0) + 1
+        
+        if position_closed:
+            capacity_tracking["closed_in_window"] = capacity_tracking.get("closed_in_window", 0) + 1
+        
+        capacity_tracking["signals_in_window"] = capacity_tracking.get("signals_in_window", 0) + 1
+        
+        # Обновляем окно если нужно
+        if self.config.capacity_window_mode == "time":
+            # Если текущее время вышло за окно, сдвигаем окно
+            if current_time > window_end:
+                # Сбрасываем окно
+                capacity_tracking["window_start"] = current_time
+                capacity_tracking["blocked_by_capacity_in_window"] = 0
+                capacity_tracking["closed_in_window"] = 0
+                capacity_tracking["signals_in_window"] = 0
+        else:
+            # Окно по сигналам: если достигли лимита, сдвигаем окно
+            if capacity_tracking["signals_in_window"] >= self.config.capacity_window_signals:
+                # Сбрасываем окно
+                capacity_tracking["window_start"] = current_time
+                capacity_tracking["blocked_by_capacity_in_window"] = 0
+                capacity_tracking["closed_in_window"] = 0
+                capacity_tracking["signals_in_window"] = 0
+        
+        capacity_tracking["window_end"] = window_end if self.config.capacity_window_mode == "time" else current_time
     
     def _apply_reset(
         self,
@@ -552,6 +712,9 @@ class PortfolioEngine:
 
         skipped_by_risk = 0
         skipped_by_reset = 0
+        
+        # Инициализация capacity tracking
+        capacity_tracking: Dict[str, Any] = {}
 
         for row in trades:
             out: StrategyOutput = row["result"]
@@ -718,8 +881,45 @@ class PortfolioEngine:
             
             state.open_positions = still_open
             
+            # Обновляем capacity tracking: учитываем закрытые позиции
+            positions_closed_count = len(positions_to_close_now)
+            if positions_closed_count > 0:
+                self._update_capacity_tracking(
+                    capacity_tracking=capacity_tracking,
+                    current_time=entry_time,
+                    signal_blocked_by_capacity=False,
+                    position_closed=True,
+                )
+            
             # Обновляем equity_peak_in_cycle после обработки позиций
             state.update_equity_peak()
+            
+            # Проверка capacity reset (после обработки закрытий, перед открытием новой позиции)
+            if self.config.capacity_reset_enabled:
+                capacity_reset_context = self._check_capacity_reset(
+                    state=state,
+                    current_time=entry_time,
+                    capacity_tracking=capacity_tracking,
+                )
+                if capacity_reset_context is not None:
+                    # Применяем capacity reset
+                    self._apply_reset(
+                        state=state,
+                        marker_position=capacity_reset_context.marker_position,
+                        reset_time=capacity_reset_context.reset_time,
+                        positions_to_force_close=capacity_reset_context.positions_to_force_close,
+                        reason=ResetReason.CAPACITY_PRESSURE,
+                    )
+                    # Обновляем still_open после reset
+                    still_open = [p for p in still_open if p.status != "closed"]
+                    state.open_positions = still_open
+                    
+                    logger.info(
+                        f"[CAPACITY_RESET] Triggered at {entry_time.isoformat()}: "
+                        f"open_ratio={capacity_reset_context.open_ratio:.2f}, "
+                        f"blocked_window={capacity_reset_context.blocked_window}, "
+                        f"turnover_window={capacity_reset_context.turnover_window}"
+                    )
             
             # Проверка portfolio-level reset по equity (независимо от runner reset по XN)
             # Если equity_peak_in_cycle >= cycle_start_equity * runner_reset_multiple, закрываем все позиции
@@ -764,8 +964,17 @@ class PortfolioEngine:
             # 4. Проверка лимитов портфеля
 
             # лимит по количеству позиций
+            blocked_by_capacity = False
             if len(state.open_positions) >= self.config.max_open_positions:
                 skipped_by_risk += 1
+                blocked_by_capacity = True
+                # Обновляем capacity tracking: сигнал отклонен по capacity
+                self._update_capacity_tracking(
+                    capacity_tracking=capacity_tracking,
+                    current_time=entry_time,
+                    signal_blocked_by_capacity=True,
+                    position_closed=False,
+                )
                 continue
 
             # текущая экспозиция (учитываем, что баланс уже уменьшен на открытые позиции)
@@ -819,12 +1028,37 @@ class PortfolioEngine:
                     f"desired_size={desired_size:.6f} > max_allowed_notional={max_allowed_notional:.6f}"
                 )
                 skipped_by_risk += 1
+                blocked_by_capacity = True
+                # Обновляем capacity tracking: сигнал отклонен по capacity (exposure)
+                self._update_capacity_tracking(
+                    capacity_tracking=capacity_tracking,
+                    current_time=entry_time,
+                    signal_blocked_by_capacity=True,
+                    position_closed=False,
+                )
                 continue
             
             size = desired_size
             if size <= 0:
                 skipped_by_risk += 1
+                blocked_by_capacity = True
+                # Обновляем capacity tracking: сигнал отклонен (size <= 0)
+                self._update_capacity_tracking(
+                    capacity_tracking=capacity_tracking,
+                    current_time=entry_time,
+                    signal_blocked_by_capacity=True,
+                    position_closed=False,
+                )
                 continue
+            
+            # Обновляем capacity tracking: сигнал принят (не был отклонен)
+            if not blocked_by_capacity:
+                self._update_capacity_tracking(
+                    capacity_tracking=capacity_tracking,
+                    current_time=entry_time,
+                    signal_blocked_by_capacity=False,
+                    position_closed=False,
+                )
 
             # 5. Применяем ExecutionModel: slippage к ценам и fees к нотионалу
             raw_entry_price = out.entry_price or 0.0
@@ -1067,6 +1301,8 @@ class PortfolioEngine:
             last_runner_reset_time=state.last_runner_reset_time,
             portfolio_reset_count=state.portfolio_reset_count,
             last_portfolio_reset_time=state.last_portfolio_reset_time,
+            portfolio_reset_profit_count=getattr(state, 'portfolio_reset_profit_count', 0),
+            portfolio_reset_capacity_count=getattr(state, 'portfolio_reset_capacity_count', 0),
             cycle_start_equity=state.cycle_start_equity,
             equity_peak_in_cycle=state.equity_peak_in_cycle,
         )

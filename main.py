@@ -568,7 +568,8 @@ def main():
         
         # Сохраняем единую таблицу portfolio trades для всех стратегий (используется Stage A)
         # Используем все portfolio_results, не только strategies_to_report, чтобы Stage A видел все executed trades
-        base_reporter.save_portfolio_trades_table(portfolio_results)
+        base_reporter.save_portfolio_positions_table(portfolio_results)
+        base_reporter.save_portfolio_executions_table(portfolio_results)
     
     # Генерируем summary отчеты
     if args.report_mode in ["summary", "top"]:

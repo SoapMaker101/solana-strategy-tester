@@ -163,6 +163,83 @@
 - **Используется в:** `PortfolioEngine.simulate()` — проверка при закрытии позиции
 - **Статус:** 🟢 stable
 
+### Capacity Reset (v1.6)
+
+#### `capacity_reset_enabled`
+
+- **Где:** `portfolio.capacity_reset_enabled` (YAML), `PortfolioConfig.capacity_reset_enabled` (код)
+- **Тип:** `bool`
+- **Значение по умолчанию:** `True`
+- **Назначение:** Включить capacity reset: при заполнении портфеля и низком turnover закрываются все позиции
+- **Влияние:** 
+  - Если `True` и выполнены условия capacity pressure (портфель заполнен, много отклоненных сигналов, мало закрытий), все открытые позиции закрываются market close
+  - Независим от profit reset (по equity threshold)
+- **Используется в:** `PortfolioEngine.simulate()` — проверка capacity pressure
+- **Статус:** 🟢 stable (v1.6)
+
+#### `capacity_open_ratio_threshold`
+
+- **Где:** `portfolio.capacity_open_ratio_threshold` (YAML), `PortfolioConfig.capacity_open_ratio_threshold` (код)
+- **Тип:** `float` (доля, 1.0 = 100%)
+- **Значение по умолчанию:** `1.0` (100%)
+- **Назначение:** Порог заполненности портфеля для capacity reset
+- **Влияние:** Capacity reset срабатывает только если `open_positions / max_open_positions >= capacity_open_ratio_threshold`
+- **Формула:** `open_ratio = len(open_positions) / max_open_positions >= capacity_open_ratio_threshold`
+- **Используется в:** `PortfolioEngine._check_capacity_reset()`
+- **Статус:** 🟢 stable (v1.6)
+
+#### `capacity_window_days`
+
+- **Где:** `portfolio.capacity_window_days` (YAML), `PortfolioConfig.capacity_window_days` (код)
+- **Тип:** `int` (дни)
+- **Значение по умолчанию:** `7`
+- **Назначение:** Окно времени для capacity метрик (используется если `capacity_window_mode="time"`)
+- **Влияние:** Определяет временной диапазон для подсчета отклоненных сигналов и закрытий
+- **Используется в:** `PortfolioEngine._update_capacity_tracking()`
+- **Статус:** 🟢 stable (v1.6)
+
+#### `capacity_blocked_signals_threshold`
+
+- **Где:** `portfolio.capacity_blocked_signals_threshold` (YAML), `PortfolioConfig.capacity_blocked_signals_threshold` (код)
+- **Тип:** `int`
+- **Значение по умолчанию:** `200`
+- **Назначение:** Порог количества отклоненных сигналов за окно для capacity reset
+- **Влияние:** Capacity reset срабатывает только если `blocked_by_capacity_in_window >= capacity_blocked_signals_threshold`
+- **Используется в:** `PortfolioEngine._check_capacity_reset()`
+- **Статус:** 🟢 stable (v1.6)
+
+#### `capacity_min_turnover_threshold`
+
+- **Где:** `portfolio.capacity_min_turnover_threshold` (YAML), `PortfolioConfig.capacity_min_turnover_threshold` (код)
+- **Тип:** `int`
+- **Значение по умолчанию:** `2`
+- **Назначение:** Минимальное количество закрытий за окно (если больше, capacity reset не срабатывает)
+- **Влияние:** Capacity reset срабатывает только если `closed_in_window <= capacity_min_turnover_threshold` (низкий turnover)
+- **Используется в:** `PortfolioEngine._check_capacity_reset()`
+- **Статус:** 🟢 stable (v1.6)
+
+#### `capacity_window_mode`
+
+- **Где:** `portfolio.capacity_window_mode` (YAML), `PortfolioConfig.capacity_window_mode` (код)
+- **Тип:** `Literal["time", "signals"]`
+- **Значение по умолчанию:** `"time"`
+- **Назначение:** Режим окна для capacity метрик
+  - `"time"` — окно по времени (используется `capacity_window_days`)
+  - `"signals"` — окно по количеству сигналов (используется `capacity_window_signals`)
+- **Влияние:** Определяет способ расчета окна для capacity tracking
+- **Используется в:** `PortfolioEngine._update_capacity_tracking()`
+- **Статус:** 🟢 stable (v1.6)
+
+#### `capacity_window_signals`
+
+- **Где:** `portfolio.capacity_window_signals` (YAML), `PortfolioConfig.capacity_window_signals` (код)
+- **Тип:** `int`
+- **Значение по умолчанию:** `300`
+- **Назначение:** Количество сигналов для окна (используется если `capacity_window_mode="signals"`)
+- **Влияние:** Определяет размер окна в количестве обработанных сигналов
+- **Используется в:** `PortfolioEngine._update_capacity_tracking()`
+- **Статус:** 🟢 stable (v1.6)
+
 ### `backtest_start` / `backtest_end`
 
 - **Где:** `backtest.start_at` / `backtest.end_at` (YAML), `PortfolioConfig.backtest_start` / `backtest_end` (код)
@@ -889,23 +966,58 @@ test1,ABC123...,2024-06-01T00:00:00Z,tg:12345,Test signal,1000000000
 
 **Используется в:** `Reporter.save_trades_table()`, Stage A (`load_trades_csv()`)
 
-### Portfolio Positions CSV (output)
+### Portfolio Positions CSV (output) — v1.6
+
+**Файл:** `portfolio_positions.csv` (positions-level, агрегат по signal_id+strategy+contract)
+
+**Колонки:**
+- `strategy` — название стратегии (str)
+- `signal_id` — ID сигнала
+- `contract_address` — адрес контракта
+- `entry_time` — время входа (ISO datetime)
+- `exit_time` — время выхода (ISO datetime)
+- `status` — статус: `"closed"` (только закрытые позиции)
+- `size` — размер позиции в SOL (float)
+- `pnl_sol` — прибыль/убыток в SOL (float, обязательно!)
+- `fees_total_sol` — суммарные комиссии в SOL (float)
+- `exec_entry_price` — исполненная цена входа с slippage (float)
+- `exec_exit_price` — исполненная цена выхода с slippage (float)
+- `raw_entry_price` — сырая цена входа без slippage (float)
+- `raw_exit_price` — сырая цена выхода без slippage (float)
+- `closed_by_reset` — закрыта ли позиция по reset (bool)
+- `triggered_portfolio_reset` — триггернула ли portfolio-level reset (bool)
+- `reset_reason` — причина reset: `"profit"` | `"capacity"` | `"runner"` | `"manual"` | `"none"` (str)
+- `hold_minutes` — длительность удержания позиции в минутах (int)
+
+**Важно:** 
+- Каждая строка = 1 Position (агрегат, без дублей по signal_id+strategy+contract)
+- Используется Stage A для анализа устойчивости стратегий
+- Только закрытые позиции (status="closed")
+
+**Используется в:** `Reporter.save_portfolio_positions_table()`, Stage A (`run_stage_a.py`)
+
+### Portfolio Executions CSV (output) — v1.6
+
+**Файл:** `portfolio_executions.csv` (executions-level, каждое событие = отдельная строка)
 
 **Колонки:**
 - `signal_id` — ID сигнала
-- `contract_address` — адрес контракта
-- `entry_time` — время входа (datetime)
-- `exit_time` — время выхода (datetime)
-- `entry_price` — эффективная цена входа с slippage (float)
-- `exit_price` — эффективная цена выхода с slippage (float)
-- `size_sol` — размер позиции в SOL (float)
-- `pnl_pct` — прибыль/убыток в процентах (float)
-- `pnl_sol` — прибыль/убыток в SOL (float)
-- `raw_pnl_pct` — сырой PnL без slippage (float)
-- `fee_pct` — суммарные комиссии в процентах (float)
-- `status` — статус: `"open"` | `"closed"`
+- `strategy` — название стратегии
+- `event_time` — время события (ISO datetime)
+- `event_type` — тип события: `"entry"` | `"partial_exit"` | `"final_exit"` | `"force_close_reset"` (str)
+- `qty_delta` — изменение количества (float, положительное для entry, отрицательное для exit)
+- `raw_price` — сырая цена без slippage (float)
+- `exec_price` — исполненная цена с slippage (float)
+- `fees_sol` — комиссии для этого события (float)
+- `pnl_sol_delta` — изменение PnL для этого события (float)
+- `reset_reason` — причина reset (если force close): `"profit"` | `"capacity"` | `"runner"` | `None` (str)
 
-**Используется в:** `ConditionalReporter.save_portfolio_results()`
+**Важно:**
+- Каждая строка = 1 execution event (entry, partial exit, final exit, force close)
+- Один signal_id может иметь несколько строк (если были partial exits)
+- Используется для дебага и анализа исполнения
+
+**Используется в:** `Reporter.save_portfolio_executions_table()`
 
 ### Strategy Stability CSV (Stage A output)
 
@@ -951,6 +1063,16 @@ test1,ABC123...,2024-06-01T00:00:00Z,tg:12345,Test signal,1000000000
   - `True`: при достижении позицией `runner_reset_multiple` (по raw ценам, при закрытии позиции) закрываются все открытые позиции, входы игнорируются до следующего сигнала
   - Reset проверяется только при закрытии позиции (exit_time), а не при открытии
 - **Статус:** 🟢 stable
+
+### `capacity_reset_enabled` (v1.6)
+
+- **Тип:** `bool`
+- **Влияние на пайплайн:**
+  - `False`: capacity reset не срабатывает
+  - `True`: при capacity pressure (портфель заполнен, много отклоненных сигналов, мало закрытий) закрываются все открытые позиции market close
+  - Независим от profit reset (по equity threshold)
+  - Закрытие происходит по текущей цене через execution_model (не pnl=0)
+- **Статус:** 🟢 stable (v1.6)
 
 ### `execution_profile`
 
@@ -1083,6 +1205,13 @@ test1,ABC123...,2024-06-01T00:00:00Z,tg:12345,Test signal,1000000000
 | Доля на сделку | `portfolio.percent_per_trade` | `PortfolioConfig.percent_per_trade = 0.1` |
 | Макс. экспозиция | `portfolio.max_exposure` | `PortfolioConfig.max_exposure = 0.5` |
 | Макс. позиций | `portfolio.max_open_positions` | `PortfolioConfig.max_open_positions = 10` |
+| Capacity reset enabled | `portfolio.capacity_reset_enabled` | `PortfolioConfig.capacity_reset_enabled = True` |
+| Capacity open ratio threshold | `portfolio.capacity_open_ratio_threshold` | `PortfolioConfig.capacity_open_ratio_threshold = 1.0` |
+| Capacity window days | `portfolio.capacity_window_days` | `PortfolioConfig.capacity_window_days = 7` |
+| Capacity blocked signals threshold | `portfolio.capacity_blocked_signals_threshold` | `PortfolioConfig.capacity_blocked_signals_threshold = 200` |
+| Capacity min turnover threshold | `portfolio.capacity_min_turnover_threshold` | `PortfolioConfig.capacity_min_turnover_threshold = 2` |
+| Capacity window mode | `portfolio.capacity_window_mode` | `PortfolioConfig.capacity_window_mode = "time"` |
+| Capacity window signals | `portfolio.capacity_window_signals` | `PortfolioConfig.capacity_window_signals = 300` |
 | Execution profile | `portfolio.execution_profile` | `PortfolioConfig.execution_profile = "realistic"` |
 | Swap fee | `portfolio.fee.swap_fee_pct` | `FeeModel.swap_fee_pct = 0.003` |
 | LP fee | `portfolio.fee.lp_fee_pct` | `FeeModel.lp_fee_pct = 0.001` |

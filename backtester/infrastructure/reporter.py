@@ -721,12 +721,12 @@ class Reporter:
             print(f"[WARNING] Failed to plot portfolio equity curve: {e}")
             return None
 
-    def save_portfolio_trades_table(self, portfolio_results: Dict[str, Any]) -> None:
+    def save_portfolio_positions_table(self, portfolio_results: Dict[str, Any]) -> None:
         """
-        Сохраняет единую таблицу portfolio trades для всех стратегий в CSV.
+        Сохраняет positions-level таблицу для всех стратегий в CSV.
         
-        Это таблица исполненных портфельных сделок (executed trades), где каждая строка = закрытая позиция.
-        Используется Stage A для анализа устойчивости стратегий.
+        Это таблица исполненных портфельных позиций (positions-level), где каждая строка = 1 Position
+        (агрегат по signal_id+strategy+contract). Используется Stage A для анализа устойчивости стратегий.
         
         Обязательные колонки:
         - strategy: название стратегии
@@ -743,8 +743,12 @@ class Reporter:
         - raw_entry_price: сырая цена входа (без slippage, для диагностики)
         - raw_exit_price: сырая цена выхода (без slippage)
         - closed_by_reset: закрыта ли позиция по reset (bool)
-        - triggered_reset: триггернула ли reset (bool)
         - triggered_portfolio_reset: триггернула ли portfolio-level reset (bool)
+        - reset_reason: причина reset (profit/capacity/runner/manual/none)
+        - hold_minutes: длительность удержания позиции в минутах
+        
+        Запрещено: дублировать строки одной позиции из-за partial close.
+        Positions-level = агрегат.
         
         :param portfolio_results: Словарь {strategy_name: PortfolioResult}
         """
@@ -792,8 +796,14 @@ class Reporter:
                 
                 # Флаги reset
                 closed_by_reset = pos.meta.get("closed_by_reset", False) if pos.meta else False
-                triggered_reset = pos.meta.get("triggered_reset", False) if pos.meta else False
                 triggered_portfolio_reset = pos.meta.get("triggered_portfolio_reset", False) if pos.meta else False
+                reset_reason = pos.meta.get("reset_reason", "none") if pos.meta else "none"
+                
+                # Вычисляем hold_minutes
+                hold_minutes = None
+                if pos.entry_time and pos.exit_time:
+                    hold_delta = pos.exit_time - pos.entry_time
+                    hold_minutes = int(hold_delta.total_seconds() / 60)
                 
                 trade_row = {
                     "strategy": strategy_name,
@@ -810,8 +820,9 @@ class Reporter:
                     "raw_entry_price": raw_entry_price,
                     "raw_exit_price": raw_exit_price,
                     "closed_by_reset": closed_by_reset,
-                    "triggered_reset": triggered_reset,
                     "triggered_portfolio_reset": triggered_portfolio_reset,
+                    "reset_reason": reset_reason,
+                    "hold_minutes": hold_minutes,
                 }
                 
                 trades_rows.append(trade_row)
@@ -831,10 +842,154 @@ class Reporter:
                 "size", "pnl_sol", "fees_total_sol",
                 "exec_entry_price", "exec_exit_price",
                 "raw_entry_price", "raw_exit_price",
-                "closed_by_reset", "triggered_reset", "triggered_portfolio_reset",
+                "closed_by_reset", "triggered_portfolio_reset", "reset_reason", "hold_minutes",
+            ])
+        
+        # Удаляем дубликаты по (strategy, signal_id, contract_address) - positions-level агрегат
+        # (если есть данные)
+        if not df.empty:
+            df = df.drop_duplicates(subset=["strategy", "signal_id", "contract_address"], keep="first")
+        
+        # Сохраняем
+        positions_path = self.output_dir / "portfolio_positions.csv"
+        df.to_csv(positions_path, index=False)
+        print(f"📊 Saved portfolio positions table to {positions_path} ({len(df)} executed positions)")
+    
+    def save_portfolio_trades_table(self, portfolio_results: Dict[str, Any]) -> None:
+        """
+        Обратная совместимость: вызывает save_portfolio_positions_table.
+        """
+        self.save_portfolio_positions_table(portfolio_results)
+    
+    def save_portfolio_executions_table(self, portfolio_results: Dict[str, Any]) -> None:
+        """
+        Сохраняет executions-level таблицу для всех стратегий в CSV.
+        
+        Это таблица событий исполнения (executions-level), где каждая запись = fill/partial_close/force_close event.
+        Используется для дебага и анализа исполнения.
+        
+        Колонки:
+        - signal_id: идентификатор сигнала
+        - strategy: название стратегии
+        - event_time: время события (ISO)
+        - event_type: тип события (entry/partial_exit/final_exit/force_close_reset)
+        - qty_delta: изменение количества (если есть)
+        - raw_price: сырая цена (без slippage)
+        - exec_price: исполненная цена (с slippage)
+        - fees_sol: комиссии для этого события
+        - pnl_sol_delta: изменение PnL для этого события
+        - reset_reason: причина reset (если force close)
+        
+        :param portfolio_results: Словарь {strategy_name: PortfolioResult}
+        """
+        import pandas as pd
+        from ..domain.portfolio import PortfolioResult
+        
+        executions_rows = []
+        
+        for strategy_name, portfolio_result in portfolio_results.items():
+            if not isinstance(portfolio_result, PortfolioResult):
+                continue
+            
+            for pos in portfolio_result.positions:
+                if not pos.entry_time:
+                    continue
+                
+                # Entry event
+                exec_entry_price = pos.meta.get("exec_entry_price", pos.entry_price) if pos.meta else pos.entry_price
+                raw_entry_price = pos.meta.get("raw_entry_price", pos.entry_price) if pos.meta else pos.entry_price
+                network_fee_entry = pos.meta.get("network_fee_sol", 0.0) if pos.meta else 0.0
+                # Для entry fees обычно только network fee (swap/lp применяются при выходе)
+                fees_entry = network_fee_entry
+                
+                executions_rows.append({
+                    "signal_id": pos.signal_id,
+                    "strategy": strategy_name,
+                    "event_time": pos.entry_time.isoformat(),
+                    "event_type": "entry",
+                    "qty_delta": pos.size,
+                    "raw_price": raw_entry_price,
+                    "exec_price": exec_entry_price,
+                    "fees_sol": fees_entry,
+                    "pnl_sol_delta": 0.0,  # Entry не имеет PnL
+                    "reset_reason": None,
+                })
+                
+                # Partial exits (для Runner стратегий)
+                if pos.meta and "partial_exits" in pos.meta:
+                    partial_exits = pos.meta.get("partial_exits", [])
+                    for partial in partial_exits:
+                        if isinstance(partial, dict):
+                            hit_time_str = partial.get("hit_time", "")
+                            try:
+                                if isinstance(hit_time_str, str):
+                                    hit_time = datetime.fromisoformat(hit_time_str.replace("Z", "+00:00"))
+                                else:
+                                    hit_time = hit_time_str
+                            except (ValueError, AttributeError):
+                                continue
+                            
+                            exit_size = partial.get("exit_size", 0.0)
+                            exit_price = partial.get("exit_price", 0.0)
+                            pnl_sol = partial.get("pnl_sol", 0.0)
+                            fees_partial = partial.get("fees_sol", 0.0) + partial.get("network_fee_sol", 0.0)
+                            
+                            # Вычисляем raw_price из exit_price (обратная операция slippage)
+                            # Это приблизительно, но для дебага достаточно
+                            raw_exit_price = exit_price / (1.0 - 0.03) if exit_price > 0 else 0.0  # Примерный slippage
+                            
+                            executions_rows.append({
+                                "signal_id": pos.signal_id,
+                                "strategy": strategy_name,
+                                "event_time": hit_time.isoformat() if isinstance(hit_time, datetime) else str(hit_time),
+                                "event_type": "partial_exit",
+                                "qty_delta": -exit_size,
+                                "raw_price": raw_exit_price,
+                                "exec_price": exit_price,
+                                "fees_sol": fees_partial,
+                                "pnl_sol_delta": pnl_sol,
+                                "reset_reason": None,
+                            })
+                
+                # Final exit или force close
+                if pos.exit_time and pos.status == "closed":
+                    exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+                    raw_exit_price = pos.meta.get("raw_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+                    pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
+                    fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
+                    closed_by_reset = pos.meta.get("closed_by_reset", False) if pos.meta else False
+                    reset_reason = pos.meta.get("reset_reason", None) if pos.meta else None
+                    
+                    event_type = "force_close_reset" if closed_by_reset else "final_exit"
+                    
+                    executions_rows.append({
+                        "signal_id": pos.signal_id,
+                        "strategy": strategy_name,
+                        "event_time": pos.exit_time.isoformat(),
+                        "event_type": event_type,
+                        "qty_delta": -pos.size,
+                        "raw_price": raw_exit_price,
+                        "exec_price": exec_exit_price,
+                        "fees_sol": fees_total,
+                        "pnl_sol_delta": pnl_sol,
+                        "reset_reason": reset_reason,
+                    })
+        
+        # Создаем DataFrame
+        if executions_rows:
+            df = pd.DataFrame(executions_rows)
+            # Сортируем по event_time для консистентности
+            df["event_time_dt"] = pd.to_datetime(df["event_time"], utc=True)
+            df = df.sort_values("event_time_dt")
+            df = df.drop("event_time_dt", axis=1)
+        else:
+            # Создаем пустой DataFrame с правильными колонками
+            df = pd.DataFrame(columns=[
+                "signal_id", "strategy", "event_time", "event_type",
+                "qty_delta", "raw_price", "exec_price", "fees_sol", "pnl_sol_delta", "reset_reason",
             ])
         
         # Сохраняем
-        trades_path = self.output_dir / "portfolio_trades.csv"
-        df.to_csv(trades_path, index=False)
-        print(f"📊 Saved portfolio trades table to {trades_path} ({len(df)} executed trades)")
+        executions_path = self.output_dir / "portfolio_executions.csv"
+        df.to_csv(executions_path, index=False)
+        print(f"🔧 Saved portfolio executions table to {executions_path} ({len(df)} execution events)")

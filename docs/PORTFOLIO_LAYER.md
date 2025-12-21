@@ -255,8 +255,11 @@ portfolio:
   - Максимальное количество открытых позиций (max_open_positions)
 - Backtest window (ограничение по датам)
 - Equity curve (кривая баланса)
-- **Portfolio-level reset для Runner:** Закрытие всех позиций при достижении порога equity
+- **Portfolio-level reset (profit):** Закрытие всех позиций при достижении порога equity (market close)
+- **Capacity reset (v1.6):** Закрытие всех позиций при capacity pressure (портфель заполнен, мало закрытий, много отклонений)
+- **Runner-XN reset:** Закрытие всех позиций при достижении позицией XN уровня
 - **Runner частичные выходы:** Обработка частичного закрытия позиций на разных уровнях TP
+- **Dual reporting (v1.6):** Positions-level и executions-level таблицы для разных целей анализа
 
 ## Архитектура
 
@@ -291,8 +294,16 @@ portfolio:
   percent_per_trade: 0.1          # Доля капитала на одну сделку (10%)
   max_exposure: 0.5               # Максимальная экспозиция (50%)
   max_open_positions: 10          # Максимальное количество открытых позиций
-  runner_reset_enabled: false     # Portfolio-level reset для Runner (закрытие всех позиций при достижении порога equity)
-  runner_reset_multiple: 2.0     # Множитель XN для порога reset (например, 2.0 = x2)
+  runner_reset_enabled: false     # Runner-XN reset (закрытие всех позиций при достижении XN)
+  runner_reset_multiple: 2.0     # Множитель XN для runner reset (например, 2.0 = x2)
+  # Capacity reset (v1.6)
+  capacity_reset_enabled: true   # Capacity reset (закрытие при capacity pressure)
+  capacity_open_ratio_threshold: 1.0  # Порог заполненности портфеля (1.0 = 100%)
+  capacity_window_days: 7        # Окно времени для capacity метрик (дни)
+  capacity_blocked_signals_threshold: 200  # Порог отклоненных сигналов за окно
+  capacity_min_turnover_threshold: 2  # Минимальное количество закрытий за окно
+  capacity_window_mode: "time"   # Режим окна: "time" или "signals"
+  capacity_window_signals: 300    # Количество сигналов для окна (если mode="signals")
   execution_profile: "realistic"   # Профиль исполнения: "realistic", "stress", или "custom"
   fee:
     swap_fee_pct: 0.003           # Комиссия swap (0.3%)
@@ -556,13 +567,26 @@ portfolio:
 - [x] **DEBUG-логирование перед risk-check** (2025-01-XX)
   - Добавлен DEBUG-лог с балансом, размером позиции, открытым нотионалом, total_capital и max_allowed_exposure
   - Помогает отлаживать проблемы с лимитами портфеля
-- [x] **Portfolio-level reset для Runner** (реализовано)
+- [x] **Portfolio-level reset (profit)** (реализовано)
+  - Закрытие всех позиций при достижении порога equity: `equity_peak_in_cycle >= cycle_start_equity * runner_reset_multiple`
+  - Закрытие происходит **market close** (по текущей цене через execution_model, не pnl=0)
+  - Отслеживание метрик: `portfolio_reset_count`, `portfolio_reset_profit_count`, `last_portfolio_reset_time`
+- [x] **Capacity reset (v1.6)** (реализовано)
+  - Закрытие всех позиций при capacity pressure (портфель заполнен, много отклоненных сигналов, мало закрытий)
+  - Независим от profit reset, имеет собственные счетчики: `portfolio_reset_capacity_count`
+  - Закрытие происходит **market close** (по текущей цене через execution_model)
+  - Триггеры: `open_ratio >= capacity_open_ratio_threshold`, `blocked_window >= capacity_blocked_signals_threshold`, `turnover_window <= capacity_min_turnover_threshold`
+- [x] **Runner-XN reset** (реализовано)
   - Закрытие всех позиций при достижении XN позицией: `raw_exit_price / raw_entry_price >= runner_reset_multiple`
   - Reset проверяется **только при закрытии позиции** (exit_time), а не при открытии
   - Проверка выполняется по **raw ценам** из StrategyOutput, а не по исполненным (с slippage)
   - При срабатывании reset все открытые позиции закрываются принудительно с `meta["closed_by_reset"]=True`
-  - Отслеживание метрик: `reset_count`, `last_reset_time`, `trades_skipped_by_reset`
+  - Отслеживание метрик: `runner_reset_count`, `last_runner_reset_time`, `trades_skipped_by_reset`
   - **Важно:** `Position.entry_price` и `Position.exit_price` содержат raw цены, исполненные цены хранятся в `meta["exec_entry_price"]` и `meta["exec_exit_price"]`
+- [x] **Dual reporting (v1.6)** (реализовано)
+  - **Positions-level:** `portfolio_positions.csv` - агрегат по signal_id+strategy+contract (для Stage A)
+  - **Executions-level:** `portfolio_executions.csv` - каждое событие (entry/partial_exit/final_exit/force_close) отдельной строкой (для дебага)
+  - Stage A валидирует формат входных данных (отклоняет executions-level CSV)
 - [x] **Runner частичные выходы** (реализовано)
   - Обработка частичного закрытия позиций на разных уровнях TP
   - Применение slippage и fees к каждому частичному выходу

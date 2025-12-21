@@ -16,7 +16,8 @@ from .position import Position
 
 class ResetReason(Enum):
     """Причина срабатывания reset."""
-    EQUITY_THRESHOLD = "equity_threshold"  # Portfolio equity достигло порога
+    EQUITY_THRESHOLD = "equity_threshold"  # Portfolio equity достигло порога (profit reset)
+    CAPACITY_PRESSURE = "capacity_pressure"  # Capacity reset: портфель забит, мало закрытий, много отклонений
     RUNNER_XN = "runner_xn"  # Runner позиция достигла XN уровня
     MANUAL = "manual"  # Ручной reset (для расширения в будущем)
 
@@ -31,11 +32,18 @@ class PortfolioResetContext:
     - Время reset
     - Marker position (позиция, логически вызвавшая reset)
     - Позиции для принудительного закрытия
+    - Опциональные debug поля для capacity reset
     """
     reason: ResetReason
     reset_time: datetime
     marker_position: Position  # Обязательно должна существовать
-    positions_to_force_close: List[Position]  # Позиции для принудительного закрытия (pnl=0)
+    positions_to_force_close: List[Position]  # Позиции для принудительного закрытия (market close)
+    # Опциональные debug поля для capacity reset
+    open_ratio: Optional[float] = None
+    blocked_window: Optional[int] = None
+    turnover_window: Optional[int] = None
+    window_start: Optional[datetime] = None
+    window_end: Optional[datetime] = None
     
     def __post_init__(self):
         """Валидация контекста."""
@@ -71,6 +79,8 @@ class PortfolioState:
     # Portfolio-level reset tracking
     portfolio_reset_count: int = 0
     last_portfolio_reset_time: Optional[datetime] = None
+    portfolio_reset_profit_count: int = 0  # Количество profit reset
+    portfolio_reset_capacity_count: int = 0  # Количество capacity reset
     
     # Обратная совместимость
     @property
@@ -100,6 +110,38 @@ class PortfolioState:
             self.equity_peak_in_cycle = current
 
 
+def get_mark_price_for_position(pos: Position, reset_time: datetime) -> float:
+    """
+    Получает текущую цену для позиции на момент reset.
+    
+    Использует последнюю доступную цену:
+    1. Если есть exit_price в позиции (из StrategyOutput) - используем его
+    2. Если есть raw_exit_price в meta - используем его
+    3. Иначе fallback на entry_price (должно быть видно в meta: reset_exit_price_fallback=True)
+    
+    Args:
+        pos: Позиция для получения цены
+        reset_time: Время reset (для будущего расширения с price_loader)
+        
+    Returns:
+        Текущая цена для закрытия позиции
+    """
+    # Приоритет 1: exit_price из позиции (если есть)
+    if pos.exit_price is not None and pos.exit_price > 0:
+        return pos.exit_price
+    
+    # Приоритет 2: raw_exit_price из meta
+    if pos.meta and pos.meta.get("raw_exit_price") is not None:
+        raw_exit = pos.meta.get("raw_exit_price")
+        if raw_exit > 0:
+            return raw_exit
+    
+    # Fallback: используем entry_price (но помечаем в meta)
+    if pos.meta:
+        pos.meta["reset_exit_price_fallback"] = True
+    return pos.entry_price
+
+
 def apply_portfolio_reset(
     context: PortfolioResetContext,
     state: PortfolioState,
@@ -115,11 +157,12 @@ def apply_portfolio_reset(
     
     Инварианты:
     1. marker_position ОБЯЗАТЕЛЬНО помечается флагами:
-       - closed_by_reset = True
-       - triggered_portfolio_reset = True (для portfolio-level)
+       - closed_by_reset = True (для portfolio-level reset)
+       - triggered_portfolio_reset = True (для portfolio-level reset)
        - triggered_reset = True (для runner XN reset)
     
-    2. Все позиции из positions_to_force_close принудительно закрываются (pnl=0)
+    2. Все позиции из positions_to_force_close закрываются market close
+       (используется текущая цена через execution_model, не pnl=0)
        и помечаются closed_by_reset = True
     
     3. reset_count увеличивается на 1
@@ -131,17 +174,23 @@ def apply_portfolio_reset(
     Args:
         context: Контекст reset операции
         state: Состояние портфеля (изменяется in-place)
-        execution_model: ExecutionModel для расчета fees
+        execution_model: ExecutionModel для расчета fees и slippage
     """
-    # 1. Force-close позиции из positions_to_force_close
+    # 1. Force-close позиции из positions_to_force_close (market close)
     for pos in context.positions_to_force_close:
-        # Используем exec_entry_price для правильного расчета баланса
-        effective_exit_price = pos.meta.get("exec_entry_price", pos.entry_price)
-        exit_pnl_pct = 0.0  # PnL = 0 для принудительного закрытия
-        exit_pnl_sol = 0.0
+        # Получаем текущую цену для закрытия
+        raw_exit_price = get_mark_price_for_position(pos, context.reset_time)
         
-        # Применяем fees к возвращаемому нотионалу (только размер позиции)
-        notional_returned = pos.size
+        # Применяем slippage к цене выхода (используем reason="manual" для reset)
+        effective_exit_price = execution_model.apply_exit(raw_exit_price, "manual")
+        
+        # Вычисляем PnL на основе исполненных цен (market close)
+        exec_entry_price = pos.meta.get("exec_entry_price", pos.entry_price)
+        exit_pnl_pct = (effective_exit_price - exec_entry_price) / exec_entry_price if exec_entry_price > 0 else 0.0
+        exit_pnl_sol = pos.size * exit_pnl_pct
+        
+        # Применяем fees к возвращаемому нотионалу
+        notional_returned = pos.size + exit_pnl_sol
         notional_after_fees = execution_model.apply_fees(notional_returned)
         fees_total = notional_returned - notional_after_fees
         network_fee_exit = execution_model.network_fee()
@@ -152,7 +201,8 @@ def apply_portfolio_reset(
         
         # Обновляем позицию
         pos.exit_time = context.reset_time
-        # Сохраняем exec цена в meta
+        pos.exit_price = raw_exit_price  # Сохраняем raw цену
+        # Сохраняем exec цены в meta
         pos.meta.setdefault("exec_exit_price", effective_exit_price)
         pos.pnl_pct = exit_pnl_pct
         pos.status = "closed"
@@ -162,6 +212,7 @@ def apply_portfolio_reset(
             "pnl_sol": exit_pnl_sol,
             "fees_total_sol": fees_total,
             "closed_by_reset": True,
+            "reset_reason": context.reason.value,
         })
         pos.meta["network_fee_sol"] = pos.meta.get("network_fee_sol", 0.0) + network_fee_exit
         
@@ -182,13 +233,20 @@ def apply_portfolio_reset(
     
     # Устанавливаем флаги в зависимости от причины
     if context.reason == ResetReason.EQUITY_THRESHOLD:
-        # Portfolio-level reset: marker помечается флагами, даже если нет forced-close позиций
+        # Portfolio-level profit reset: marker помечается флагами
         marker.meta.setdefault("closed_by_reset", True)
         marker.meta.setdefault("triggered_portfolio_reset", True)
+        marker.meta.setdefault("reset_reason", "profit")
+    elif context.reason == ResetReason.CAPACITY_PRESSURE:
+        # Portfolio-level capacity reset: marker помечается как триггер
+        marker.meta.setdefault("closed_by_reset", True)
+        marker.meta.setdefault("triggered_portfolio_reset", True)
+        marker.meta.setdefault("reset_reason", "capacity")
     elif context.reason == ResetReason.RUNNER_XN:
         # Runner XN reset: триггерная позиция НЕ имеет closed_by_reset (она закрывается нормально с прибылью)
         # Только остальные позиции force-close и получают closed_by_reset=True
         marker.meta.setdefault("triggered_reset", True)
+        marker.meta.setdefault("reset_reason", "runner")
         # НЕ ставим closed_by_reset для триггерной позиции при runner reset
     
     # 3. Обновляем reset tracking переменные в зависимости от типа reset
@@ -199,8 +257,18 @@ def apply_portfolio_reset(
             state.last_runner_reset_time = context.reset_time
         state.reset_until = context.reset_time
     elif context.reason == ResetReason.EQUITY_THRESHOLD:
-        # Portfolio-level reset по equity
+        # Portfolio-level profit reset
         state.portfolio_reset_count += 1
+        state.portfolio_reset_profit_count = getattr(state, 'portfolio_reset_profit_count', 0) + 1
+        if state.last_portfolio_reset_time is None or context.reset_time > state.last_portfolio_reset_time:
+            state.last_portfolio_reset_time = context.reset_time
+        # Portfolio reset обновляет cycle tracking
+        state.cycle_start_equity = state.balance
+        state.equity_peak_in_cycle = state.cycle_start_equity
+    elif context.reason == ResetReason.CAPACITY_PRESSURE:
+        # Portfolio-level capacity reset
+        state.portfolio_reset_count += 1
+        state.portfolio_reset_capacity_count = getattr(state, 'portfolio_reset_capacity_count', 0) + 1
         if state.last_portfolio_reset_time is None or context.reset_time > state.last_portfolio_reset_time:
             state.last_portfolio_reset_time = context.reset_time
         # Portfolio reset обновляет cycle tracking

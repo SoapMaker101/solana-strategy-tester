@@ -1,5 +1,104 @@
 # Changelog
 
+## [Feature: Capacity-aware Portfolio Reset + Market Close + Dual Reporting] - v1.6 - 2025-01-XX
+
+### Capacity Reset и Market Close для Portfolio Reset
+
+#### 🎯 Цель изменений
+
+Реализован capacity reset механизм для предотвращения "capacity choke" (портфель перестает открывать новые сделки из-за заполненности). Сохранена прибыльная механизма profit reset, но добавлен независимый capacity reset. Все reset теперь закрывают позиции market close (реалистично), а не pnl=0. Реализован dual reporting: positions-level для Stage A/B и executions-level для дебага.
+
+#### ✨ Основные изменения
+
+##### 1. **Capacity Reset механизм**
+
+**Проблема capacity choke:**
+- `open_positions` долго == `max_open_positions`
+- Новые сигналы отклоняются (max_open_positions/max_exposure)
+- Turnover маленький → прибыльный profit reset может не наступить, портфель "висит"
+
+**Решение:**
+- Добавлен независимый capacity reset, который срабатывает при:
+  1. Портфель заполнен: `open_positions / max_open_positions >= capacity_open_ratio_threshold`
+  2. Много отклоненных сигналов: `blocked_by_capacity_in_window >= capacity_blocked_signals_threshold`
+  3. Низкий turnover: `closed_in_window <= capacity_min_turnover_threshold`
+- Закрытие происходит **market close** (по текущей цене через execution_model, не pnl=0)
+- Независимые счетчики: `portfolio_reset_capacity_count` отдельно от `portfolio_reset_profit_count`
+
+##### 2. **Market Close при Reset**
+
+**До v1.6:** Закрытие при reset происходило с pnl=0 (нереалистично)
+
+**После v1.6:**
+- Закрытие происходит по текущей цене через `execution_model.apply_exit()`
+- Используется `get_mark_price_for_position()` для получения текущей цены
+- PnL рассчитывается реалистично: `exit_pnl_pct = (effective_exit_price - exec_entry_price) / exec_entry_price`
+- Meta содержит: `exec_exit_price`, `fees_total_sol`, `pnl_sol`, `reset_reason`
+
+##### 3. **Разделение счетчиков Reset**
+
+**Добавлено в `PortfolioStats`:**
+- `portfolio_reset_profit_count` — только profit reset (по equity threshold)
+- `portfolio_reset_capacity_count` — только capacity reset
+- `portfolio_reset_count` — общий счетчик (profit + capacity)
+- Сохранена обратная совместимость: `reset_count` property → `portfolio_reset_count`
+
+##### 4. **Dual Reporting**
+
+**Positions-level (`portfolio_positions.csv`):**
+- 1 строка = 1 Position (агрегат по signal_id+strategy+contract)
+- Используется Stage A для анализа устойчивости
+- Обязательные поля: `strategy`, `signal_id`, `pnl_sol`, `hold_minutes`, `reset_reason`
+- Запрещены дубликаты
+
+**Executions-level (`portfolio_executions.csv`):**
+- Каждая запись = fill/partial_close/force_close event
+- Используется для дебага и анализа исполнения
+- Один signal_id может иметь несколько строк (partial exits)
+- Поля: `event_type`, `qty_delta`, `exec_price`, `pnl_sol_delta`, `reset_reason`
+
+##### 5. **Stage A валидация формата**
+
+- Проверка обязательных колонок positions-level CSV
+- Отклонение executions-level CSV с понятной ошибкой
+- Валидация наличия `pnl_sol` или `pnl_pct`
+
+#### 📁 Измененные файлы
+
+**Код:**
+- `backtester/domain/portfolio.py` — capacity reset логика, capacity tracking
+- `backtester/domain/portfolio_reset.py` — market close, CAPACITY_PRESSURE, `get_mark_price_for_position()`
+- `backtester/infrastructure/reporter.py` — `save_portfolio_positions_table()`, `save_portfolio_executions_table()`
+- `backtester/research/run_stage_a.py` — валидация формата входных данных
+- `main.py` — вызов обоих методов репортинга
+
+**Тесты:**
+- `tests/portfolio/test_portfolio_capacity_reset.py` — тесты capacity reset
+- `tests/infrastructure/test_reporter_dual_tables.py` — тесты репортинга
+- `tests/research/test_stage_a_format_validation.py` — тесты валидации формата
+
+**Документация:**
+- `docs/VARIABLES_REFERENCE.md` — добавлены capacity reset параметры, dual reporting
+- `docs/PORTFOLIO_LAYER.md` — обновлена информация о reset механизмах
+- `docs/CHANGELOG.md` — добавлена запись о v1.6
+
+#### ✅ Критерии приемки
+
+Все требования выполнены:
+- ✅ Capacity reset реализован и покрыт тестами
+- ✅ Profit reset сохранен и не сломан
+- ✅ Reset закрывает позиции market close и экономика меняется
+- ✅ Счетчики reset разделены (profit vs capacity)
+- ✅ Репорты разделены: positions vs executions
+- ✅ Stage A валидирует формат и работает на positions-level
+- ✅ `pytest` проходит полностью
+
+#### 📚 Дополнительная документация
+
+См. `docs/VARIABLES_REFERENCE.md` для полного списка capacity reset параметров.
+
+---
+
 ## [Fix: Portfolio Reset Flags Preservation] - 2025-01-XX
 
 ### Исправление потери reset-флагов в PortfolioEngine
