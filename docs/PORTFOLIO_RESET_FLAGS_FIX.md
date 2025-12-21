@@ -195,3 +195,4 @@ python -m pytest tests/ -q  # 239 passed
 - `docs/CHANGELOG.md` - запись о всех изменениях
 - `DEBUG_META_INSTRUCTIONS.md` - инструкции по отладке (временный файл)
 
+

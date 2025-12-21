@@ -116,3 +116,4 @@ but the invariant "reset_count > 0 => closed_by_reset exists" only applies to
 portfolio-level resets. Runner resets don't set closed_by_reset on trigger position.
 ```
 
+
