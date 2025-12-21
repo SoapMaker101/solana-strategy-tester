@@ -51,10 +51,13 @@ def test_stage_a_rejects_executions_level_csv():
         
         # Проверяем что была выведена ошибка
         print_calls = [str(call) for call in mock_print.call_args_list]
-        error_found = any("executions-level" in str(call).lower() or "event_type" in str(call).lower() 
-                         for call in print_calls)
+        # Ищем сообщение с "executions-level" и "event_type"
+        error_found = any(
+            "executions-level" in str(call).lower() and "event_type" in str(call).lower()
+            for call in print_calls
+        )
         assert error_found, \
-            f"Должна быть выведена ошибка о executions-level формате. Вызовы print: {print_calls}"
+            f"Должна быть выведена ошибка о executions-level формате с упоминанием 'event_type'. Вызовы print: {print_calls}"
 
 
 def test_stage_a_accepts_positions_level_csv():

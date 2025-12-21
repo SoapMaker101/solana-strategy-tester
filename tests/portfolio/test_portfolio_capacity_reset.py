@@ -19,23 +19,23 @@ def test_capacity_reset_triggers():
     """
     Тест: capacity reset срабатывает при заполнении портфеля.
     
-    Сценарий:
-    - capacity_reset_enabled = True
+    Сценарий (v1.6):
+    - capacity_reset.enabled = True
     - max_open_positions = 2 (маленький портфель)
     - capacity_open_ratio_threshold = 1.0 (100%)
-    - capacity_blocked_signals_threshold = 2
-    - capacity_min_turnover_threshold = 1
-    - capacity_window_mode = "signals"
-    - capacity_window_signals = 5
+    - capacity_reset.window_type = "signals"
+    - capacity_reset.window_size = 5
+    - capacity_reset.max_blocked_ratio = 0.4 (40%)
+    - capacity_reset.max_avg_hold_days = 0.5 (12 часов)
     
     Создаем поток сигналов:
     - Открываем 2 позиции (портфель заполнен)
-    - Отклоняем 3 сигнала по capacity (blocked >= 2)
-    - Закрытий за окно <= 1 (turnover низкий)
+    - Отклоняем сигналы по capacity (blocked_ratio >= 0.4)
+    - Позиции удерживаются долго (avg_hold_days >= 0.5)
     - Ожидаем: capacity reset срабатывает
     
     Проверяем:
-    - portfolio_reset_capacity_count == 1
+    - portfolio_reset_capacity_count >= 1
     - Есть позиция с closed_by_reset=True и reset_reason="capacity"
     - Баланс изменился согласно market close (pnl не всегда 0)
     """
@@ -48,10 +48,10 @@ def test_capacity_reset_triggers():
         fee_model=FeeModel(),
         capacity_reset_enabled=True,
         capacity_open_ratio_threshold=1.0,
-        capacity_blocked_signals_threshold=2,
-        capacity_min_turnover_threshold=1,
-        capacity_window_mode="signals",
-        capacity_window_signals=5,
+        capacity_window_type="signals",
+        capacity_window_size=5,
+        capacity_max_blocked_ratio=0.4,  # 40% отклоненных сигналов
+        capacity_max_avg_hold_days=0.5,  # 12 часов (0.5 дня)
     )
     
     engine = PortfolioEngine(config)
@@ -62,9 +62,10 @@ def test_capacity_reset_triggers():
     trades = []
     
     # Первые 2 сигнала - открываем позиции (портфель заполняется)
+    # Делаем их долгими, чтобы avg_hold_days стал большим
     for i in range(2):
         entry_time = base_time + timedelta(hours=i)
-        exit_time = entry_time + timedelta(hours=10)  # Долгие позиции
+        exit_time = entry_time + timedelta(days=1)  # Долгие позиции (1 день, чтобы avg_hold_days >= 0.5)
         
         strategy_output = StrategyOutput(
             entry_time=entry_time,
@@ -83,7 +84,10 @@ def test_capacity_reset_triggers():
             "result": strategy_output
         })
     
-    # Следующие 3 сигнала - отклоняются по capacity (портфель заполнен)
+    # Следующие сигналы - отклоняются по capacity (портфель заполнен)
+    # Нужно чтобы blocked_ratio >= 0.4 (40%)
+    # Если window_size=5, то нужно минимум 2 отклоненных из 5 сигналов (2/5 = 0.4)
+    # Создаем 3 отклоненных сигнала из 5, чтобы ratio = 3/5 = 0.6 >= 0.4
     for i in range(3):
         entry_time = base_time + timedelta(hours=2+i)
         exit_time = entry_time + timedelta(hours=2)
@@ -139,21 +143,21 @@ def test_capacity_reset_triggers():
 
 def test_capacity_reset_not_triggers_with_turnover():
     """
-    Тест: capacity reset не срабатывает если есть turnover.
+    Тест: capacity reset не срабатывает если есть turnover (низкое avg_hold_days).
     
-    Сценарий:
-    - capacity_reset_enabled = True
+    Сценарий (v1.6):
+    - capacity_reset.enabled = True
     - max_open_positions = 2
-    - capacity_min_turnover_threshold = 1
+    - capacity_reset.max_avg_hold_days = 0.5 (12 часов)
     
     Создаем поток сигналов:
     - Открываем 2 позиции (портфель заполнен)
-    - Закрываем 1 позицию (turnover > threshold)
+    - Закрываем 1 позицию быстро (avg_hold_days < 0.5)
     - Отклоняем несколько сигналов
-    - Ожидаем: capacity reset НЕ срабатывает (есть turnover)
+    - Ожидаем: capacity reset НЕ срабатывает (avg_hold_days низкий = есть turnover)
     
     Проверяем:
-    - portfolio_reset_capacity_count == 0
+    - portfolio_reset_capacity_count == 0 (или проверяем что нет capacity reset позиций)
     """
     config = PortfolioConfig(
         initial_balance_sol=10.0,
@@ -164,10 +168,10 @@ def test_capacity_reset_not_triggers_with_turnover():
         fee_model=FeeModel(),
         capacity_reset_enabled=True,
         capacity_open_ratio_threshold=1.0,
-        capacity_blocked_signals_threshold=2,
-        capacity_min_turnover_threshold=1,
-        capacity_window_mode="signals",
-        capacity_window_signals=5,
+        capacity_window_type="signals",
+        capacity_window_size=5,
+        capacity_max_blocked_ratio=0.4,
+        capacity_max_avg_hold_days=0.5,  # 12 часов
     )
     
     engine = PortfolioEngine(config)
@@ -178,7 +182,7 @@ def test_capacity_reset_not_triggers_with_turnover():
     
     # Первая позиция - открывается и быстро закрывается (turnover)
     entry_time_1 = base_time
-    exit_time_1 = base_time + timedelta(hours=1)  # Быстро закрывается
+    exit_time_1 = base_time + timedelta(hours=6)  # Закрывается через 6 часов (< 12 часов = avg_hold_days < 0.5)
     
     trades.append({
         "signal_id": "signal_1",
@@ -195,9 +199,9 @@ def test_capacity_reset_not_triggers_with_turnover():
         )
     })
     
-    # Вторая позиция - открывается (портфель заполнен)
-    entry_time_2 = base_time + timedelta(hours=0.5)
-    exit_time_2 = base_time + timedelta(hours=10)  # Долгая позиция
+    # Вторая позиция - открывается (портфель заполнен), но тоже быстро закроется
+    entry_time_2 = base_time + timedelta(hours=1)
+    exit_time_2 = base_time + timedelta(hours=7)  # Закрывается через 6 часов после входа
     
     trades.append({
         "signal_id": "signal_2",
@@ -238,25 +242,23 @@ def test_capacity_reset_not_triggers_with_turnover():
     
     # ===== ПРОВЕРКИ =====
     
-    # Capacity reset НЕ должен сработать (есть turnover)
-    # Но может сработать если окно сбросилось - проверяем что не было capacity reset
-    # из-за низкого turnover в текущем окне
+    # Capacity reset НЕ должен сработать (avg_hold_days низкий = есть turnover)
+    # Проверяем что нет capacity reset позиций
     capacity_reset_positions = [
         p for p in result.positions
         if p.meta.get("reset_reason") == "capacity"
     ]
-    # Если есть закрытие позиции, turnover должен быть > threshold, reset не должен сработать
-    # Но это зависит от окна - проверяем что reset не произошел из-за capacity pressure
-    # (может быть profit reset, но не capacity)
+    assert len(capacity_reset_positions) == 0, \
+        f"Capacity reset не должен был сработать (есть turnover), но найдено {len(capacity_reset_positions)} позиций с reset_reason='capacity'"
 
 
 def test_capacity_reset_disabled():
     """
     Тест: capacity reset не срабатывает если выключен.
     
-    Сценарий:
-    - capacity_reset_enabled = False
-    - Портфель заполнен, много отклоненных сигналов, мало закрытий
+    Сценарий (v1.6):
+    - capacity_reset.enabled = False
+    - Портфель заполнен, много отклоненных сигналов, высокое avg_hold_days
     - Ожидаем: capacity reset НЕ срабатывает
     
     Проверяем:
@@ -271,10 +273,10 @@ def test_capacity_reset_disabled():
         fee_model=FeeModel(),
         capacity_reset_enabled=False,  # Выключен
         capacity_open_ratio_threshold=1.0,
-        capacity_blocked_signals_threshold=2,
-        capacity_min_turnover_threshold=1,
-        capacity_window_mode="signals",
-        capacity_window_signals=5,
+        capacity_window_type="signals",
+        capacity_window_size=5,
+        capacity_max_blocked_ratio=0.4,
+        capacity_max_avg_hold_days=0.5,
     )
     
     engine = PortfolioEngine(config)
@@ -284,9 +286,10 @@ def test_capacity_reset_disabled():
     trades = []
     
     # Открываем 2 позиции (портфель заполнен)
+    # Делаем их долгими, чтобы avg_hold_days стал большим (но reset не сработает, т.к. выключен)
     for i in range(2):
         entry_time = base_time + timedelta(hours=i)
-        exit_time = entry_time + timedelta(hours=10)
+        exit_time = entry_time + timedelta(days=1)  # Долгие позиции
         
         trades.append({
             "signal_id": f"signal_{i+1}",

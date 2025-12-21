@@ -126,8 +126,7 @@ def main():
         
         # Проверка на executions-level формат (должен отсутствовать event_type)
         if "event_type" in df_sample.columns:
-            print(f"ERROR: Invalid file format. This appears to be executions-level CSV (has 'event_type' column).")
-            print(f"       Stage A requires positions-level CSV (portfolio_positions.csv).")
+            print(f"ERROR: Detected executions-level CSV (column 'event_type' found). Stage A requires positions-level CSV (portfolio_positions.csv).")
             print(f"       Executions-level CSV (portfolio_executions.csv) is for debugging only.")
             return
         

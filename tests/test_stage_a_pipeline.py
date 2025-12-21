@@ -84,10 +84,45 @@ def fake_reports_dir(tmp_path):
 
 def test_stage_a_pipeline_full(fake_reports_dir, monkeypatch, capsys):
     """Проверяет полный pipeline Stage A"""
+    # Создаем positions-level CSV перед запуском Stage A
+    positions_path = fake_reports_dir / "portfolio_positions.csv"
+    df_positions = pd.DataFrame({
+        "strategy": ["fake_strategy_1", "fake_strategy_1", "fake_strategy_2", "fake_strategy_2"],
+        "signal_id": ["s1_1", "s1_2", "s2_1", "s2_2"],
+        "contract_address": ["TOKEN1", "TOKEN2", "TOKEN3", "TOKEN3"],
+        "entry_time": [
+            "2024-01-01T10:00:00Z",
+            "2024-01-15T10:00:00Z",
+            "2024-01-10T10:00:00Z",
+            "2024-02-10T10:00:00Z",
+        ],
+        "exit_time": [
+            "2024-01-01T10:01:00Z",
+            "2024-01-15T10:01:00Z",
+            "2024-01-10T10:01:00Z",
+            "2024-02-10T10:01:00Z",
+        ],
+        "status": ["closed", "closed", "closed", "closed"],
+        "size": [1.0, 1.0, 1.0, 1.0],
+        "pnl_sol": [0.1, -0.05, -0.1, 0.05],
+        "pnl_pct": [0.1, -0.05, -0.1, 0.05],
+        "fees_total_sol": [0.001, 0.001, 0.001, 0.001],
+        "exec_entry_price": [100.0, 100.0, 100.0, 100.0],
+        "exec_exit_price": [110.0, 95.0, 90.0, 105.0],
+        "raw_entry_price": [100.0, 100.0, 100.0, 100.0],
+        "raw_exit_price": [110.0, 95.0, 90.0, 105.0],
+        "closed_by_reset": [False, False, False, False],
+        "triggered_portfolio_reset": [False, False, False, False],
+        "reset_reason": [None, None, None, None],
+        "hold_minutes": [60, 60, 60, 60],
+    })
+    df_positions.to_csv(positions_path, index=False)
+    
     # Мокаем sys.argv для argparse
     import sys
     monkeypatch.setattr(sys, "argv", [
         "run_stage_a.py",
+        "--trades", str(positions_path),
         "--reports-dir",
         str(fake_reports_dir),
     ])
@@ -201,6 +236,7 @@ def test_stage_a_pipeline_no_empty_strategies(fake_reports_dir):
     # Пустая стратегия может быть в таблице с нулевыми метриками
     # или может быть пропущена - оба варианта приемлемы
     assert isinstance(stability_df, pd.DataFrame)
+
 
 
 
