@@ -99,6 +99,11 @@ class PortfolioState:
     # Reset blocking (для runner reset по XN)
     reset_until: Optional[datetime] = None
     
+    # Capacity tracking метрики (v1.6)
+    blocked_by_capacity_in_window: int = 0  # Количество отклоненных сигналов по capacity за окно
+    closed_in_window: int = 0  # Количество закрытых позиций за окно
+    avg_hold_time_open_positions: float = 0.0  # Среднее время удержания открытых позиций (дни)
+    
     def current_equity(self) -> float:
         """Текущая equity (balance + открытые позиции)."""
         return self.balance + sum(p.size for p in self.open_positions)

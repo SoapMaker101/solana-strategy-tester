@@ -300,6 +300,33 @@ class BacktestRunner:
         # Execution profile (по умолчанию realistic)
         execution_profile = portfolio_cfg.get("execution_profile", "realistic")
         
+        # Парсим capacity reset конфигурацию (поддерживаем вложенную структуру)
+        capacity_reset_cfg = portfolio_cfg.get("capacity_reset", {})
+        if capacity_reset_cfg:
+            # Новая вложенная структура
+            capacity_reset_enabled = capacity_reset_cfg.get("enabled", True)
+            capacity_window_type = capacity_reset_cfg.get("window_type", "time")
+            capacity_window_size = capacity_reset_cfg.get("window_size", 7)
+            capacity_max_blocked_ratio = float(capacity_reset_cfg.get("max_blocked_ratio", 0.4))
+            capacity_max_avg_hold_days = float(capacity_reset_cfg.get("max_avg_hold_days", 10.0))
+            
+            # Парсим window_size: может быть int, str "7d", или число
+            if isinstance(capacity_window_size, str) and capacity_window_size.endswith("d"):
+                capacity_window_size = int(capacity_window_size[:-1])
+            else:
+                capacity_window_size = int(capacity_window_size)
+        else:
+            # Обратная совместимость: плоская структура
+            capacity_reset_enabled = portfolio_cfg.get("capacity_reset_enabled", True)
+            capacity_window_type = portfolio_cfg.get("capacity_window_mode", "time")
+            capacity_window_size = portfolio_cfg.get("capacity_window_days", 7)
+            # Для обратной совместимости используем старые параметры
+            blocked_threshold = portfolio_cfg.get("capacity_blocked_signals_threshold", 200)
+            max_positions = int(portfolio_cfg.get("max_open_positions", 10))
+            # Приблизительно вычисляем max_blocked_ratio из threshold
+            capacity_max_blocked_ratio = blocked_threshold / max(100, max_positions * 10) if blocked_threshold else 0.4
+            capacity_max_avg_hold_days = float(portfolio_cfg.get("capacity_min_turnover_threshold", 2))
+        
         return PortfolioConfig(
             initial_balance_sol=float(portfolio_cfg.get("initial_balance_sol", 10.0)),
             allocation_mode=portfolio_cfg.get("allocation_mode", "dynamic"),
@@ -312,6 +339,11 @@ class BacktestRunner:
             backtest_end=backtest_end,
             runner_reset_enabled=portfolio_cfg.get("runner_reset_enabled", False),
             runner_reset_multiple=float(portfolio_cfg.get("runner_reset_multiple", 2.0)),
+            capacity_reset_enabled=capacity_reset_enabled,
+            capacity_window_type=capacity_window_type,
+            capacity_window_size=capacity_window_size,
+            capacity_max_blocked_ratio=capacity_max_blocked_ratio,
+            capacity_max_avg_hold_days=capacity_max_avg_hold_days,
         )
 
     def run_portfolio(self) -> Dict[str, PortfolioResult]:

@@ -296,14 +296,13 @@ portfolio:
   max_open_positions: 10          # Максимальное количество открытых позиций
   runner_reset_enabled: false     # Runner-XN reset (закрытие всех позиций при достижении XN)
   runner_reset_multiple: 2.0     # Множитель XN для runner reset (например, 2.0 = x2)
-  # Capacity reset (v1.6)
-  capacity_reset_enabled: true   # Capacity reset (закрытие при capacity pressure)
-  capacity_open_ratio_threshold: 1.0  # Порог заполненности портфеля (1.0 = 100%)
-  capacity_window_days: 7        # Окно времени для capacity метрик (дни)
-  capacity_blocked_signals_threshold: 200  # Порог отклоненных сигналов за окно
-  capacity_min_turnover_threshold: 2  # Минимальное количество закрытий за окно
-  capacity_window_mode: "time"   # Режим окна: "time" или "signals"
-  capacity_window_signals: 300    # Количество сигналов для окна (если mode="signals")
+  # Capacity reset (v1.6) - предотвращает "capacity choke"
+  capacity_reset:
+    enabled: true                 # Включить capacity reset
+    window_type: "time"          # Тип окна: "time" (по времени) или "signals" (по количеству сигналов)
+    window_size: 7d              # Размер окна: дни (например, "7d" или 7) для time, количество сигналов для signals
+    max_blocked_ratio: 0.4       # Максимальная доля отклоненных сигналов за окно (0.4 = 40%)
+    max_avg_hold_days: 10.0      # Максимальное среднее время удержания открытых позиций (дни)
   execution_profile: "realistic"   # Профиль исполнения: "realistic", "stress", или "custom"
   fee:
     swap_fee_pct: 0.003           # Комиссия swap (0.3%)

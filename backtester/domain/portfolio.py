@@ -6,7 +6,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from .position import Position
 from .models import StrategyOutput
@@ -75,14 +75,13 @@ class PortfolioConfig:
     runner_reset_enabled: bool = False
     runner_reset_multiple: float = 2.0  # XN multiplier (например, 2.0 = x2)
     
-    # Capacity reset конфигурация
+    # Capacity reset конфигурация (v1.6)
     capacity_reset_enabled: bool = True
     capacity_open_ratio_threshold: float = 1.0  # Порог заполненности портфеля (1.0 = 100%)
-    capacity_window_days: int = 7  # Окно времени для capacity метрик (в днях)
-    capacity_blocked_signals_threshold: int = 200  # Порог количества отклоненных сигналов за окно
-    capacity_min_turnover_threshold: int = 2  # Минимальное количество закрытий за окно
-    capacity_window_mode: Literal["time", "signals"] = "time"  # Режим окна: по времени или по количеству сигналов
-    capacity_window_signals: int = 300  # Количество сигналов для окна (если mode="signals")
+    capacity_window_type: Literal["time", "signals"] = "time"  # Тип окна: по времени или по количеству сигналов
+    capacity_window_size: Union[int, str] = 7  # Размер окна: дни (int) или строка "7d" для time, количество сигналов для signals
+    capacity_max_blocked_ratio: float = 0.4  # Максимальная доля отклоненных сигналов за окно (0.4 = 40%)
+    capacity_max_avg_hold_days: float = 10.0  # Максимальное среднее время удержания открытых позиций (дни)
 
 
 @dataclass
@@ -291,13 +290,20 @@ class PortfolioEngine:
         
         # Проверяем метрики окна
         blocked_window = capacity_tracking.get("blocked_by_capacity_in_window", 0)
-        closed_window = capacity_tracking.get("closed_in_window", 0)
+        signals_in_window = capacity_tracking.get("signals_in_window", 0)
+        avg_hold_days = capacity_tracking.get("avg_hold_time_open_positions", 0.0)
         
-        if blocked_window < self.config.capacity_blocked_signals_threshold:
-            return None  # Недостаточно отклоненных сигналов
+        # Проверяем max_blocked_ratio (доля отклоненных сигналов)
+        if signals_in_window > 0:
+            blocked_ratio = blocked_window / signals_in_window
+            if blocked_ratio < self.config.capacity_max_blocked_ratio:
+                return None  # Недостаточно отклоненных сигналов (низкая доля)
+        else:
+            return None  # Нет сигналов в окне
         
-        if closed_window > self.config.capacity_min_turnover_threshold:
-            return None  # Есть turnover, reset не нужен
+        # Проверяем max_avg_hold_days (среднее время удержания открытых позиций)
+        if avg_hold_days < self.config.capacity_max_avg_hold_days:
+            return None  # Среднее время удержания низкое (есть turnover), reset не нужен
         
         # Все условия выполнены - capacity reset должен сработать
         # Выбираем marker position (первая открытая позиция)
@@ -314,7 +320,7 @@ class PortfolioEngine:
             positions_to_force_close=positions_to_force_close,
             open_ratio=open_ratio,
             blocked_window=blocked_window,
-            turnover_window=closed_window,
+            turnover_window=capacity_tracking.get("closed_in_window", 0),
             window_start=capacity_tracking.get("window_start"),
             window_end=capacity_tracking.get("window_end"),
         )
@@ -325,6 +331,7 @@ class PortfolioEngine:
         self,
         capacity_tracking: Dict[str, Any],
         current_time: datetime,
+        state: PortfolioState,
         signal_blocked_by_capacity: bool,
         position_closed: bool,
     ) -> None:
@@ -347,9 +354,14 @@ class PortfolioEngine:
         window_start = capacity_tracking["window_start"]
         
         # Определяем границы окна
-        if self.config.capacity_window_mode == "time":
+        if self.config.capacity_window_type == "time":
             # Окно по времени
-            window_duration = timedelta(days=self.config.capacity_window_days)
+            window_size = self.config.capacity_window_size
+            if isinstance(window_size, str) and window_size.endswith("d"):
+                days = int(window_size[:-1])
+            else:
+                days = int(window_size)
+            window_duration = timedelta(days=days)
             window_end = window_start + window_duration
         else:
             # Окно по количеству сигналов
@@ -365,9 +377,9 @@ class PortfolioEngine:
         capacity_tracking["signals_in_window"] = capacity_tracking.get("signals_in_window", 0) + 1
         
         # Обновляем окно если нужно
-        if self.config.capacity_window_mode == "time":
+        if self.config.capacity_window_type == "time":
             # Если текущее время вышло за окно, сдвигаем окно
-            if current_time > window_end:
+            if window_end is not None and current_time > window_end:
                 # Сбрасываем окно
                 capacity_tracking["window_start"] = current_time
                 capacity_tracking["blocked_by_capacity_in_window"] = 0
@@ -375,14 +387,28 @@ class PortfolioEngine:
                 capacity_tracking["signals_in_window"] = 0
         else:
             # Окно по сигналам: если достигли лимита, сдвигаем окно
-            if capacity_tracking["signals_in_window"] >= self.config.capacity_window_signals:
+            window_size = int(self.config.capacity_window_size)
+            if capacity_tracking["signals_in_window"] >= window_size:
                 # Сбрасываем окно
                 capacity_tracking["window_start"] = current_time
                 capacity_tracking["blocked_by_capacity_in_window"] = 0
                 capacity_tracking["closed_in_window"] = 0
                 capacity_tracking["signals_in_window"] = 0
         
-        capacity_tracking["window_end"] = window_end if self.config.capacity_window_mode == "time" else current_time
+        # Обновляем avg_hold_time_open_positions
+        if state.open_positions:
+            total_hold_seconds = sum(
+                (current_time - pos.entry_time).total_seconds()
+                for pos in state.open_positions
+                if pos.entry_time
+            )
+            avg_hold_seconds = total_hold_seconds / len(state.open_positions)
+            avg_hold_days = avg_hold_seconds / (24 * 3600)
+            capacity_tracking["avg_hold_time_open_positions"] = avg_hold_days
+        else:
+            capacity_tracking["avg_hold_time_open_positions"] = 0.0
+        
+        capacity_tracking["window_end"] = window_end if self.config.capacity_window_type == "time" else current_time
     
     def _apply_reset(
         self,
@@ -887,6 +913,7 @@ class PortfolioEngine:
                 self._update_capacity_tracking(
                     capacity_tracking=capacity_tracking,
                     current_time=entry_time,
+                    state=state,
                     signal_blocked_by_capacity=False,
                     position_closed=True,
                 )
@@ -972,6 +999,7 @@ class PortfolioEngine:
                 self._update_capacity_tracking(
                     capacity_tracking=capacity_tracking,
                     current_time=entry_time,
+                    state=state,
                     signal_blocked_by_capacity=True,
                     position_closed=False,
                 )
@@ -1033,6 +1061,7 @@ class PortfolioEngine:
                 self._update_capacity_tracking(
                     capacity_tracking=capacity_tracking,
                     current_time=entry_time,
+                    state=state,
                     signal_blocked_by_capacity=True,
                     position_closed=False,
                 )
@@ -1046,6 +1075,7 @@ class PortfolioEngine:
                 self._update_capacity_tracking(
                     capacity_tracking=capacity_tracking,
                     current_time=entry_time,
+                    state=state,
                     signal_blocked_by_capacity=True,
                     position_closed=False,
                 )
@@ -1056,6 +1086,7 @@ class PortfolioEngine:
                 self._update_capacity_tracking(
                     capacity_tracking=capacity_tracking,
                     current_time=entry_time,
+                    state=state,
                     signal_blocked_by_capacity=False,
                     position_closed=False,
                 )

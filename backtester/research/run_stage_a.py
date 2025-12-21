@@ -73,8 +73,8 @@ def main():
         "--trades",
         type=str,
         default=None,
-        help="Path to portfolio_trades.csv file (executed trades). "
-             "If not provided, looks for portfolio_trades.csv in --reports-dir",
+        help="Path to portfolio_positions.csv file (positions-level, executed positions). "
+             "If not provided, looks for portfolio_positions.csv in --reports-dir",
     )
     
     parser.add_argument(
@@ -97,11 +97,11 @@ def main():
     
     reports_dir = Path(args.reports_dir)
     
-    # Определяем путь к portfolio_trades.csv
+    # Определяем путь к portfolio_positions.csv
     if args.trades:
         trades_path = Path(args.trades)
     else:
-        trades_path = reports_dir / "portfolio_trades.csv"
+        trades_path = reports_dir / "portfolio_positions.csv"
     
     if not trades_path.exists():
         print(f"ERROR: Portfolio positions file not found: {trades_path}")
@@ -131,9 +131,12 @@ def main():
             print(f"       Executions-level CSV (portfolio_executions.csv) is for debugging only.")
             return
         
-        # Проверка наличия pnl_sol или pnl_pct
-        if "pnl_sol" not in df_sample.columns and "pnl_pct" not in df_sample.columns:
-            print(f"WARNING: Missing pnl columns (pnl_sol or pnl_pct). Stage A may not work correctly.")
+        # Проверка наличия обязательных колонок для анализа
+        analysis_columns = ["pnl_sol", "pnl_pct", "closed_by_reset"]
+        missing_analysis = [col for col in analysis_columns if col not in df_sample.columns]
+        if missing_analysis:
+            print(f"WARNING: Missing analysis columns: {missing_analysis}. Stage A may not work correctly.")
+            print(f"         Required for stability analysis: pnl_sol or pnl_pct, closed_by_reset")
         
     except Exception as e:
         print(f"WARNING: Could not validate file format: {e}")
