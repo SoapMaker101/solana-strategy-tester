@@ -151,51 +151,59 @@ def test_stage_a_stability_has_required_columns():
         assert pd.notna(runner_row[col]), f"Runner column {col} is NaN"
 
 
-def test_runner_metrics_computation():
-    """Проверяет корректность расчета Runner метрик из trades CSV."""
-    # Создаем синтетический trades DataFrame с Runner метаданными
-    trades_data = []
+def test_runner_metrics_computation(tmp_path):
+    """Проверяет корректность расчета Runner метрик из portfolio_positions.csv (новый контракт)."""
+    # Создаем синтетический portfolio_positions.csv с Runner метриками
+    # 4 позиции:
+    # A) max_xn_reached=2.0 hit_x2=True hit_x5=False
+    # B) max_xn_reached=5.0 hit_x2=True hit_x5=True
+    # C) max_xn_reached=7.0 hit_x2=True hit_x5=True (tail)
+    # D) max_xn_reached=1.5 hit_x2=False hit_x5=False
+    # => hit_rate_x2 = 3/4 = 0.75, hit_rate_x5 = 2/4 = 0.5
     
-    # Торговля 1: достиг x2, но не x5
-    trades_data.append({
-        "entry_time": pd.Timestamp("2024-01-01 00:00:00", tz="UTC"),
-        "exit_time": pd.Timestamp("2024-01-02 00:00:00", tz="UTC"),
-        "pnl_pct": 100.0,  # 100% = 2x
-        "meta_realized_multiple": 2.0,
-        "meta": json.dumps({"levels_hit": {"2.0": "2024-01-02T00:00:00Z"}}),
-    })
+    positions_data = {
+        "strategy": ["Runner_Test"] * 4,
+        "signal_id": ["sig_1", "sig_2", "sig_3", "sig_4"],
+        "contract_address": ["TOKEN1", "TOKEN2", "TOKEN3", "TOKEN4"],
+        "entry_time": [
+            "2024-01-01T00:00:00Z",
+            "2024-01-03T00:00:00Z",
+            "2024-01-11T00:00:00Z",
+            "2024-01-21T00:00:00Z",
+        ],
+        "exit_time": [
+            "2024-01-02T00:00:00Z",  # 1 день
+            "2024-01-10T00:00:00Z",  # 7 дней
+            "2024-01-20T00:00:00Z",  # 9 дней
+            "2024-01-22T00:00:00Z",  # 1 день
+        ],
+        "status": ["closed"] * 4,
+        "size": [1.0] * 4,
+        "pnl_sol": [1.0, 4.0, 6.0, 0.5],  # Total = 11.5, tail (>=5) = 4.0 + 6.0 = 10.0
+        "fees_total_sol": [0.1] * 4,
+        "exec_entry_price": [1.0] * 4,
+        "exec_exit_price": [2.0, 5.0, 7.0, 1.5],
+        "raw_entry_price": [1.0] * 4,
+        "raw_exit_price": [2.0, 5.0, 7.0, 1.5],
+        "closed_by_reset": [False] * 4,
+        "triggered_portfolio_reset": [False] * 4,
+        "reset_reason": ["none"] * 4,
+        "hold_minutes": [1440, 10080, 12960, 1440],  # 1, 7, 9, 1 день в минутах
+        "max_xn_reached": [2.0, 5.0, 7.0, 1.5],
+        "hit_x2": [True, True, True, False],  # 3 из 4
+        "hit_x5": [False, True, True, False],  # 2 из 4
+    }
     
-    # Торговля 2: достиг x5
-    trades_data.append({
-        "entry_time": pd.Timestamp("2024-01-03 00:00:00", tz="UTC"),
-        "exit_time": pd.Timestamp("2024-01-10 00:00:00", tz="UTC"),
-        "pnl_pct": 400.0,  # 400% = 5x
-        "meta_realized_multiple": 5.0,
-        "meta": json.dumps({"levels_hit": {"2.0": "2024-01-05T00:00:00Z", "5.0": "2024-01-10T00:00:00Z"}}),
-    })
+    positions_df = pd.DataFrame(positions_data)
+    positions_path = tmp_path / "portfolio_positions.csv"
+    positions_df.to_csv(positions_path, index=False)
     
-    # Торговля 3: достиг x7 (tail)
-    trades_data.append({
-        "entry_time": pd.Timestamp("2024-01-11 00:00:00", tz="UTC"),
-        "exit_time": pd.Timestamp("2024-01-20 00:00:00", tz="UTC"),
-        "pnl_pct": 600.0,  # 600% = 7x
-        "meta_realized_multiple": 7.0,
-        "meta": json.dumps({"levels_hit": {"2.0": "2024-01-12T00:00:00Z", "5.0": "2024-01-15T00:00:00Z", "7.0": "2024-01-20T00:00:00Z"}}),
-    })
-    
-    # Торговля 4: не достиг x2
-    trades_data.append({
-        "entry_time": pd.Timestamp("2024-01-21 00:00:00", tz="UTC"),
-        "exit_time": pd.Timestamp("2024-01-22 00:00:00", tz="UTC"),
-        "pnl_pct": 50.0,  # 50% = 1.5x
-        "meta_realized_multiple": 1.5,
-        "meta": json.dumps({}),
-    })
-    
-    trades_df = pd.DataFrame(trades_data)
-    
-    # Вычисляем Runner метрики
-    runner_metrics = calculate_runner_metrics(trades_df)
+    # Вычисляем Runner метрики из portfolio_positions.csv
+    runner_metrics = calculate_runner_metrics(
+        strategy_name="Runner_Test",
+        portfolio_positions_path=positions_path,
+        portfolio_summary_path=None,
+    )
     
     # Проверяем hit_rate_x2: 3 из 4 сделок достигли x2
     assert runner_metrics["hit_rate_x2"] == pytest.approx(0.75, abs=0.01)
@@ -207,13 +215,19 @@ def test_runner_metrics_computation():
     # Дни: 1, 7, 9, 1 -> p90 должен быть около 9
     assert runner_metrics["p90_hold_days"] > 0
     assert runner_metrics["p90_hold_days"] <= 10
+    assert isinstance(runner_metrics["p90_hold_days"], (int, float))
     
-    # Проверяем tail_contribution: доля PnL от сделок с realized_multiple >= 5x
-    # Сделки с >= 5x: trade 2 (400%), trade 3 (600%) = 1000%
-    # Total PnL: 100 + 400 + 600 + 50 = 1150%
-    # tail_contribution = 1000 / 1150 ≈ 0.87
+    # Проверяем tail_contribution: доля PnL от сделок с max_xn_reached >= 5.0
+    # Сделки с >= 5.0: sig_2 (4.0), sig_3 (6.0) = 10.0
+    # Total PnL: 1.0 + 4.0 + 6.0 + 0.5 = 11.5
+    # tail_contribution = 10.0 / 11.5 ≈ 0.87
     assert runner_metrics["tail_contribution"] > 0.80
     assert runner_metrics["tail_contribution"] <= 1.0
+    assert isinstance(runner_metrics["tail_contribution"], (int, float))
+    
+    # Проверяем что max_drawdown_pct существует и имеет валидный тип
+    assert "max_drawdown_pct" in runner_metrics
+    assert isinstance(runner_metrics["max_drawdown_pct"], (int, float))
 
 
 def test_stage_b_reasons_present():

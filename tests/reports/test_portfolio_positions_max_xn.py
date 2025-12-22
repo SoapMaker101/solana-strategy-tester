@@ -1,7 +1,7 @@
 """
-Тесты для проверки расчета max_xn, hit_x2, hit_x5 в portfolio_positions.csv.
+Тесты для проверки расчета max_xn_reached, hit_x2, hit_x5 в portfolio_positions.csv.
 
-T1: max_xn/hit_x2/hit_x5 в portfolio_positions.csv
+T1: max_xn_reached/hit_x2/hit_x5 в portfolio_positions.csv
 """
 import pytest
 import pandas as pd
@@ -15,10 +15,10 @@ from backtester.infrastructure.reporter import Reporter
 
 def test_max_xn_from_exec_prices(tmp_path):
     """
-    Тест: max_xn рассчитывается из exec цен если они есть.
+    Тест: max_xn_reached рассчитывается из exec цен если они есть.
     
     Position: exec_entry_price=1.0, exec_exit_price=2.5
-    Ожидаем: max_xn=2.5, hit_x2=True, hit_x5=False
+    Ожидаем: max_xn_reached=2.5, hit_x2=True, hit_x5=False
     """
     reporter = Reporter(output_dir=str(tmp_path))
     
@@ -67,17 +67,17 @@ def test_max_xn_from_exec_prices(tmp_path):
     assert len(df) == 1, "Должна быть одна позиция"
     
     row = df.iloc[0]
-    assert row["max_xn"] == 2.5, f"max_xn должен быть 2.5, получен {row['max_xn']}"
+    assert row["max_xn_reached"] == pytest.approx(2.5, abs=1e-9), f"max_xn_reached должен быть ~2.5, получен {row['max_xn_reached']}"
     assert row["hit_x2"] == True, f"hit_x2 должен быть True, получен {row['hit_x2']}"
     assert row["hit_x5"] == False, f"hit_x5 должен быть False, получен {row['hit_x5']}"
 
 
 def test_max_xn_from_raw_prices(tmp_path):
     """
-    Тест: max_xn рассчитывается из raw цен если exec цен нет.
+    Тест: max_xn_reached рассчитывается из raw цен если exec цен нет.
     
     raw_entry_price=1.0, raw_exit_price=5.1
-    Ожидаем: max_xn=5.1, hit_x2=True, hit_x5=True
+    Ожидаем: max_xn_reached=5.1, hit_x2=True, hit_x5=True
     """
     reporter = Reporter(output_dir=str(tmp_path))
     
@@ -124,17 +124,17 @@ def test_max_xn_from_raw_prices(tmp_path):
     assert len(df) == 1, "Должна быть одна позиция"
     
     row = df.iloc[0]
-    assert abs(row["max_xn"] - 5.1) < 0.001, f"max_xn должен быть ~5.1, получен {row['max_xn']}"
+    assert abs(row["max_xn_reached"] - 5.1) < 0.001, f"max_xn_reached должен быть ~5.1, получен {row['max_xn_reached']}"
     assert row["hit_x2"] == True, f"hit_x2 должен быть True, получен {row['hit_x2']}"
     assert row["hit_x5"] == True, f"hit_x5 должен быть True, получен {row['hit_x5']}"
 
 
 def test_max_xn_no_prices(tmp_path):
     """
-    Тест: max_xn=None/NaN если цен нет.
+    Тест: max_xn_reached=None/NaN если цен нет.
     
     все entry/exit = None
-    Ожидаем: max_xn=None/NaN, hit_x2=False, hit_x5=False
+    Ожидаем: max_xn_reached=None/NaN, hit_x2=False, hit_x5=False
     """
     reporter = Reporter(output_dir=str(tmp_path))
     
@@ -179,15 +179,15 @@ def test_max_xn_no_prices(tmp_path):
     assert len(df) == 1, "Должна быть одна позиция"
     
     row = df.iloc[0]
-    # max_xn должен быть NaN если цены отсутствуют или равны 0
-    assert pd.isna(row["max_xn"]) or row["max_xn"] == 0, f"max_xn должен быть NaN или 0, получен {row['max_xn']}"
+    # max_xn_reached должен быть NaN если цены отсутствуют или равны 0
+    assert pd.isna(row["max_xn_reached"]) or row["max_xn_reached"] == 0, f"max_xn_reached должен быть NaN или 0, получен {row['max_xn_reached']}"
     assert row["hit_x2"] == False, f"hit_x2 должен быть False, получен {row['hit_x2']}"
     assert row["hit_x5"] == False, f"hit_x5 должен быть False, получен {row['hit_x5']}"
 
 
 def test_max_xn_columns_exist(tmp_path):
     """
-    Тест: проверка что колонки max_xn, hit_x2, hit_x5 существуют в CSV.
+    Тест: проверка что колонки max_xn_reached, hit_x2, hit_x5 существуют в CSV.
     """
     reporter = Reporter(output_dir=str(tmp_path))
     
@@ -202,7 +202,7 @@ def test_max_xn_columns_exist(tmp_path):
     df = pd.read_csv(positions_path)
     
     # Проверяем наличие обязательных колонок
-    required_cols = ["max_xn", "hit_x2", "hit_x5"]
+    required_cols = ["max_xn_reached", "hit_x2", "hit_x5"]
     for col in required_cols:
         assert col in df.columns, f"Колонка {col} должна существовать в portfolio_positions.csv"
 

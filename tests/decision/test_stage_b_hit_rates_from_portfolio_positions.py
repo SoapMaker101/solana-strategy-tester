@@ -21,11 +21,11 @@ def test_stage_b_hit_rates_from_portfolio_positions(tmp_path):
     
     Setup:
     - strategy_stability.csv с одной стратегией
-    - portfolio_positions.csv: 10 позиций, 5 с max_xn>=2, 1 с max_xn>=5
+    - portfolio_positions.csv: 10 позиций, 6 с max_xn_reached>=2 (первые 5 + последняя 5.1), 1 с max_xn_reached>=5
     
     Ожидаем:
-    - hit_rate_x2 == 0.5
-    - hit_rate_x5 == 0.1
+    - hit_rate_x2 == 0.6 (6 из 10)
+    - hit_rate_x5 == 0.1 (1 из 10)
     """
     # Создаем strategy_stability.csv
     stability_data = {
@@ -50,7 +50,7 @@ def test_stage_b_hit_rates_from_portfolio_positions(tmp_path):
     stability_df.to_csv(stability_path, index=False)
     
     # Создаем portfolio_positions.csv
-    # 10 позиций: 5 с max_xn>=2, 1 с max_xn>=5
+    # 10 позиций: 6 с max_xn_reached>=2 (первые 5 + последняя 5.1), 1 с max_xn_reached>=5
     positions_data = {
         "strategy": ["Runner_Test"] * 10,
         "signal_id": [f"sig_{i}" for i in range(10)],
@@ -62,20 +62,20 @@ def test_stage_b_hit_rates_from_portfolio_positions(tmp_path):
         "pnl_sol": [1.0] * 10,
         "fees_total_sol": [0.1] * 10,
         "exec_entry_price": [1.0] * 10,
-        "exec_exit_price": [2.1, 2.2, 2.3, 2.4, 2.5,  # 5 позиций с max_xn>=2
-                             1.1, 1.2, 1.3, 1.4, 5.1],  # 4 позиции с max_xn<2, 1 с max_xn>=5
+        "exec_exit_price": [2.1, 2.2, 2.3, 2.4, 2.5,  # 5 позиций с max_xn_reached>=2
+                             1.1, 1.2, 1.3, 1.4, 5.1],  # 4 позиции с max_xn_reached<2, 1 с max_xn_reached>=5
         "raw_entry_price": [1.0] * 10,
         "raw_exit_price": [2.0] * 10,
         "closed_by_reset": [False] * 10,
         "triggered_portfolio_reset": [False] * 10,
         "reset_reason": ["none"] * 10,
         "hold_minutes": [60] * 10,
-        "max_xn": [2.1, 2.2, 2.3, 2.4, 2.5,  # 5 позиций с max_xn>=2
-                   1.1, 1.2, 1.3, 1.4, 5.1],  # 4 позиции с max_xn<2, 1 с max_xn>=5
+        "max_xn_reached": [2.1, 2.2, 2.3, 2.4, 2.5,  # 5 позиций с max_xn_reached>=2
+                           1.1, 1.2, 1.3, 1.4, 5.1],  # 4 позиции с max_xn_reached<2, 1 с max_xn_reached>=5
         "hit_x2": [True, True, True, True, True,  # 5 позиций
-                   False, False, False, False, True],  # 4 позиции False, 1 True (>=5)
+                   False, False, False, False, True],  # 4 позиции False, 1 True (>=5) → итого 6 True
         "hit_x5": [False, False, False, False, False,  # 5 позиций False
-                   False, False, False, False, True],  # 4 позиции False, 1 True
+                   False, False, False, False, True],  # 4 позиции False, 1 True → итого 1 True
     }
     positions_df = pd.DataFrame(positions_data)
     positions_path = tmp_path / "portfolio_positions.csv"
@@ -119,8 +119,8 @@ def test_stage_b_hit_rates_from_portfolio_positions(tmp_path):
     row = selection_df.iloc[0]
     
     # Проверяем hit rates
-    assert abs(row["hit_rate_x2"] - 0.5) < 0.01, f"hit_rate_x2 должен быть ~0.5, получен {row['hit_rate_x2']}"
-    assert abs(row["hit_rate_x5"] - 0.1) < 0.01, f"hit_rate_x5 должен быть ~0.1, получен {row['hit_rate_x5']}"
+    assert abs(row["hit_rate_x2"] - 0.6) < 0.01, f"hit_rate_x2 должен быть ~0.6 (6 из 10), получен {row['hit_rate_x2']}"
+    assert abs(row["hit_rate_x5"] - 0.1) < 0.01, f"hit_rate_x5 должен быть ~0.1 (1 из 10), получен {row['hit_rate_x5']}"
     
     # Проверяем что tail_contribution не NaN
     assert not pd.isna(row.get("tail_contribution", None)), "tail_contribution не должен быть NaN"
@@ -134,6 +134,6 @@ def test_stage_b_hit_rates_from_portfolio_positions(tmp_path):
     selection_df_file = pd.read_csv(selection_path)
     assert "hit_rate_x2" in selection_df_file.columns, "hit_rate_x2 должна быть в CSV"
     assert "hit_rate_x5" in selection_df_file.columns, "hit_rate_x5 должна быть в CSV"
-    assert abs(selection_df_file.iloc[0]["hit_rate_x2"] - 0.5) < 0.01, "hit_rate_x2 должен быть записан в CSV"
+    assert abs(selection_df_file.iloc[0]["hit_rate_x2"] - 0.6) < 0.01, "hit_rate_x2 должен быть записан в CSV"
     assert abs(selection_df_file.iloc[0]["hit_rate_x5"] - 0.1) < 0.01, "hit_rate_x5 должен быть записан в CSV"
 

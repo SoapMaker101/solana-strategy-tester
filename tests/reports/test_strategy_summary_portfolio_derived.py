@@ -51,7 +51,7 @@ def test_strategy_summary_from_portfolio_positions(tmp_path):
         "triggered_portfolio_reset": [True, False, False],
         "reset_reason": ["profit", "profit", "none"],
         "hold_minutes": [10, 20, 30],
-        "max_xn": [2.1, 1.2, 5.2],
+        "max_xn_reached": [2.1, 1.2, 5.2],
         "hit_x2": [True, False, True],
         "hit_x5": [False, False, True],
     }
@@ -97,31 +97,33 @@ def test_strategy_summary_from_portfolio_positions(tmp_path):
     # Проверяем счетчики
     assert row["positions_total"] == 3, f"positions_total должен быть 3, получен {row['positions_total']}"
     assert row["positions_closed"] == 3, f"positions_closed должен быть 3, получен {row['positions_closed']}"
-    assert row["trades_executed"] == 3, f"trades_executed должен быть 3, получен {row['trades_executed']}"
+    assert row["total_trades"] == 3, f"total_trades должен быть 3, получен {row['total_trades']}"
     
     # Проверяем reset counts
-    assert row["reset_closed_count"] == 1, f"reset_closed_count должен быть 1, получен {row['reset_closed_count']}"
-    assert row["reset_trigger_count"] == 1, f"reset_trigger_count должен быть 1, получен {row['reset_trigger_count']}"
-    assert row["profit_reset_count"] == 2, f"profit_reset_count должен быть 2, получен {row['profit_reset_count']}"
+    assert row["closed_by_reset_count"] == 1, f"closed_by_reset_count должен быть 1, получен {row['closed_by_reset_count']}"
+    assert row["triggered_portfolio_reset_count"] == 1, f"triggered_portfolio_reset_count должен быть 1, получен {row['triggered_portfolio_reset_count']}"
+    assert row["profit_reset_closed_count"] == 2, f"profit_reset_closed_count должен быть 2, получен {row['profit_reset_closed_count']}"
     
     # Проверяем PnL в SOL
-    assert abs(row["pnl_total_sol"] - 0.7) < 0.001, f"pnl_total_sol должен быть ~0.7, получен {row['pnl_total_sol']}"
+    assert abs(row["strategy_total_pnl_sol"] - 0.7) < 0.001, f"strategy_total_pnl_sol должен быть ~0.7, получен {row['strategy_total_pnl_sol']}"
     assert abs(row["fees_total_sol"] - 0.17) < 0.001, f"fees_total_sol должен быть ~0.17, получен {row['fees_total_sol']}"
     assert abs(row["pnl_net_sol"] - 0.53) < 0.001, f"pnl_net_sol должен быть ~0.53, получен {row['pnl_net_sol']}"
     
     # Проверяем статистику PnL
     assert abs(row["avg_pnl_sol"] - 0.233) < 0.01, f"avg_pnl_sol должен быть ~0.233, получен {row['avg_pnl_sol']}"
     assert abs(row["median_pnl_sol"] - 0.2) < 0.001, f"median_pnl_sol должен быть ~0.2, получен {row['median_pnl_sol']}"
-    assert abs(row["best_pnl_sol"] - 1.0) < 0.001, f"best_pnl_sol должен быть 1.0, получен {row['best_pnl_sol']}"
-    assert abs(row["worst_pnl_sol"] - (-0.5)) < 0.001, f"worst_pnl_sol должен быть -0.5, получен {row['worst_pnl_sol']}"
+    assert abs(row["best_trade_pnl_sol"] - 1.0) < 0.001, f"best_trade_pnl_sol должен быть 1.0, получен {row['best_trade_pnl_sol']}"
+    assert abs(row["worst_trade_pnl_sol"] - (-0.5)) < 0.001, f"worst_trade_pnl_sol должен быть -0.5, получен {row['worst_trade_pnl_sol']}"
     
     # Проверяем hit rates
     assert abs(row["hit_rate_x2"] - 2/3) < 0.001, f"hit_rate_x2 должен быть ~0.667, получен {row['hit_rate_x2']}"
     assert abs(row["hit_rate_x5"] - 1/3) < 0.001, f"hit_rate_x5 должен быть ~0.333, получен {row['hit_rate_x5']}"
     
     # Проверяем hold
-    assert abs(row["p90_hold_minutes"] - 30) < 0.1, f"p90_hold_minutes должен быть ~30, получен {row['p90_hold_minutes']}"
+    # pandas quantile(0.9) делает линейную интерполяцию: для [10,20,30] p90 = 28
+    assert abs(row["p90_hold_minutes"] - 28) < 0.1, f"p90_hold_minutes должен быть ~28 (pandas quantile интерполяция), получен {row['p90_hold_minutes']}"
     assert abs(row["avg_hold_minutes"] - 20) < 0.1, f"avg_hold_minutes должен быть ~20, получен {row['avg_hold_minutes']}"
+    assert abs(row["p50_hold_minutes"] - 20) < 0.1, f"p50_hold_minutes должен быть ~20, получен {row['p50_hold_minutes']}"
     
     # Проверяем return
     assert abs(row["final_balance_sol"] - 10.7) < 0.001, f"final_balance_sol должен быть ~10.7, получен {row['final_balance_sol']}"
