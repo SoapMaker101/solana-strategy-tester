@@ -137,7 +137,7 @@
   - Документация по конфигурации Runner
 
 - **`config/backtest_example.yaml`**
-  - Параметры portfolio-level reset (`runner_reset_enabled`, `runner_reset_multiple`)
+  - Параметры profit reset (`profit_reset_enabled`, `profit_reset_multiple`) - ранее назывались `runner_reset_*` (deprecated)
 
 ### Документация
 - **`docs/XN_RUNNER_RESEARCH.md`**

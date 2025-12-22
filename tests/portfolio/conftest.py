@@ -36,8 +36,10 @@ def custom_portfolio_config():
         fee_model=fee_model,
         backtest_start=datetime(2024, 1, 1, tzinfo=timezone.utc),
         backtest_end=datetime(2024, 12, 31, tzinfo=timezone.utc),
-        runner_reset_enabled=False
+        profit_reset_enabled=False
     )
+
+
 
 
 

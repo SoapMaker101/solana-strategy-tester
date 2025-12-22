@@ -253,8 +253,8 @@ def test_reset_flags_appear_only_in_portfolio_positions():
         max_exposure=1.0,
         max_open_positions=10,
         fee_model=FeeModel(),
-        runner_reset_enabled=True,
-        runner_reset_multiple=2.0  # x2
+        profit_reset_enabled=True,
+        profit_reset_multiple=2.0  # x2
     )
     
     engine = PortfolioEngine(config)

@@ -42,8 +42,8 @@ def test_debug_portfolio_reset_marker():
                 slippage_pct=0.0,  # Без slippage для простоты
                 network_fee_sol=0.0005
             ),
-            runner_reset_enabled=False,  # Отключаем runner reset, чтобы тест проверял только portfolio-level reset
-            runner_reset_multiple=2.0  # x2
+            profit_reset_enabled=False,  # Отключаем profit reset, чтобы тест проверял только capacity reset
+            profit_reset_multiple=2.0  # x2
         )
     
     engine = PortfolioEngine(config)

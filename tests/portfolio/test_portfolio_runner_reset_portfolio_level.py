@@ -1,8 +1,8 @@
 """
-Unit-тесты для portfolio-level runner reset функциональности.
+Unit-тесты для portfolio-level profit reset функциональности.
 
 Проверяет портфельную политику: при достижении portfolio equity порога
-(equity >= cycle_start_equity * runner_reset_multiple) закрываются все открытые позиции.
+(equity >= cycle_start_equity * profit_reset_multiple) закрываются все открытые позиции.
 """
 import pytest
 from datetime import datetime, timezone, timedelta
@@ -20,8 +20,8 @@ def test_portfolio_reset_closes_all_positions_on_threshold():
     Тест: portfolio-level reset закрывает все позиции при достижении порога equity.
     
     Сценарий:
-    - runner_reset_enabled = True
-    - runner_reset_multiple = 2.0 (x2)
+    - profit_reset_enabled = True
+    - profit_reset_multiple = 2.0 (x2)
     - cycle_start_equity = 10.0 (начальный баланс)
     - Порог = 10.0 * 2.0 = 20.0
     - Открываем прибыльную позицию, которая увеличивает equity до порога
@@ -41,8 +41,8 @@ def test_portfolio_reset_closes_all_positions_on_threshold():
             slippage_pct=0.0,  # Без slippage для простоты
             network_fee_sol=0.0005
         ),
-        runner_reset_enabled=True,
-        runner_reset_multiple=2.0  # x2
+        profit_reset_enabled=True,
+        profit_reset_multiple=2.0  # x2
     )
     
     engine = PortfolioEngine(config)
@@ -115,8 +115,8 @@ def test_portfolio_reset_updates_cycle_start_equity():
             slippage_pct=0.0,
             network_fee_sol=0.0005
         ),
-        runner_reset_enabled=True,
-        runner_reset_multiple=2.0
+        profit_reset_enabled=True,
+        profit_reset_multiple=2.0
     )
     
     engine = PortfolioEngine(config)
@@ -160,7 +160,7 @@ def test_portfolio_reset_updates_cycle_start_equity():
 
 def test_portfolio_reset_disabled_does_not_trigger():
     """
-    Тест: когда runner_reset_enabled = False, reset не срабатывает.
+    Тест: когда profit_reset_enabled = False, reset не срабатывает.
     
     Проверяем, что при отключенном reset все позиции работают нормально
     и reset_count = 0.
@@ -174,8 +174,8 @@ def test_portfolio_reset_disabled_does_not_trigger():
         max_exposure=1.0,
         max_open_positions=10,
         fee_model=FeeModel(),
-        runner_reset_enabled=False,  # Отключен
-        runner_reset_multiple=2.0
+        profit_reset_enabled=False,  # Отключен
+        profit_reset_multiple=2.0
     )
     
     engine = PortfolioEngine(config)
@@ -242,8 +242,8 @@ def test_portfolio_reset_equity_peak_tracking():
             slippage_pct=0.0,
             network_fee_sol=0.0005
         ),
-        runner_reset_enabled=True,
-        runner_reset_multiple=3.0  # x3 (высокий порог, чтобы reset не сработал)
+        profit_reset_enabled=True,
+        profit_reset_multiple=3.0  # x3 (высокий порог, чтобы reset не сработал)
     )
     
     engine = PortfolioEngine(config)
@@ -306,8 +306,8 @@ def test_portfolio_reset_triggered_when_threshold_reached():
             slippage_pct=0.0,  # Без slippage для простоты
             network_fee_sol=0.0005
         ),
-        runner_reset_enabled=True,
-        runner_reset_multiple=2.0  # x2
+        profit_reset_enabled=True,
+        profit_reset_multiple=2.0  # x2
     )
     
     engine = PortfolioEngine(config)

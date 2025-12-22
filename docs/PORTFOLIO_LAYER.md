@@ -298,8 +298,10 @@ portfolio:
   percent_per_trade: 0.1          # Доля капитала на одну сделку (10%)
   max_exposure: 0.5               # Максимальная экспозиция (50%)
   max_open_positions: 10          # Максимальное количество открытых позиций
-  runner_reset_enabled: false     # Runner-XN reset (закрытие всех позиций при достижении XN)
-  runner_reset_multiple: 2.0     # Множитель XN для runner reset (например, 2.0 = x2)
+  profit_reset_enabled: false    # Profit reset (закрытие всех позиций при росте equity портфеля)
+  profit_reset_multiple: 2.0     # Множитель для profit reset (например, 2.0 = x2)
+  # DEPRECATED: runner_reset_enabled и runner_reset_multiple - используйте profit_reset_* вместо них
+  # Оставлено для обратной совместимости со старыми конфигами
   # Capacity reset (v1.6) - предотвращает "capacity choke"
   capacity_reset:
     enabled: true                 # Включить capacity reset
@@ -571,7 +573,7 @@ portfolio:
   - Добавлен DEBUG-лог с балансом, размером позиции, открытым нотионалом, total_capital и max_allowed_exposure
   - Помогает отлаживать проблемы с лимитами портфеля
 - [x] **Portfolio-level reset (profit)** (реализовано)
-  - Закрытие всех позиций при достижении порога equity: `equity_peak_in_cycle >= cycle_start_equity * runner_reset_multiple`
+  - Закрытие всех позиций при достижении порога equity: `equity_peak_in_cycle >= cycle_start_equity * profit_reset_multiple`
   - Закрытие происходит **market close** (по текущей цене через execution_model, не pnl=0)
   - Отслеживание метрик: `portfolio_reset_count`, `portfolio_reset_profit_count`, `last_portfolio_reset_time`
 - [x] **Capacity reset (v1.6)** (реализовано)

@@ -22,8 +22,8 @@ portfolio:
   percent_per_trade: 0.01         # Доля капитала на одну сделку (1%)
   max_exposure: 0.95               # Максимальная экспозиция портфеля (80% капитала в рынке)
   max_open_positions: 100          # Максимальное количество одновременно открытых позиций
-  runner_reset_enabled: false     # Режим Runner-XN: при достижении позицией XN закрываются все позиции
-  runner_reset_multiple: 1.2      # Множитель XN (например, 2.0 = x2, 3.0 = x3). Используется только если runner_reset_enabled=true
+  profit_reset_enabled: false     # Profit reset: при достижении порога equity портфеля закрываются все позиции
+  profit_reset_multiple: 1.2      # Множитель для profit reset (например, 2.0 = x2, 3.0 = x3). Используется только если profit_reset_enabled=true
   # Capacity reset (v1.6) - предотвращает "capacity choke" (портфель перестает открывать новые сделки)
   capacity_reset:
     enabled: true                  # Включить capacity reset

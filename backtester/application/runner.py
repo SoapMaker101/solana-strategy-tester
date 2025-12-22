@@ -4,6 +4,7 @@ from datetime import timedelta, datetime
 from typing import Any, Dict, List, Sequence, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import logging
 
 # Импорты компонентов системы
 from ..infrastructure.signal_loader import SignalLoader  # Интерфейс загрузки торговых сигналов
@@ -13,6 +14,8 @@ from ..domain.models import StrategyInput, StrategyOutput, Signal, Candle  # О�
 from ..domain.portfolio import PortfolioConfig, PortfolioEngine, FeeModel, PortfolioResult  # Портфельный слой
 from ..domain.execution_model import ExecutionProfileConfig  # Execution profiles
 from ..utils.warn_dedup import WarnDedup  # Потокобезопасный класс для дедупликации предупреждений
+
+logger = logging.getLogger(__name__)
 
 class BacktestRunner:
     """
@@ -327,6 +330,33 @@ class BacktestRunner:
             capacity_max_blocked_ratio = blocked_threshold / max(100, max_positions * 10) if blocked_threshold else 0.4
             capacity_max_avg_hold_days = float(portfolio_cfg.get("capacity_min_turnover_threshold", 2))
         
+        # Загрузка profit reset параметров с поддержкой обратной совместимости
+        # Приоритет: profit_reset_* > runner_reset_* (deprecated)
+        profit_reset_enabled = portfolio_cfg.get("profit_reset_enabled")
+        profit_reset_multiple = portfolio_cfg.get("profit_reset_multiple")
+        runner_reset_enabled = portfolio_cfg.get("runner_reset_enabled")
+        runner_reset_multiple = portfolio_cfg.get("runner_reset_multiple")
+        
+        # Определяем финальные значения с fallback на deprecated поля
+        final_profit_reset_enabled = profit_reset_enabled if profit_reset_enabled is not None else runner_reset_enabled
+        final_profit_reset_multiple = profit_reset_multiple if profit_reset_multiple is not None else runner_reset_multiple
+        
+        # Выводим предупреждение, если используются старые поля
+        if runner_reset_enabled is not None or runner_reset_multiple is not None:
+            if profit_reset_enabled is None and profit_reset_multiple is None:
+                # Используются только старые поля
+                logger.warning(
+                    "DEPRECATED: runner_reset_enabled and runner_reset_multiple are renamed to "
+                    "profit_reset_enabled and profit_reset_multiple. "
+                    "Please update your YAML config. Old keys will be removed in a future version."
+                )
+            elif profit_reset_enabled is not None or profit_reset_multiple is not None:
+                # Оба варианта заданы - новые имеют приоритет
+                logger.warning(
+                    "Both profit_reset_* and runner_reset_* are specified in config. "
+                    "Using profit_reset_* values (runner_reset_* ignored)."
+                )
+        
         return PortfolioConfig(
             initial_balance_sol=float(portfolio_cfg.get("initial_balance_sol", 10.0)),
             allocation_mode=portfolio_cfg.get("allocation_mode", "dynamic"),
@@ -337,8 +367,10 @@ class BacktestRunner:
             execution_profile=execution_profile,
             backtest_start=backtest_start,
             backtest_end=backtest_end,
-            runner_reset_enabled=portfolio_cfg.get("runner_reset_enabled", False),
-            runner_reset_multiple=float(portfolio_cfg.get("runner_reset_multiple", 2.0)),
+            profit_reset_enabled=final_profit_reset_enabled if final_profit_reset_enabled is not None else False,
+            profit_reset_multiple=float(final_profit_reset_multiple) if final_profit_reset_multiple is not None else 2.0,
+            runner_reset_enabled=runner_reset_enabled if runner_reset_enabled is not None else False,
+            runner_reset_multiple=float(runner_reset_multiple) if runner_reset_multiple is not None else 2.0,
             capacity_reset_enabled=capacity_reset_enabled,
             capacity_window_type=capacity_window_type,
             capacity_window_size=capacity_window_size,

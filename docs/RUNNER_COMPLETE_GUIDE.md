@@ -149,12 +149,14 @@ Runner стратегия — это стратегия с **лестницей 
 
 ```yaml
 portfolio:
-  runner_reset_enabled: true      # Включить portfolio-level reset
-  runner_reset_multiple: 2.0      # Порог: equity >= cycle_start_equity * 2.0
+  profit_reset_enabled: true      # Включить profit reset (portfolio-level reset)
+  profit_reset_multiple: 2.0      # Порог: equity >= cycle_start_equity * 2.0
 ```
 
 **Логика:**
-- При достижении порога: `equity >= cycle_start_equity * runner_reset_multiple`
+- При достижении порога: `equity >= cycle_start_equity * profit_reset_multiple`
+
+**Примечание:** Старые ключи `runner_reset_enabled` и `runner_reset_multiple` поддерживаются для обратной совместимости, но помечены как deprecated. Используйте `profit_reset_*` вместо них.
 - Закрываются все открытые позиции
 - Обновляется `cycle_start_equity = new equity`
 - Начинается новый цикл
@@ -226,7 +228,7 @@ Portfolio-level reset — это механизм автоматического
 1. **Проверка порога:** Перед обработкой каждой сделки проверяется:
    ```python
    equity = balance + sum(p.size for p in open_positions)
-   if equity >= cycle_start_equity * runner_reset_multiple:
+   if equity >= cycle_start_equity * profit_reset_multiple:
        # Закрыть все позиции
    ```
 
@@ -256,8 +258,8 @@ Portfolio-level reset — это механизм автоматического
 ```yaml
 # config/backtest_example.yaml
 portfolio:
-  runner_reset_enabled: true
-  runner_reset_multiple: 2.0  # Порог: x2 от cycle_start_equity
+  profit_reset_enabled: true
+  profit_reset_multiple: 2.0  # Порог: x2 от cycle_start_equity
 ```
 
 **Сценарий:**

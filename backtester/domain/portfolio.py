@@ -71,7 +71,12 @@ class PortfolioConfig:
     backtest_start: Optional[datetime] = None
     backtest_end: Optional[datetime] = None
 
-    # Флаги для Policy-уровня
+    # Profit reset конфигурация (reset по росту equity портфеля)
+    profit_reset_enabled: bool = False
+    profit_reset_multiple: float = 2.0  # Множитель для profit reset (например, 2.0 = x2)
+    
+    # DEPRECATED: Используйте profit_reset_enabled и profit_reset_multiple вместо этих полей
+    # Оставлено для обратной совместимости со старыми YAML конфигами
     runner_reset_enabled: bool = False
     runner_reset_multiple: float = 2.0  # XN multiplier (например, 2.0 = x2)
     
@@ -82,6 +87,34 @@ class PortfolioConfig:
     capacity_window_size: Union[int, str] = 7  # Размер окна: дни (int) или строка "7d" для time, количество сигналов для signals
     capacity_max_blocked_ratio: float = 0.4  # Максимальная доля отклоненных сигналов за окно (0.4 = 40%)
     capacity_max_avg_hold_days: float = 10.0  # Максимальное среднее время удержания открытых позиций (дни)
+    
+    def resolved_profit_reset_enabled(self) -> bool:
+        """
+        Возвращает значение profit_reset_enabled с fallback на runner_reset_enabled для обратной совместимости.
+        
+        Приоритет:
+        1. profit_reset_enabled (если задан явно)
+        2. runner_reset_enabled (deprecated alias)
+        """
+        # Проверяем, задано ли новое поле явно (не None и не default)
+        if hasattr(self, "profit_reset_enabled") and self.profit_reset_enabled is not None:
+            return bool(self.profit_reset_enabled)
+        # Fallback на старое поле для обратной совместимости
+        return bool(getattr(self, "runner_reset_enabled", False))
+    
+    def resolved_profit_reset_multiple(self) -> float:
+        """
+        Возвращает значение profit_reset_multiple с fallback на runner_reset_multiple для обратной совместимости.
+        
+        Приоритет:
+        1. profit_reset_multiple (если задан явно)
+        2. runner_reset_multiple (deprecated alias)
+        """
+        # Проверяем, задано ли новое поле явно (не None и не default)
+        if hasattr(self, "profit_reset_multiple") and self.profit_reset_multiple is not None:
+            return float(self.profit_reset_multiple)
+        # Fallback на старое поле для обратной совместимости
+        return float(getattr(self, "runner_reset_multiple", 2.0))
 
 
 @dataclass
@@ -753,7 +786,7 @@ class PortfolioEngine:
             exit_time: datetime = out.exit_time    # type: ignore
             
             # Обновляем equity_peak_in_cycle перед обработкой (для portfolio-level reset tracking)
-            if self.config.runner_reset_enabled:
+            if self.config.resolved_profit_reset_enabled():
                 state.update_equity_peak()
 
             # 3. Закрываем позиции, у которых exit_time <= entry_time
@@ -886,11 +919,11 @@ class PortfolioEngine:
                     )
                 
                 # Обновляем equity_peak_in_cycle после закрытия позиции (для portfolio-level reset)
-                if self.config.runner_reset_enabled:
+                if self.config.resolved_profit_reset_enabled():
                     state.update_equity_peak()
                     
-                    # Проверка portfolio-level reset по equity (независимо от runner reset по XN)
-                    reset_threshold = state.cycle_start_equity * self.config.runner_reset_multiple
+                    # Проверка portfolio-level reset по equity (profit reset)
+                    reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
                     if state.equity_peak_in_cycle >= reset_threshold:
                         # Формируем список позиций для принудительного закрытия (кроме уже закрытой)
                         positions_to_force_close = [
@@ -953,10 +986,10 @@ class PortfolioEngine:
                         f"turnover_window={capacity_reset_context.turnover_window}"
                     )
             
-            # Проверка portfolio-level reset по equity (независимо от runner reset по XN)
-            # Если equity_peak_in_cycle >= cycle_start_equity * runner_reset_multiple, закрываем все позиции
-            if self.config.runner_reset_enabled:
-                reset_threshold = state.cycle_start_equity * self.config.runner_reset_multiple
+            # Проверка portfolio-level reset по equity (profit reset)
+            # Если equity_peak_in_cycle >= cycle_start_equity * profit_reset_multiple, закрываем все позиции
+            if self.config.resolved_profit_reset_enabled():
+                reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
                 if state.equity_peak_in_cycle >= reset_threshold:
                     # Формируем список позиций для принудительного закрытия
                     positions_to_force_close = [p for p in state.open_positions if p.status == "open"]
@@ -1204,11 +1237,11 @@ class PortfolioEngine:
                 continue
             
             # Обновляем equity_peak_in_cycle перед закрытием позиции (для portfolio-level reset)
-            if self.config.runner_reset_enabled:
+            if self.config.resolved_profit_reset_enabled():
                 state.update_equity_peak()
                 
-                # Проверка portfolio-level reset по equity (независимо от runner reset по XN)
-                reset_threshold = state.cycle_start_equity * self.config.runner_reset_multiple
+                # Проверка portfolio-level reset по equity (profit reset)
+                reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
                 if state.equity_peak_in_cycle >= reset_threshold:
                     # Формируем список позиций для принудительного закрытия (кроме той, которую уже закрываем)
                     positions_to_force_close = [

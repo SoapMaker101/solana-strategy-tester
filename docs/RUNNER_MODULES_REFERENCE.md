@@ -140,7 +140,7 @@
   - Документация по конфигурации Runner
 
 - **`config/backtest_example.yaml`**
-  - Параметры portfolio-level reset (`runner_reset_enabled`, `runner_reset_multiple`)
+  - Параметры profit reset (`profit_reset_enabled`, `profit_reset_multiple`) - ранее назывались `runner_reset_*` (deprecated)
 
 #### Документация
 - **`docs/XN_RUNNER_RESEARCH.md`**
@@ -232,10 +232,11 @@
   - Обновляет `balance` и уменьшает `pos.size`
   - Обрабатывает time_stop остаток
 
-- Portfolio-level reset логика:
-  - Проверка: `equity >= cycle_start_equity * runner_reset_multiple`
+- Profit reset логика (portfolio-level reset):
+  - Проверка: `equity >= cycle_start_equity * profit_reset_multiple`
   - Закрытие всех открытых позиций при достижении порога
   - Обновление `cycle_start_equity` после reset
+  - Примечание: Параметры ранее назывались `runner_reset_*` (deprecated), теперь `profit_reset_*`
 
 **Метаданные в `Position.meta` для Runner:**
 - `runner_ladder: True`
@@ -417,10 +418,10 @@ python -m backtester.decision.run_stage_b \
 
 ## Ключевые особенности реализации
 
-### Portfolio-Level Reset
+### Profit Reset (Portfolio-Level Reset)
 
 **Логика:**
-- Проверка перед обработкой каждой сделки: `equity >= cycle_start_equity * runner_reset_multiple`
+- Проверка перед обработкой каждой сделки: `equity >= cycle_start_equity * profit_reset_multiple`
 - При достижении порога:
   - Закрываются все открытые позиции по текущей цене
   - Обновляется `cycle_start_equity = new equity`

@@ -513,7 +513,7 @@ python -m backtester.decision.run_stage_b --stability-csv output/reports/strateg
 Portfolio-level reset — это механизм автоматического закрытия всех открытых позиций при достижении портфелем порога equity.
 
 **Логика:**
-- Проверка перед обработкой каждой сделки: `equity >= cycle_start_equity * runner_reset_multiple`
+- Проверка перед обработкой каждой сделки: `equity >= cycle_start_equity * profit_reset_multiple`
 - При достижении порога:
   - Закрываются все открытые позиции по текущей цене
   - Обновляется `cycle_start_equity = new equity`
@@ -523,9 +523,11 @@ Portfolio-level reset — это механизм автоматического
 **Конфигурация:**
 ```yaml
 portfolio:
-  runner_reset_enabled: true
-  runner_reset_multiple: 2.0  # Порог: equity >= cycle_start_equity * 2.0
+  profit_reset_enabled: true
+  profit_reset_multiple: 2.0  # Порог: equity >= cycle_start_equity * 2.0
 ```
+
+**Примечание:** Старые ключи `runner_reset_enabled` и `runner_reset_multiple` поддерживаются для обратной совместимости, но помечены как deprecated. Используйте `profit_reset_*` вместо них.
 
 **Метрики в portfolio_summary.csv:**
 - `reset_count`: Количество срабатываний reset
@@ -545,6 +547,8 @@ XN-анализ — это **research-инструмент** для быстро
 4. ✅ Получить статистику по времени достижения разных уровней роста
 
 **Следующий шаг после XN-анализа:** создание и тестирование Runner-стратегий с выбранными параметрами через полный бэктест с портфелем, затем Stage A/B для отбора лучших стратегий.
+
+
 
 
 

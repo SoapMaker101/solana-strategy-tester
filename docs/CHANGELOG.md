@@ -1,5 +1,148 @@
 # Changelog
 
+## [Refactor: Profit Reset Terminology] - 2025-01-XX
+
+### Рефакторинг терминов: runner_reset_* → profit_reset_* (BC-safe)
+
+#### 🎯 Цель изменений
+
+Переименованы параметры конфигурации для profit reset (reset по росту equity портфеля):
+- `runner_reset_enabled` → `profit_reset_enabled`
+- `runner_reset_multiple` → `profit_reset_multiple`
+
+Это исправляет терминологическую путаницу: эти параметры управляют profit reset (по equity threshold), а не runner reset по XN позиции.
+
+#### ✨ Основные изменения
+
+##### 1. **Новые поля в PortfolioConfig**
+
+**Файл:** `backtester/domain/portfolio.py`
+
+**Добавлено:**
+- `profit_reset_enabled: bool = False` — включить/выключить profit reset
+- `profit_reset_multiple: float = 2.0` — множитель для profit reset (например, 2.0 = x2)
+
+**Сохранено для обратной совместимости:**
+- `runner_reset_enabled: bool = False` (deprecated)
+- `runner_reset_multiple: float = 2.0` (deprecated)
+
+##### 2. **Resolved методы для backward compatibility**
+
+**Файл:** `backtester/domain/portfolio.py`
+
+**Добавлены методы:**
+- `resolved_profit_reset_enabled()` — возвращает `profit_reset_enabled` или fallback на `runner_reset_enabled`
+- `resolved_profit_reset_multiple()` — возвращает `profit_reset_multiple` или fallback на `runner_reset_multiple`
+
+**Приоритет:**
+1. Новые поля `profit_reset_*` (если заданы)
+2. Старые поля `runner_reset_*` (deprecated alias)
+
+##### 3. **Обновлен YAML parsing с deprecation warning**
+
+**Файл:** `backtester/application/runner.py`
+
+**Изменения:**
+- Поддержка обоих вариантов: `profit_reset_*` и `runner_reset_*`
+- При использовании старых полей выводится warning:
+  ```
+  DEPRECATED: runner_reset_enabled and runner_reset_multiple are renamed to
+  profit_reset_enabled and profit_reset_multiple.
+  Please update your YAML config. Old keys will be removed in a future version.
+  ```
+- Если заданы оба варианта, новые имеют приоритет
+
+##### 4. **Обновлена бизнес-логика**
+
+**Файл:** `backtester/domain/portfolio.py`
+
+**Заменено во всех местах использования profit reset:**
+- `self.config.runner_reset_enabled` → `self.config.resolved_profit_reset_enabled()`
+- `self.config.runner_reset_multiple` → `self.config.resolved_profit_reset_multiple()`
+
+**Места использования:**
+- Основной цикл обработки сделок (строка ~756, ~889, ~958)
+- После закрытия позиции (строка ~889, ~1207)
+- Перед обработкой сделок (строка ~756)
+
+**Важно:** Runner reset по XN (когда позиция достигает XN) продолжает использовать `runner_reset_enabled` и `runner_reset_multiple` — это отдельный функционал.
+
+##### 5. **Обновлена документация**
+
+**Файлы:**
+- `docs/PORTFOLIO_LAYER.md` — обновлены примеры конфигов
+- `docs/VARIABLES_REFERENCE.md` — добавлены новые поля, старые помечены как deprecated
+- `config/backtest_example.yaml` — обновлен пример конфига
+
+##### 6. **Обновлены тесты**
+
+**Файлы:**
+- `tests/portfolio/test_portfolio_runner_reset_portfolio_level.py` — переведены на новые поля
+- `tests/portfolio/test_debug_portfolio_reset_marker.py` — обновлен
+- `tests/test_reset_policy_is_portfolio_only.py` — обновлен
+- `tests/portfolio/conftest.py` — обновлен
+
+**Добавлены тесты на backward compatibility:**
+- `tests/portfolio/test_profit_reset_backward_compatibility.py` — новые тесты:
+  - `test_profit_reset_uses_new_fields` — проверка новых полей
+  - `test_profit_reset_falls_back_to_runner_alias` — проверка fallback на старые поля
+  - `test_profit_reset_new_fields_have_priority` — проверка приоритета новых полей
+
+#### ✅ Инварианты после рефакторинга
+
+1. **Обратная совместимость сохранена:** старые YAML с `runner_reset_*` продолжают работать
+2. **Новые YAML используют `profit_reset_*`:** семантически правильные названия
+3. **Логика reset не изменилась:** только переименование параметров
+4. **ResetReason остался прежним:** `ResetReason.EQUITY_THRESHOLD` → `reset_reason="profit"` в meta
+5. **Все тесты проходят:** pytest проходит успешно
+
+#### 📝 Измененные файлы
+
+**Код:**
+- `backtester/domain/portfolio.py` — добавлены новые поля и resolved методы, обновлена логика
+- `backtester/application/runner.py` — обновлен YAML parsing с deprecation warning
+
+**Документация:**
+- `docs/PORTFOLIO_LAYER.md` — обновлены примеры и описания
+- `docs/VARIABLES_REFERENCE.md` — добавлены новые поля, старые помечены как deprecated
+- `config/backtest_example.yaml` — обновлен пример конфига
+
+**Тесты:**
+- `tests/portfolio/test_portfolio_runner_reset_portfolio_level.py` — обновлены на новые поля
+- `tests/portfolio/test_debug_portfolio_reset_marker.py` — обновлен
+- `tests/test_reset_policy_is_portfolio_only.py` — обновлен
+- `tests/portfolio/conftest.py` — обновлен
+- `tests/portfolio/test_profit_reset_backward_compatibility.py` — новый файл с тестами на BC
+
+#### 🧪 Тесты
+
+Все тесты проходят:
+```bash
+python -m pytest tests/portfolio/test_profit_reset_backward_compatibility.py -v  # 3 passed
+python -m pytest tests/portfolio/test_portfolio_runner_reset_portfolio_level.py -v  # все проходят
+python -m pytest tests/ -q  # 0 failed
+```
+
+#### 📋 Миграция для пользователей
+
+**Старые YAML конфиги (продолжают работать с warning):**
+```yaml
+portfolio:
+  runner_reset_enabled: true
+  runner_reset_multiple: 2.0
+```
+
+**Новые YAML конфиги (рекомендуется):**
+```yaml
+portfolio:
+  profit_reset_enabled: true
+  profit_reset_multiple: 2.0
+```
+
+**Примечание:** Старые ключи `runner_reset_*` будут удалены в будущей версии. Рекомендуется обновить конфиги.
+
+---
+
 ## [Fix: Capacity Reset Marker Invariant] - 2025-01-XX
 
 ### Исправление архитектурного инварианта marker в capacity reset
