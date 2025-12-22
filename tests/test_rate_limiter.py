@@ -285,3 +285,4 @@ class TestGeckoTerminalPriceLoaderRateLimit:
 
 
 
+
