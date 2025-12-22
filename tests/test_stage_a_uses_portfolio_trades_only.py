@@ -270,3 +270,4 @@ def test_runner_partial_exits_pnl(temp_reports_dir):
             # Проверяем, что worst_window_pnl и best_window_pnl корректны
             # (сумма pnl_sol в худшем/лучшем окне должна быть правильной)
 
+

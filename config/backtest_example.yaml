@@ -29,8 +29,8 @@ portfolio:
     enabled: true                  # Включить capacity reset
     window_type: "time"           # Тип окна: "time" (по времени) или "signals" (по количеству сигналов)
     window_size: 7d               # Размер окна: дни (например, "7d" или 7) для time, количество сигналов для signals
-    max_blocked_ratio: 0.4        # Максимальная доля отклоненных сигналов за окно (0.4 = 40%)
-    max_avg_hold_days: 10.0       # Максимальное среднее время удержания открытых позиций (дни)
+    max_blocked_ratio: 0.7        # Максимальная доля отклоненных сигналов за окно (0.4 = 40%)
+    max_avg_hold_days: 20.0       # Максимальное среднее время удержания открытых позиций (дни)
   execution_profile: "realistic"   # Профиль исполнения: "realistic" (по умолчанию), "stress", или "custom"
   fee:
     swap_fee_pct: 0.003          # Комиссия swap (0.3%)
@@ -44,9 +44,9 @@ portfolio:
         base_slippage_pct: 0.03   # Базовое проскальзывание 3%
         slippage_multipliers:
           entry: 1.0               # Slippage при входе: 3% * 1.0 = 3%
-          exit_tp: 0.7             # Slippage при выходе по TP: 3% * 0.7 = 2.1% (меньше, т.к. ликвидность лучше)
-          exit_sl: 1.2             # Slippage при выходе по SL: 3% * 1.2 = 3.6% (больше, т.к. паника)
-          exit_timeout: 0.3        # Slippage при timeout: 3% * 0.3 = 0.9% (меньше, т.к. плановый выход)
+          exit_tp: 0.6             # Slippage при выходе по TP: 3% * 0.7 = 2.1% (меньше, т.к. ликвидность лучше)
+          exit_sl: 1.3             # Slippage при выходе по SL: 3% * 1.2 = 3.6% (больше, т.к. паника)
+          exit_timeout: 0.25        # Slippage при timeout: 3% * 0.3 = 0.9% (меньше, т.к. плановый выход)
           exit_manual: 0.5         # Slippage при ручном выходе: 3% * 0.5 = 1.5%
       
       stress:
