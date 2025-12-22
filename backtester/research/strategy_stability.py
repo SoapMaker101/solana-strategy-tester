@@ -223,7 +223,7 @@ def calculate_runner_metrics(
                         realized_multiple = 1.0
                 
                 # Если realized_multiple >= 5x, добавляем PnL этой сделки
-                if realized_multiple >= 5.0:
+                if isinstance(realized_multiple, (int, float)) and realized_multiple >= 5.0:
                     pnl_val = row.get("pnl_pct", 0.0)
                     if isinstance(pnl_val, (int, float)):
                         tail_pnl += pnl_val
@@ -556,15 +556,16 @@ def generate_stability_table_from_portfolio_trades(
         return pd.DataFrame({col: [] for col in columns})
     
     # Получаем уникальные стратегии
-    unique_strategies = filtered_df["strategy"].unique()
-    print(f"[stage_a] Strategies: {len(unique_strategies)} ({', '.join(unique_strategies)})")
+    strategy_series = pd.Series(filtered_df["strategy"])
+    unique_strategies = strategy_series.unique()
+    print(f"[stage_a] Strategies: {len(unique_strategies)} ({', '.join(str(s) for s in unique_strategies)})")
     print(f"[stage_a] Splits: {split_counts}")
     
     # Агрегируем по стратегиям
     aggregated_strategies = {}
     
     for strategy_name in unique_strategies:
-        strategy_trades = filtered_df[filtered_df["strategy"] == strategy_name].copy()
+        strategy_trades = filtered_df.loc[filtered_df["strategy"] == strategy_name].copy()
         
         print(f"[stage_a] Strategy '{strategy_name}': {len(strategy_trades)} executed trades")
         
@@ -600,12 +601,12 @@ def generate_stability_table_from_portfolio_trades(
     
     # Добавляем trades_total для каждой стратегии (общее количество исполненных сделок)
     if len(stability_df) > 0:
-        trades_total_map = {}
+        trades_total_map: Dict[str, int] = {}
         for strategy_name in unique_strategies:
-            strategy_trades = filtered_df[filtered_df["strategy"] == strategy_name]
-            trades_total_map[strategy_name] = len(strategy_trades)
+            strategy_trades_count = len(filtered_df.loc[filtered_df["strategy"] == strategy_name])
+            trades_total_map[str(strategy_name)] = strategy_trades_count
         
-        stability_df["trades_total"] = stability_df["strategy"].map(trades_total_map).fillna(0).astype(int)
+        stability_df["trades_total"] = stability_df["strategy"].map(lambda x: trades_total_map.get(str(x), 0)).fillna(0).astype(int)
     
     # Сохраняем если указан путь
     if output_path is None:
