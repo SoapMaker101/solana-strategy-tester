@@ -136,10 +136,10 @@ def get_mark_price_for_position(pos: Position, reset_time: datetime) -> float:
         return pos.exit_price
     
     # Приоритет 2: raw_exit_price из meta
-    if pos.meta and pos.meta.get("raw_exit_price") is not None:
+    if pos.meta:
         raw_exit = pos.meta.get("raw_exit_price")
-        if raw_exit > 0:
-            return raw_exit
+        if raw_exit is not None and raw_exit > 0:
+            return float(raw_exit)
     
     # Fallback: используем entry_price (но помечаем в meta)
     if pos.meta:

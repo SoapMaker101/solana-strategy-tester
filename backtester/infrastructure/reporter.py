@@ -273,7 +273,7 @@ class Reporter:
         if not trades:
             # Создаём пустой DataFrame с базовыми колонками
             csv_path = self.output_dir / f"{strategy_name}_trades.csv"
-            pd.DataFrame(columns=[
+            pd.DataFrame([], columns=[  # type: ignore[arg-type]
                 "signal_id", "contract_address", "signal_timestamp",
                 "entry_time", "exit_time", "entry_price", "exit_price",
                 "pnl_pct", "reason", "source", "narrative"
@@ -836,7 +836,7 @@ class Reporter:
             df = df.drop("entry_time_dt", axis=1)
         else:
             # Создаем пустой DataFrame с правильными колонками
-            df = pd.DataFrame(columns=[
+            df = pd.DataFrame([], columns=[  # type: ignore[arg-type]
                 "strategy", "signal_id", "contract_address",
                 "entry_time", "exit_time", "status",
                 "size", "pnl_sol", "fees_total_sol",
@@ -984,7 +984,7 @@ class Reporter:
             df = df.drop("event_time_dt", axis=1)
         else:
             # Создаем пустой DataFrame с правильными колонками
-            df = pd.DataFrame(columns=[
+            df = pd.DataFrame([], columns=[  # type: ignore[arg-type]
                 "signal_id", "strategy", "event_time", "event_type",
                 "qty_delta", "raw_price", "exec_price", "fees_sol", "pnl_sol_delta", "reset_reason",
             ])

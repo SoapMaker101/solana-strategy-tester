@@ -50,7 +50,8 @@ def check_strategy_criteria(
         # Применяем Runner критерии
         # Проверка 1: hit_rate_x2 >= min_hit_rate_x2
         if runner_criteria.min_hit_rate_x2 is not None:
-            hit_rate_x2 = row.get("hit_rate_x2", 0.0)
+            hit_rate_x2 = row.get("hit_rate_x2")
+            hit_rate_x2 = 0.0 if hit_rate_x2 is None else hit_rate_x2
             if hit_rate_x2 < runner_criteria.min_hit_rate_x2:
                 failed_reasons.append(
                     f"hit_rate_x2 {hit_rate_x2:.3f} < {runner_criteria.min_hit_rate_x2}"
@@ -58,7 +59,8 @@ def check_strategy_criteria(
         
         # Проверка 2: hit_rate_x5 >= min_hit_rate_x5
         if runner_criteria.min_hit_rate_x5 is not None:
-            hit_rate_x5 = row.get("hit_rate_x5", 0.0)
+            hit_rate_x5 = row.get("hit_rate_x5")
+            hit_rate_x5 = 0.0 if hit_rate_x5 is None else hit_rate_x5
             if hit_rate_x5 < runner_criteria.min_hit_rate_x5:
                 failed_reasons.append(
                     f"hit_rate_x5 {hit_rate_x5:.3f} < {runner_criteria.min_hit_rate_x5}"
@@ -66,7 +68,8 @@ def check_strategy_criteria(
         
         # Проверка 3: p90_hold_days >= min_p90_hold_days (если задан)
         if runner_criteria.min_p90_hold_days is not None:
-            p90_hold_days = row.get("p90_hold_days", 0.0)
+            p90_hold_days = row.get("p90_hold_days")
+            p90_hold_days = 0.0 if p90_hold_days is None else p90_hold_days
             if p90_hold_days < runner_criteria.min_p90_hold_days:
                 failed_reasons.append(
                     f"p90_hold_days {p90_hold_days:.2f} < {runner_criteria.min_p90_hold_days}"
@@ -74,7 +77,8 @@ def check_strategy_criteria(
         
         # Проверка 4: p90_hold_days <= max_p90_hold_days (если задан)
         if runner_criteria.max_p90_hold_days is not None:
-            p90_hold_days = row.get("p90_hold_days", float('inf'))
+            p90_hold_days = row.get("p90_hold_days")
+            p90_hold_days = float('inf') if p90_hold_days is None else p90_hold_days
             if p90_hold_days > runner_criteria.max_p90_hold_days:
                 failed_reasons.append(
                     f"p90_hold_days {p90_hold_days:.2f} > {runner_criteria.max_p90_hold_days}"
@@ -82,7 +86,8 @@ def check_strategy_criteria(
         
         # Проверка 5: tail_contribution >= min_tail_contribution (если задан)
         if runner_criteria.min_tail_contribution is not None:
-            tail_contribution = row.get("tail_contribution", 0.0)
+            tail_contribution = row.get("tail_contribution")
+            tail_contribution = 0.0 if tail_contribution is None else tail_contribution
             if tail_contribution < runner_criteria.min_tail_contribution:
                 failed_reasons.append(
                     f"tail_contribution {tail_contribution:.3f} < {runner_criteria.min_tail_contribution}"
@@ -90,7 +95,8 @@ def check_strategy_criteria(
         
         # Проверка 6: tail_contribution <= max_tail_contribution (если задан)
         if runner_criteria.max_tail_contribution is not None:
-            tail_contribution = row.get("tail_contribution", 0.0)
+            tail_contribution = row.get("tail_contribution")
+            tail_contribution = 0.0 if tail_contribution is None else tail_contribution
             if tail_contribution > runner_criteria.max_tail_contribution:
                 failed_reasons.append(
                     f"tail_contribution {tail_contribution:.3f} > {runner_criteria.max_tail_contribution}"
@@ -98,7 +104,8 @@ def check_strategy_criteria(
         
         # Проверка 7: max_drawdown_pct >= max_drawdown_pct (max_drawdown_pct отрицательное)
         if runner_criteria.max_drawdown_pct is not None:
-            max_drawdown_pct = row.get("max_drawdown_pct", 0.0)
+            max_drawdown_pct = row.get("max_drawdown_pct")
+            max_drawdown_pct = 0.0 if max_drawdown_pct is None else max_drawdown_pct
             if max_drawdown_pct < runner_criteria.max_drawdown_pct:
                 failed_reasons.append(
                     f"max_drawdown_pct {max_drawdown_pct:.3f} < {runner_criteria.max_drawdown_pct}"
@@ -106,33 +113,43 @@ def check_strategy_criteria(
     else:
         # Применяем RR/RRD критерии
         # Проверка 1: survival_rate >= min_survival_rate
-        if row.get("survival_rate", 0.0) < criteria.min_survival_rate:
+        survival_rate = row.get("survival_rate")
+        survival_rate = 0.0 if survival_rate is None else survival_rate
+        if survival_rate < criteria.min_survival_rate:
             failed_reasons.append(
-                f"survival_rate {row.get('survival_rate', 0.0):.3f} < {criteria.min_survival_rate}"
+                f"survival_rate {survival_rate:.3f} < {criteria.min_survival_rate}"
             )
         
         # Проверка 2: pnl_variance <= max_pnl_variance
-        if row.get("pnl_variance", float('inf')) > criteria.max_pnl_variance:
+        pnl_variance = row.get("pnl_variance")
+        pnl_variance = float('inf') if pnl_variance is None else pnl_variance
+        if pnl_variance > criteria.max_pnl_variance:
             failed_reasons.append(
-                f"pnl_variance {row.get('pnl_variance', 0.0):.6f} > {criteria.max_pnl_variance}"
+                f"pnl_variance {pnl_variance:.6f} > {criteria.max_pnl_variance}"
             )
         
         # Проверка 3: worst_window_pnl >= min_worst_window_pnl
-        if row.get("worst_window_pnl", -float('inf')) < criteria.min_worst_window_pnl:
+        worst_window_pnl = row.get("worst_window_pnl")
+        worst_window_pnl = -float('inf') if worst_window_pnl is None else worst_window_pnl
+        if worst_window_pnl < criteria.min_worst_window_pnl:
             failed_reasons.append(
-                f"worst_window_pnl {row.get('worst_window_pnl', 0.0):.4f} < {criteria.min_worst_window_pnl}"
+                f"worst_window_pnl {worst_window_pnl:.4f} < {criteria.min_worst_window_pnl}"
             )
         
         # Проверка 4: median_window_pnl >= min_median_window_pnl
-        if row.get("median_window_pnl", -float('inf')) < criteria.min_median_window_pnl:
+        median_window_pnl = row.get("median_window_pnl")
+        median_window_pnl = -float('inf') if median_window_pnl is None else median_window_pnl
+        if median_window_pnl < criteria.min_median_window_pnl:
             failed_reasons.append(
-                f"median_window_pnl {row.get('median_window_pnl', 0.0):.4f} < {criteria.min_median_window_pnl}"
+                f"median_window_pnl {median_window_pnl:.4f} < {criteria.min_median_window_pnl}"
             )
         
         # Проверка 5: windows_total >= min_windows
-        if row.get("windows_total", 0) < criteria.min_windows:
+        windows_total = row.get("windows_total")
+        windows_total = 0 if windows_total is None else windows_total
+        if windows_total < criteria.min_windows:
             failed_reasons.append(
-                f"windows_total {row.get('windows_total', 0)} < {criteria.min_windows}"
+                f"windows_total {windows_total} < {criteria.min_windows}"
             )
     
     passed = len(failed_reasons) == 0
