@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Literal, Optional, Union
+from enum import Enum
 
 from .position import Position
 from .models import StrategyOutput
@@ -19,6 +20,34 @@ from .portfolio_reset import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class EventType(Enum):
+    """Тип события в event-driven симуляции."""
+    ENTRY = "entry"  # Открытие позиции
+    EXIT = "exit"    # Закрытие позиции по стратегии
+
+
+@dataclass
+class TradeEvent:
+    """Событие в event-driven симуляции портфеля."""
+    event_type: EventType
+    event_time: datetime
+    trade_data: Dict[str, Any]  # Исходные данные сделки (signal_id, contract_address, result: StrategyOutput)
+    
+    def __lt__(self, other: TradeEvent) -> bool:
+        """
+        Сортировка событий: сначала по времени, затем EXIT перед ENTRY на одном timestamp.
+        Это гарантирует, что закрытия обрабатываются перед открытиями на одном моменте времени.
+        """
+        if self.event_time != other.event_time:
+            return self.event_time < other.event_time
+        # На одном timestamp: EXIT перед ENTRY
+        if self.event_type == EventType.EXIT and other.event_type == EventType.ENTRY:
+            return True
+        if self.event_type == EventType.ENTRY and other.event_type == EventType.EXIT:
+            return False
+        return False  # Одинаковые типы событий на одном времени
 
 
 @dataclass
@@ -72,8 +101,8 @@ class PortfolioConfig:
     backtest_end: Optional[datetime] = None
 
     # Profit reset конфигурация (reset по росту equity портфеля)
-    profit_reset_enabled: bool = False
-    profit_reset_multiple: float = 2.0  # Множитель для profit reset (например, 2.0 = x2)
+    profit_reset_enabled: Optional[bool] = None
+    profit_reset_multiple: Optional[float] = None  # Множитель для profit reset (например, 2.0 = x2)
     
     # DEPRECATED: Используйте profit_reset_enabled и profit_reset_multiple вместо этих полей
     # Оставлено для обратной совместимости со старыми YAML конфигами
@@ -93,28 +122,26 @@ class PortfolioConfig:
         Возвращает значение profit_reset_enabled с fallback на runner_reset_enabled для обратной совместимости.
         
         Приоритет:
-        1. profit_reset_enabled (если задан явно)
+        1. profit_reset_enabled (если задан явно, не None)
         2. runner_reset_enabled (deprecated alias)
         """
-        # Проверяем, задано ли новое поле явно (не None и не default)
-        if hasattr(self, "profit_reset_enabled") and self.profit_reset_enabled is not None:
+        if self.profit_reset_enabled is not None:
             return bool(self.profit_reset_enabled)
         # Fallback на старое поле для обратной совместимости
-        return bool(getattr(self, "runner_reset_enabled", False))
+        return bool(self.runner_reset_enabled)
     
     def resolved_profit_reset_multiple(self) -> float:
         """
         Возвращает значение profit_reset_multiple с fallback на runner_reset_multiple для обратной совместимости.
         
         Приоритет:
-        1. profit_reset_multiple (если задан явно)
+        1. profit_reset_multiple (если задан явно, не None)
         2. runner_reset_multiple (deprecated alias)
         """
-        # Проверяем, задано ли новое поле явно (не None и не default)
-        if hasattr(self, "profit_reset_multiple") and self.profit_reset_multiple is not None:
+        if self.profit_reset_multiple is not None:
             return float(self.profit_reset_multiple)
         # Fallback на старое поле для обратной совместимости
-        return float(getattr(self, "runner_reset_multiple", 2.0))
+        return float(self.runner_reset_multiple)
 
 
 @dataclass
@@ -448,6 +475,82 @@ class PortfolioEngine:
         
         capacity_tracking["window_end"] = window_end if self.config.capacity_window_type == "time" else current_time
     
+    def _select_profit_reset_marker(
+        self,
+        state: PortfolioState,
+        closed_positions_candidates: List[Position],
+        open_positions_candidates: List[Position],
+    ) -> Optional[Position]:
+        """
+        Выбирает marker-позицию для profit reset детерминированно.
+        
+        Приоритет выбора:
+        1. Позиция с максимальным effective_pnl_pct среди закрытых кандидатов
+        2. Позиция с максимальным pnl_sol среди закрытых кандидатов
+        3. Позиция с максимальным (exit_price / entry_price) среди закрытых кандидатов
+        4. Позиция с максимальным effective_pnl_pct среди открытых кандидатов
+        5. Самая ранняя позиция по entry_time
+        
+        Args:
+            state: Состояние портфеля
+            closed_positions_candidates: Список закрытых позиций-кандидатов
+            open_positions_candidates: Список открытых позиций-кандидатов
+            
+        Returns:
+            Выбранная marker-позиция или None, если кандидатов нет
+        """
+        # Сначала проверяем закрытые позиции
+        if closed_positions_candidates:
+            # Сортируем по приоритету: effective_pnl_pct -> pnl_sol -> exit_price/entry_price
+            def get_marker_score(pos: Position) -> tuple:
+                # Приоритет 1: effective_pnl_pct из meta
+                effective_pnl = pos.meta.get("effective_pnl_pct") if pos.meta else None
+                if effective_pnl is not None:
+                    pnl_score = float(effective_pnl)
+                else:
+                    # Fallback: используем pnl_pct из позиции
+                    pnl_score = float(pos.pnl_pct) if pos.pnl_pct is not None else 0.0
+                
+                # Приоритет 2: pnl_sol из meta
+                pnl_sol = pos.meta.get("pnl_sol") if pos.meta else None
+                if pnl_sol is not None:
+                    sol_score = float(pnl_sol)
+                else:
+                    # Fallback: вычисляем из размера и pnl_pct
+                    sol_score = pos.size * pnl_score if pnl_score > 0 else 0.0
+                
+                # Приоритет 3: exit_price / entry_price
+                if pos.entry_price and pos.entry_price > 0 and pos.exit_price and pos.exit_price > 0:
+                    ratio_score = pos.exit_price / pos.entry_price
+                else:
+                    ratio_score = 1.0
+                
+                # Возвращаем tuple для сортировки (по убыванию)
+                return (-pnl_score, -sol_score, -ratio_score)
+            
+            # Сортируем и берем первую (с максимальным score)
+            sorted_candidates = sorted(closed_positions_candidates, key=get_marker_score)
+            return sorted_candidates[0]
+        
+        # Если закрытых нет, проверяем открытые
+        if open_positions_candidates:
+            # Для открытых позиций используем effective_pnl_pct или entry_time
+            def get_open_marker_score(pos: Position) -> tuple:
+                effective_pnl = pos.meta.get("effective_pnl_pct") if pos.meta else None
+                if effective_pnl is not None:
+                    pnl_score = float(effective_pnl)
+                else:
+                    pnl_score = float(pos.pnl_pct) if pos.pnl_pct is not None else 0.0
+                
+                # Если pnl одинаковый, берем самую раннюю
+                entry_time = pos.entry_time if pos.entry_time else datetime.max.replace(tzinfo=timezone.utc)
+                return (-pnl_score, entry_time)
+            
+            sorted_candidates = sorted(open_positions_candidates, key=get_open_marker_score)
+            return sorted_candidates[0]
+        
+        return None
+
     def _apply_reset(
         self,
         state: PortfolioState,
@@ -681,6 +784,306 @@ class PortfolioEngine:
         
         return {"balance": balance}
 
+    def _process_position_exit(
+        self,
+        pos: Position,
+        current_time: datetime,
+        state: PortfolioState,
+        positions_by_signal_id: Dict[str, Position],
+    ) -> None:
+        """
+        Обрабатывает закрытие позиции по EXIT событию.
+        
+        Args:
+            pos: Позиция для закрытия
+            current_time: Текущее время (время EXIT события)
+            state: Состояние портфеля
+            positions_by_signal_id: Mapping позиций по signal_id
+        """
+        # Проверяем, является ли позиция Runner с частичными выходами
+        is_runner = pos.meta.get("runner_ladder", False)
+        
+        if is_runner and pos.exit_time is not None:
+            # Обрабатываем частичные выходы Runner
+            if current_time >= pos.exit_time or any(
+                hit_time <= current_time 
+                for hit_time in (
+                    datetime.fromisoformat(v) if isinstance(v, str) else v
+                    for v in pos.meta.get("levels_hit", {}).values()
+                )
+            ):
+                partial_exits_processed = self._process_runner_partial_exits(
+                    pos=pos,
+                    current_time=current_time,
+                    balance=state.balance,
+                    equity_curve=state.equity_curve,
+                    closed_positions=state.closed_positions,
+                )
+                state.balance = partial_exits_processed["balance"]
+                state.peak_balance = max(state.peak_balance, state.balance)
+            
+            # Если позиция полностью закрыта (size <= 0), удаляем из open
+            if pos.size <= 1e-9:
+                pos.status = "closed"
+                state.closed_positions.append(pos)
+                state.open_positions = [p for p in state.open_positions if p.signal_id != pos.signal_id]
+                if pos.signal_id in positions_by_signal_id:
+                    del positions_by_signal_id[pos.signal_id]
+                return
+        
+        # Обычная обработка для RR/RRD (полное закрытие)
+        if pos.exit_time is not None and current_time >= pos.exit_time:
+            # Проверка runner reset: если позиция достигает XN, закрываем все позиции
+            trigger_position: Optional[Position] = None
+            reset_time_current: Optional[datetime] = None
+            if self.config.runner_reset_enabled:
+                raw_entry_price = pos.meta.get("raw_entry_price")
+                raw_exit_price = pos.meta.get("raw_exit_price")
+                if raw_entry_price and raw_exit_price and raw_entry_price > 0:
+                    multiplying_return = raw_exit_price / raw_entry_price
+                    if multiplying_return >= self.config.runner_reset_multiple:
+                        trigger_position = pos
+                        reset_time_current = pos.exit_time
+            
+            # Если есть runner reset по XN, применяем его
+            if trigger_position is not None and reset_time_current is not None:
+                # Формируем список позиций для принудительного закрытия (кроме триггерной)
+                positions_to_force_close = [
+                    p for p in state.open_positions 
+                    if p.signal_id != trigger_position.signal_id and p.status == "open"
+                ]
+                
+                # Применяем runner reset через единый механизм
+                self._apply_reset(
+                    state=state,
+                    marker_position=trigger_position,
+                    reset_time=reset_time_current,
+                    positions_to_force_close=positions_to_force_close,
+                    reason=ResetReason.RUNNER_XN,
+                )
+                
+                # Обновляем positions_by_signal_id после reset
+                for p in positions_to_force_close:
+                    if p.signal_id in positions_by_signal_id:
+                        del positions_by_signal_id[p.signal_id]
+                
+                self._dbg(
+                    "runner_reset_count_incremented",
+                    old_reset_count=state.runner_reset_count - 1,
+                    new_reset_count=state.runner_reset_count,
+                    reset_time=reset_time_current,
+                    trigger_pos=trigger_position,
+                )
+            
+            # Закрываем позицию нормально
+            network_fee_exit = self.execution_model.network_fee()
+            trade_pnl_sol = pos.size * (pos.pnl_pct or 0.0)
+            
+            # Применяем fees к возвращаемому нотионалу
+            notional_returned = pos.size + trade_pnl_sol
+            notional_after_fees = self.execution_model.apply_fees(notional_returned)
+            fees_total = notional_returned - notional_after_fees
+            
+            state.balance += notional_after_fees  # Возвращаем размер + PnL минус fees
+            state.balance -= network_fee_exit  # Network fee при выходе
+            m = self._ensure_meta(pos)
+            m.update({
+                "pnl_sol": trade_pnl_sol,
+                "fees_total_sol": fees_total,
+            })
+            # Обновляем общий network_fee_sol (вход + выход)
+            m["network_fee_sol"] = m.get("network_fee_sol", 0.0) + network_fee_exit
+            
+            pos.status = "closed"
+            state.closed_positions.append(pos)
+            state.open_positions = [p for p in state.open_positions if p.signal_id != pos.signal_id]
+            if pos.signal_id in positions_by_signal_id:
+                del positions_by_signal_id[pos.signal_id]
+
+            state.peak_balance = max(state.peak_balance, state.balance)
+            if pos.exit_time:
+                state.equity_curve.append(
+                    {"timestamp": pos.exit_time, "balance": state.balance}
+                )
+            
+            # Обновляем equity_peak_in_cycle после закрытия позиции
+            if self.config.resolved_profit_reset_enabled():
+                state.update_equity_peak()
+
+    def _try_open_position(
+        self,
+        trade_data: Dict[str, Any],
+        current_time: datetime,
+        state: PortfolioState,
+        capacity_tracking: Dict[str, Any],
+        positions_by_signal_id: Dict[str, Position],
+    ) -> Optional[Position]:
+        """
+        Пытается открыть позицию для ENTRY события.
+        
+        Args:
+            trade_data: Данные сделки (signal_id, contract_address, result: StrategyOutput)
+            current_time: Текущее время (время ENTRY события)
+            state: Состояние портфеля
+            capacity_tracking: Dict для capacity tracking
+            positions_by_signal_id: Mapping позиций по signal_id
+            
+        Returns:
+            Position если позиция успешно открыта, иначе None
+        """
+        out: StrategyOutput = trade_data["result"]
+        strategy_name = trade_data.get("strategy", "unknown")
+        
+        # Проверка лимитов портфеля
+        blocked_by_capacity = False
+        
+        # лимит по количеству позиций
+        if len(state.open_positions) >= self.config.max_open_positions:
+            blocked_by_capacity = True
+            # Обновляем capacity tracking: сигнал отклонен по capacity
+            self._update_capacity_tracking(
+                capacity_tracking=capacity_tracking,
+                current_time=current_time,
+                state=state,
+                signal_blocked_by_capacity=True,
+                position_closed=False,
+            )
+            return None
+
+        # текущая экспозиция (учитываем, что баланс уже уменьшен на открытые позиции)
+        total_open_notional = sum(p.size for p in state.open_positions)
+        # Доступный баланс = текущий баланс (уже уменьшенный на открытые позиции)
+        available_balance = state.balance
+        
+        # В fixed mode total_capital должен быть равен initial_balance_sol,
+        # так как размер позиции рассчитывается от начального баланса.
+        # В dynamic mode total_capital = available_balance + total_open_notional.
+        if self.config.allocation_mode == "fixed":
+            total_capital = self.config.initial_balance_sol
+        else:
+            total_capital = available_balance + total_open_notional
+        
+        # Рассчитываем максимально допустимый размер новой позиции с учетом max_exposure
+        if self.config.max_exposure >= 1.0:
+            # Нет ограничения на экспозицию
+            max_allowed_notional = float('inf')
+        else:
+            numerator = self.config.max_exposure * total_capital - total_open_notional
+            if numerator <= 0:
+                # Уже превышен лимит экспозиции
+                max_allowed_notional = 0.0
+            else:
+                max_allowed_notional = numerator / (1.0 - self.config.max_exposure)
+
+        # Размер позиции рассчитываем от доступного баланса
+        desired_size = self._position_size(available_balance)
+        
+        # Проверяем, что желаемый размер не превышает лимит экспозиции
+        if desired_size > max_allowed_notional:
+            blocked_by_capacity = True
+            # Обновляем capacity tracking: сигнал отклонен по capacity (exposure)
+            self._update_capacity_tracking(
+                capacity_tracking=capacity_tracking,
+                current_time=current_time,
+                state=state,
+                signal_blocked_by_capacity=True,
+                position_closed=False,
+            )
+            return None
+        
+        size = desired_size
+        if size <= 0:
+            blocked_by_capacity = True
+            # Обновляем capacity tracking: сигнал отклонен (size <= 0)
+            self._update_capacity_tracking(
+                capacity_tracking=capacity_tracking,
+                current_time=current_time,
+                state=state,
+                signal_blocked_by_capacity=True,
+                position_closed=False,
+            )
+            return None
+        
+        # Обновляем capacity tracking: сигнал принят (не был отклонен)
+        if not blocked_by_capacity:
+            self._update_capacity_tracking(
+                capacity_tracking=capacity_tracking,
+                current_time=current_time,
+                state=state,
+                signal_blocked_by_capacity=False,
+                position_closed=False,
+            )
+
+        # Применяем ExecutionModel: slippage к ценам и fees к нотионалу
+        raw_entry_price = out.entry_price or 0.0
+        raw_exit_price = out.exit_price or 0.0
+        
+        if raw_entry_price <= 0 or raw_exit_price <= 0:
+            return None
+        
+        # Применяем slippage к ценам
+        effective_entry_price = self.execution_model.apply_entry(raw_entry_price, "entry")
+        effective_exit_price = self.execution_model.apply_exit(raw_exit_price, out.reason)
+        
+        # Пересчитываем PnL на основе эффективных цен (slippage уже учтен)
+        raw_pnl_pct = out.pnl
+        effective_pnl_pct = (effective_exit_price - effective_entry_price) / effective_entry_price
+        
+        # Network fee вычитается отдельно из баланса
+        network_fee = self.execution_model.network_fee()
+        
+        # Итоговый PnL с учетом slippage (fees будут вычтены из нотионала при закрытии)
+        net_pnl_pct = effective_pnl_pct
+        
+        # Вычитаем размер позиции и network fee из баланса при открытии
+        state.balance -= size  # Платим полный размер позиции
+        state.balance -= network_fee  # Network fee при входе
+        
+        # Создаем Position с эффективными ценами
+        # Проверяем, является ли стратегия Runner
+        is_runner = out.meta.get("runner_ladder", False)
+        
+        pos_meta = {
+            "strategy": strategy_name,
+            "raw_pnl_pct": raw_pnl_pct,
+            "raw_entry_price": raw_entry_price,
+            "raw_exit_price": raw_exit_price,
+            "effective_pnl_pct": effective_pnl_pct,
+            "slippage_entry_pct": (effective_entry_price - raw_entry_price) / raw_entry_price if raw_entry_price > 0 else 0.0,
+            "slippage_exit_pct": (raw_exit_price - effective_exit_price) / raw_exit_price if raw_exit_price > 0 else 0.0,
+            "network_fee_sol": network_fee,  # Только вход, выход добавится при закрытии
+            "execution_profile": self.config.execution_profile,
+            # Исполненные цены (с slippage) для расчета PnL и баланса
+            "exec_entry_price": effective_entry_price,
+            "exec_exit_price": effective_exit_price,
+        }
+        
+        # Для Runner сохраняем данные о частичных выходах и original_size
+        if is_runner:
+            pos_meta["runner_ladder"] = True
+            pos_meta["original_size"] = size  # Сохраняем оригинальный размер для расчета частичных выходов
+            pos_meta["levels_hit"] = out.meta.get("levels_hit", {})
+            pos_meta["fractions_exited"] = out.meta.get("fractions_exited", {})
+            pos_meta["time_stop_triggered"] = out.meta.get("time_stop_triggered", False)
+            pos_meta["realized_multiple"] = out.meta.get("realized_multiple", 1.0)
+        
+        # Position.entry_price и Position.exit_price содержат RAW цены (для reset проверки)
+        # Исполненные цены (с slippage) хранятся в meta["exec_entry_price"] и meta["exec_exit_price"]
+        pos = Position(
+            signal_id=trade_data["signal_id"],
+            contract_address=trade_data["contract_address"],
+            entry_time=current_time,
+            entry_price=raw_entry_price,  # RAW цена (для reset проверки)
+            size=size,
+            exit_time=out.exit_time,
+            exit_price=raw_exit_price,  # RAW цена (для reset проверки)
+            pnl_pct=net_pnl_pct,  # PnL рассчитывается по исполненным ценам (effective_pnl_pct)
+            status="open",
+            meta=pos_meta,
+        )
+        
+        return pos
+
     def simulate(
         self,
         all_results: List[Dict[str, Any]],
@@ -708,7 +1111,7 @@ class PortfolioEngine:
             if r.get("strategy") != strategy_name:
                 filtered_by_strategy += 1
                 continue
-            out_result = r.get("result")
+            out_result = r.get("result")  # type: ignore
             if not isinstance(out_result, StrategyOutput):
                 continue
             if out_result.entry_time is None or out_result.exit_time is None:
@@ -754,8 +1157,29 @@ class PortfolioEngine:
                 stats=empty_stats,
             )
 
-        # 2. Сортировка по entry_time
-        trades.sort(key=lambda r: (r["result"].entry_time or datetime.min))  # type: ignore
+        # 2. Построение событий (event-driven подход)
+        events: List[TradeEvent] = []
+        for trade in trades:
+            trade_output: StrategyOutput = trade["result"]
+            entry_time: datetime = trade_output.entry_time  # type: ignore
+            exit_time: datetime = trade_output.exit_time    # type: ignore
+            
+            # Создаем ENTRY событие
+            events.append(TradeEvent(
+                event_type=EventType.ENTRY,
+                event_time=entry_time,
+                trade_data=trade
+            ))
+            
+            # Создаем EXIT событие
+            events.append(TradeEvent(
+                event_type=EventType.EXIT,
+                event_time=exit_time,
+                trade_data=trade
+            ))
+        
+        # Сортируем события по времени (EXIT перед ENTRY на одном timestamp)
+        events.sort()
 
         # Инициализация состояния портфеля
         initial_balance = self.config.initial_balance_sol
@@ -770,8 +1194,8 @@ class PortfolioEngine:
         )
 
         # стартовая точка equity-кривой
-        first_time = trades[0]["result"].entry_time  # type: ignore
-        if first_time:
+        if events:
+            first_time = events[0].event_time
             state.equity_curve.append({"timestamp": first_time, "balance": state.balance})
 
         skipped_by_risk = 0
@@ -779,191 +1203,111 @@ class PortfolioEngine:
         
         # Инициализация capacity tracking
         capacity_tracking: Dict[str, Any] = {}
+        
+        # Mapping для быстрого поиска позиций по signal_id
+        positions_by_signal_id: Dict[str, Position] = {}
 
-        for row in trades:
-            out: StrategyOutput = row["result"]
-            entry_time: datetime = out.entry_time  # type: ignore
-            exit_time: datetime = out.exit_time    # type: ignore
+        # 3. Event-driven обработка: группируем события по времени и обрабатываем
+        i = 0
+        while i < len(events):
+            # Группируем события на текущем timestamp
+            current_time = events[i].event_time
+            events_at_time: List[TradeEvent] = []
+            while i < len(events) and events[i].event_time == current_time:
+                events_at_time.append(events[i])
+                i += 1
             
-            # Обновляем equity_peak_in_cycle перед обработкой (для portfolio-level reset tracking)
+            # Обновляем equity_peak_in_cycle перед обработкой событий на текущем timestamp
             if self.config.resolved_profit_reset_enabled():
                 state.update_equity_peak()
-
-            # 3. Закрываем позиции, у которых exit_time <= entry_time
-            # Для Runner стратегий обрабатываем частичные выходы
-            still_open: List[Position] = []
-            reset_time_current: Optional[datetime] = None
-            trigger_position: Optional[Position] = None
             
-            # Первый проход: находим позиции, которые нужно закрыть, и проверяем reset
-            positions_to_close_now: List[Position] = []
-            for pos in state.open_positions:
-                # Проверяем, является ли позиция Runner с частичными выходами
-                is_runner = pos.meta.get("runner_ladder", False)
+            # Сначала обрабатываем все EXIT события на текущем timestamp
+            exit_events = [e for e in events_at_time if e.event_type == EventType.EXIT]
+            for event in exit_events:
+                trade_data = event.trade_data
+                signal_id = trade_data["signal_id"]
                 
-                if is_runner and pos.exit_time is not None:
-                    # Обрабатываем частичные выходы Runner только если exit_time наступил или уже был достигнут
-                    # (для частичных выходов по уровням проверяем current_time >= hit_time в методе)
-                    if entry_time >= pos.exit_time or any(
-                        # Проверяем, есть ли уровни, которые нужно обработать до current_time
-                        hit_time <= entry_time 
-                        for hit_time in (
-                            datetime.fromisoformat(v) if isinstance(v, str) else v
-                            for v in pos.meta.get("levels_hit", {}).values()
-                        )
-                    ):
-                        partial_exits_processed = self._process_runner_partial_exits(
-                            pos=pos,
-                            current_time=entry_time,
-                            balance=state.balance,
-                            equity_curve=state.equity_curve,
-                            closed_positions=state.closed_positions,
-                        )
-                        state.balance = partial_exits_processed["balance"]
-                        state.peak_balance = max(state.peak_balance, state.balance)
-                    
-                    # Если позиция полностью закрыта (size <= 0), удаляем из open
-                    if pos.size <= 1e-9:  # Учитываем погрешности float
-                        positions_to_close_now.append(pos)
-                        continue  # Позиция полностью закрыта, не добавляем в still_open
-                    else:
-                        # Позиция еще открыта (есть остаток), добавляем в still_open
-                        still_open.append(pos)
-                        continue
+                # Находим позицию в open_positions
+                pos = positions_by_signal_id.get(signal_id)
+                if pos is None or pos.status != "open":
+                    continue  # Позиция уже закрыта или не найдена
                 
-                # Обычная обработка для RR/RRD (полное закрытие)
-                if pos.exit_time is not None and pos.exit_time <= entry_time:
-                    positions_to_close_now.append(pos)
-                    # Проверка runner reset: если позиция достигает XN, закрываем все позиции
-                    # Проверяем по raw ценам, а не по effective (slippage не должен влиять на XN)
-                    if self.config.runner_reset_enabled and trigger_position is None:
-                        raw_entry_price = pos.meta.get("raw_entry_price")
-                        raw_exit_price = pos.meta.get("raw_exit_price")
-                        if raw_entry_price and raw_exit_price and raw_entry_price > 0:
-                            multiplying_return = raw_exit_price / raw_entry_price
-                            if multiplying_return >= self.config.runner_reset_multiple:
-                                trigger_position = pos
-                                reset_time_current = pos.exit_time
-                                # Флаг triggered_reset будет установлен в _apply_reset()
-                else:
-                    still_open.append(pos)
-            
-            # Второй проход: закрываем позиции, которые должны закрыться
-            # Если есть runner reset по XN, применяем его через новый механизм
-            if trigger_position is not None and reset_time_current is not None:
-                # Формируем список позиций для принудительного закрытия (кроме триггерной)
-                positions_to_force_close = [
-                    p for p in still_open 
-                    if p.signal_id != trigger_position.signal_id
-                ]
-                
-                # Применяем runner reset через единый механизм
-                self._apply_reset(
+                # Обрабатываем закрытие позиции
+                self._process_position_exit(
+                    pos=pos,
+                    current_time=current_time,
                     state=state,
-                    marker_position=trigger_position,
-                    reset_time=reset_time_current,
-                    positions_to_force_close=positions_to_force_close,
-                    reason=ResetReason.RUNNER_XN,
-                )
-                
-                # Обновляем still_open после reset
-                still_open = [p for p in still_open if p.status != "closed"]
-                
-                self._dbg(
-                    "runner_reset_count_incremented",
-                    old_reset_count=state.runner_reset_count - 1,
-                    new_reset_count=state.runner_reset_count,
-                    reset_time=reset_time_current,
-                    trigger_pos=trigger_position,
+                    positions_by_signal_id=positions_by_signal_id,
                 )
             
-            # Проверка: игнорируем входы до следующего сигнала после reset
-            # Должна быть ПОСЛЕ обработки закрытий позиций, когда reset_until уже может быть установлен
-            # Reset должен влиять на сделки, которые начинаются в момент reset или раньше (entry_time <= reset_until)
-            if self.config.runner_reset_enabled and state.reset_until is not None and entry_time <= state.reset_until:
-                skipped_by_reset += 1
-                continue
-            
-            # Закрываем позиции, которые должны закрыться нормально (включая триггерную)
-            # Сохраняем последнюю закрытую позицию для возможного использования в portfolio-level reset
-            last_closed_position: Optional[Position] = None
-            for pos in positions_to_close_now:
-                # При закрытии: возвращаем размер позиции + прибыль/убыток
-                # Вычитаем fees (swap + LP) из возвращаемого нотионала
-                network_fee_exit = self.execution_model.network_fee()
-                trade_pnl_sol = pos.size * (pos.pnl_pct or 0.0)
+            # Затем обрабатываем все ENTRY события на текущем timestamp
+            entry_events = [e for e in events_at_time if e.event_type == EventType.ENTRY]
+            for event in entry_events:
+                trade_data = event.trade_data
+                entry_output: StrategyOutput = trade_data["result"]
+                entry_time: datetime = entry_output.entry_time  # type: ignore
                 
-                # Применяем fees к возвращаемому нотионалу
-                notional_returned = pos.size + trade_pnl_sol
-                notional_after_fees = self.execution_model.apply_fees(notional_returned)
-                fees_total = notional_returned - notional_after_fees
+                # Проверка: игнорируем входы до следующего сигнала после reset
+                if self.config.runner_reset_enabled and state.reset_until is not None and entry_time <= state.reset_until:
+                    skipped_by_reset += 1
+                    continue
                 
-                state.balance += notional_after_fees  # Возвращаем размер + PnL минус fees
-                state.balance -= network_fee_exit  # Network fee при выходе
-                m = self._ensure_meta(pos)
-                m.update({
-                    "pnl_sol": trade_pnl_sol,
-                    "fees_total_sol": fees_total,
-                })
-                # Обновляем общий network_fee_sol (вход + выход)
-                m["network_fee_sol"] = m.get("network_fee_sol", 0.0) + network_fee_exit
-                
-                pos.status = "closed"
-                state.closed_positions.append(pos)
-                last_closed_position = pos  # Сохраняем для возможного использования в portfolio-level reset
-
-                state.peak_balance = max(state.peak_balance, state.balance)
-                if pos.exit_time:
-                    state.equity_curve.append(
-                        {"timestamp": pos.exit_time, "balance": state.balance}
-                    )
-                
-                # Обновляем equity_peak_in_cycle после закрытия позиции (для portfolio-level reset)
-                if self.config.resolved_profit_reset_enabled():
-                    state.update_equity_peak()
-                    
-                    # Проверка portfolio-level reset по equity (profit reset)
-                    reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
-                    if state.equity_peak_in_cycle >= reset_threshold:
-                        # Формируем список позиций для принудительного закрытия (кроме уже закрытой)
-                        positions_to_force_close = [
-                            p for p in state.open_positions 
-                            if p.signal_id != pos.signal_id and p.status == "open" and not p.meta.get("closed_by_reset")
-                        ]
-                        
-                        # Используем новый метод для обработки portfolio-level reset
-                        # pos уже закрыта и в closed_positions - используем её как marker
-                        reset_time_portfolio = pos.exit_time if pos.exit_time else datetime.now(timezone.utc)
-                        self._apply_reset(
-                            state=state,
-                            marker_position=pos,  # pos уже закрыта, используем как marker
-                            reset_time=reset_time_portfolio,
-                            positions_to_force_close=positions_to_force_close,
-                            reason=ResetReason.EQUITY_THRESHOLD,
-                        )
-                        self._dbg_meta(pos, "AFTER_process_portfolio_level_reset_line_846_main_loop")
-            
-            state.open_positions = still_open
-            
-            # Обновляем capacity tracking: учитываем закрытые позиции
-            positions_closed_count = len(positions_to_close_now)
-            if positions_closed_count > 0:
-                self._update_capacity_tracking(
-                    capacity_tracking=capacity_tracking,
+                # Попытка открыть позицию
+                pos = self._try_open_position(
+                    trade_data=trade_data,
                     current_time=entry_time,
                     state=state,
-                    signal_blocked_by_capacity=False,
-                    position_closed=True,
+                    capacity_tracking=capacity_tracking,
+                    positions_by_signal_id=positions_by_signal_id,
                 )
+                
+                if pos is None:
+                    skipped_by_risk += 1
+                    continue
+                
+                # Позиция успешно открыта
+                state.open_positions.append(pos)
+                positions_by_signal_id[pos.signal_id] = pos
+                state.equity_curve.append({"timestamp": entry_time, "balance": state.balance})
             
-            # Обновляем equity_peak_in_cycle после обработки позиций
-            state.update_equity_peak()
+            # После обработки всех событий на текущем timestamp: проверяем profit reset
+            if self.config.resolved_profit_reset_enabled():
+                state.update_equity_peak()
+                reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
+                if state.equity_peak_in_cycle >= reset_threshold:
+                    # Формируем список позиций для принудительного закрытия
+                    positions_to_force_close = [p for p in state.open_positions if p.status == "open"]
+                    
+                    # Выбираем marker position детерминированно
+                    closed_candidates = state.closed_positions
+                    open_candidates = positions_to_force_close
+                    marker_position = self._select_profit_reset_marker(
+                        state=state,
+                        closed_positions_candidates=closed_candidates,
+                        open_positions_candidates=open_candidates,
+                    )
+                    
+                    if marker_position is not None:
+                        # Исключаем marker из списка forced-close, если он открыт
+                        if marker_position.status == "open" and marker_position in positions_to_force_close:
+                            other_positions_to_force_close = [p for p in positions_to_force_close if p.signal_id != marker_position.signal_id]
+                        else:
+                            other_positions_to_force_close = positions_to_force_close
+                        
+                        self._apply_reset(
+                            state=state,
+                            marker_position=marker_position,
+                            reset_time=current_time,
+                            positions_to_force_close=other_positions_to_force_close,
+                            reason=ResetReason.EQUITY_THRESHOLD,
+                        )
+                        self._dbg_meta(marker_position, "AFTER_profit_reset_at_timestamp")
             
-            # Проверка capacity reset (после обработки закрытий, перед открытием новой позиции)
+            # Проверка capacity reset (после обработки событий на timestamp)
             if self.config.capacity_reset_enabled:
                 capacity_reset_context = self._check_capacity_reset(
                     state=state,
-                    current_time=entry_time,
+                    current_time=current_time,
                     capacity_tracking=capacity_tracking,
                 )
                 if capacity_reset_context is not None:
@@ -975,268 +1319,45 @@ class PortfolioEngine:
                         positions_to_force_close=capacity_reset_context.positions_to_force_close,
                         reason=ResetReason.CAPACITY_PRESSURE,
                     )
-                    # Обновляем still_open после reset
-                    still_open = [p for p in still_open if p.status != "closed"]
-                    state.open_positions = still_open
+                    # Обновляем positions_by_signal_id после reset
+                    for pos in capacity_reset_context.positions_to_force_close:
+                        if pos.signal_id in positions_by_signal_id:
+                            del positions_by_signal_id[pos.signal_id]
+                    if capacity_reset_context.marker_position.signal_id in positions_by_signal_id:
+                        del positions_by_signal_id[capacity_reset_context.marker_position.signal_id]
                     
                     logger.info(
-                        f"[CAPACITY_RESET] Triggered at {entry_time.isoformat()}: "
+                        f"[CAPACITY_RESET] Triggered at {current_time.isoformat()}: "
                         f"open_ratio={capacity_reset_context.open_ratio:.2f}, "
                         f"blocked_window={capacity_reset_context.blocked_window}, "
                         f"turnover_window={capacity_reset_context.turnover_window}"
                     )
-            
-            # Проверка portfolio-level reset по equity (profit reset)
-            # Если equity_peak_in_cycle >= cycle_start_equity * profit_reset_multiple, закрываем все позиции
-            if self.config.resolved_profit_reset_enabled():
-                reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
-                if state.equity_peak_in_cycle >= reset_threshold:
-                    # Формируем список позиций для принудительного закрытия
-                    positions_to_force_close = [p for p in state.open_positions if p.status == "open"]
-                    
-                    reset_time_portfolio = entry_time  # Используем текущее время события
-                    
-                    # Выбираем marker position для reset:
-                    # - Если есть last_closed_position - используем её как marker (уже закрыта)
-                    # - Иначе используем первую позицию из positions_to_force_close как marker,
-                    #   но НЕ force-close её (она будет marker, но закроется нормально позже)
-                    if last_closed_position is not None:
-                        # Используем последнюю закрытую позицию как marker
-                        marker_position = last_closed_position
-                        other_positions_to_force_close = positions_to_force_close
-                    elif positions_to_force_close:
-                        # Нет закрытых позиций, но есть открытые - используем первую открытую как marker
-                        marker_position = positions_to_force_close[0]
-                        # Исключаем marker из списка forced-close (она будет закрыта нормально позже)
-                        other_positions_to_force_close = [p for p in positions_to_force_close if p.signal_id != marker_position.signal_id]
-                    else:
-                        # Нет ни закрытых, ни открытых позиций - skip reset (не должно происходить, но на всякий случай)
-                        marker_position = None
-                    
-                    # Выполняем reset только если есть позиция для marker
-                    if marker_position is not None:
-                        self._apply_reset(
-                            state=state,
-                            marker_position=marker_position,
-                            reset_time=reset_time_portfolio,
-                            positions_to_force_close=other_positions_to_force_close,
-                            reason=ResetReason.EQUITY_THRESHOLD,
-                        )
-                        if marker_position is not None:
-                            self._dbg_meta(marker_position, "AFTER_process_portfolio_level_reset_line_911_main_loop_last_closed")
-
-
-            # 4. Проверка лимитов портфеля
-
-            # лимит по количеству позиций
-            blocked_by_capacity = False
-            if len(state.open_positions) >= self.config.max_open_positions:
-                skipped_by_risk += 1
-                blocked_by_capacity = True
-                # Обновляем capacity tracking: сигнал отклонен по capacity
-                self._update_capacity_tracking(
-                    capacity_tracking=capacity_tracking,
-                    current_time=entry_time,
-                    state=state,
-                    signal_blocked_by_capacity=True,
-                    position_closed=False,
-                )
-                continue
-
-            # текущая экспозиция (учитываем, что баланс уже уменьшен на открытые позиции)
-            total_open_notional = sum(p.size for p in state.open_positions)
-            # Доступный баланс = текущий баланс (уже уменьшенный на открытые позиции)
-            available_balance = state.balance
-            
-            # В fixed mode total_capital должен быть равен initial_balance_sol,
-            # так как размер позиции рассчитывается от начального баланса.
-            # В dynamic mode total_capital = available_balance + total_open_notional.
-            if self.config.allocation_mode == "fixed":
-                total_capital = self.config.initial_balance_sol
-            else:
-                total_capital = available_balance + total_open_notional
-            
-            # Рассчитываем максимально допустимый размер новой позиции с учетом max_exposure
-            # Формула: (total_open_notional + new_size) / (total_capital + new_size) <= max_exposure
-            # Решаем: new_size <= (max_exposure * total_capital - total_open_notional) / (1 - max_exposure)
-            if self.config.max_exposure >= 1.0:
-                # Нет ограничения на экспозицию
-                max_allowed_notional = float('inf')
-            else:
-                numerator = self.config.max_exposure * total_capital - total_open_notional
-                if numerator <= 0:
-                    # Уже превышен лимит экспозиции
-                    max_allowed_notional = 0.0
-                else:
-                    max_allowed_notional = numerator / (1.0 - self.config.max_exposure)
-
-            # Размер позиции рассчитываем от доступного баланса
-            desired_size = self._position_size(available_balance)
-            
-            # DEBUG-лог перед risk-check
-            logger.debug(
-                f"[PortfolioEngine] Risk check before trade: "
-                f"balance={available_balance:.6f}, "
-                f"position_size={desired_size:.6f}, "
-                f"open_notional={total_open_notional:.6f}, "
-                f"total_capital={total_capital:.6f}, "
-                f"max_allowed_exposure={max_allowed_notional:.6f}, "
-                f"allocation_mode={self.config.allocation_mode}, "
-                f"percent_per_trade={self.config.percent_per_trade}, "
-                f"max_exposure={self.config.max_exposure}"
-            )
-            
-            # Проверяем, что желаемый размер не превышает лимит экспозиции
-            if desired_size > max_allowed_notional:
-                # Если желаемый размер превышает лимит, отклоняем сделку полностью
-                logger.debug(
-                    f"[PortfolioEngine] Trade rejected by exposure limit: "
-                    f"desired_size={desired_size:.6f} > max_allowed_notional={max_allowed_notional:.6f}"
-                )
-                skipped_by_risk += 1
-                blocked_by_capacity = True
-                # Обновляем capacity tracking: сигнал отклонен по capacity (exposure)
-                self._update_capacity_tracking(
-                    capacity_tracking=capacity_tracking,
-                    current_time=entry_time,
-                    state=state,
-                    signal_blocked_by_capacity=True,
-                    position_closed=False,
-                )
-                continue
-            
-            size = desired_size
-            if size <= 0:
-                skipped_by_risk += 1
-                blocked_by_capacity = True
-                # Обновляем capacity tracking: сигнал отклонен (size <= 0)
-                self._update_capacity_tracking(
-                    capacity_tracking=capacity_tracking,
-                    current_time=entry_time,
-                    state=state,
-                    signal_blocked_by_capacity=True,
-                    position_closed=False,
-                )
-                continue
-            
-            # Обновляем capacity tracking: сигнал принят (не был отклонен)
-            if not blocked_by_capacity:
-                self._update_capacity_tracking(
-                    capacity_tracking=capacity_tracking,
-                    current_time=entry_time,
-                    state=state,
-                    signal_blocked_by_capacity=False,
-                    position_closed=False,
-                )
-
-            # 5. Применяем ExecutionModel: slippage к ценам и fees к нотионалу
-            raw_entry_price = out.entry_price or 0.0
-            raw_exit_price = out.exit_price or 0.0
-            
-            if raw_entry_price <= 0 or raw_exit_price <= 0:
-                skipped_by_risk += 1
-                continue
-            
-            # Применяем slippage к ценам
-            effective_entry_price = self.execution_model.apply_entry(raw_entry_price, "entry")
-            effective_exit_price = self.execution_model.apply_exit(raw_exit_price, out.reason)
-            
-            # Пересчитываем PnL на основе эффективных цен (slippage уже учтен)
-            raw_pnl_pct = out.pnl
-            effective_pnl_pct = (effective_exit_price - effective_entry_price) / effective_entry_price
-            
-            # Network fee вычитается отдельно из баланса
-            network_fee = self.execution_model.network_fee()
-            
-            # Итоговый PnL с учетом slippage (fees будут вычтены из нотионала при закрытии)
-            net_pnl_pct = effective_pnl_pct
-            
-            # 6. Вычитаем размер позиции и network fee из баланса при открытии
-            state.balance -= size  # Платим полный размер позиции
-            state.balance -= network_fee  # Network fee при входе
-            
-            # 7. Создаем Position с эффективными ценами
-            # Проверяем, является ли стратегия Runner
-            is_runner = out.meta.get("runner_ladder", False)
-            
-            pos_meta = {
-                "strategy": strategy_name,
-                "raw_pnl_pct": raw_pnl_pct,
-                "raw_entry_price": raw_entry_price,
-                "raw_exit_price": raw_exit_price,
-                "effective_pnl_pct": effective_pnl_pct,
-                "slippage_entry_pct": (effective_entry_price - raw_entry_price) / raw_entry_price if raw_entry_price > 0 else 0.0,
-                "slippage_exit_pct": (raw_exit_price - effective_exit_price) / raw_exit_price if raw_exit_price > 0 else 0.0,
-                "network_fee_sol": network_fee,  # Только вход, выход добавится при закрытии
-                "execution_profile": self.config.execution_profile,
-                # Исполненные цены (с slippage) для расчета PnL и баланса
-                "exec_entry_price": effective_entry_price,
-                "exec_exit_price": effective_exit_price,
-            }
-            
-            # Примечание: reset-флаги устанавливаются только в Position.meta при закрытии позиции,
-            # а не в StrategyOutput.meta (reset-политика - это исключительно портфельная функциональность)
-            
-            # Для Runner сохраняем данные о частичных выходах и original_size
-            if is_runner:
-                pos_meta["runner_ladder"] = True
-                pos_meta["original_size"] = size  # Сохраняем оригинальный размер для расчета частичных выходов
-                pos_meta["levels_hit"] = out.meta.get("levels_hit", {})
-                pos_meta["fractions_exited"] = out.meta.get("fractions_exited", {})
-                pos_meta["time_stop_triggered"] = out.meta.get("time_stop_triggered", False)
-                pos_meta["realized_multiple"] = out.meta.get("realized_multiple", 1.0)
-            
-            # Position.entry_price и Position.exit_price содержат RAW цены (для reset проверки)
-            # Исполненные цены (с slippage) хранятся в meta["exec_entry_price"] и meta["exec_exit_price"]
-            pos = Position(
-                signal_id=row["signal_id"],
-                contract_address=row["contract_address"],
-                entry_time=entry_time,
-                entry_price=raw_entry_price,  # RAW цена (для reset проверки)
-                size=size,
-                exit_time=exit_time,
-                exit_price=raw_exit_price,  # RAW цена (для reset проверки)
-                pnl_pct=net_pnl_pct,  # PnL рассчитывается по исполненным ценам (effective_pnl_pct)
-                status="open",
-                meta=pos_meta,
-            )
-            state.open_positions.append(pos)
-            
-            # Обновляем equity curve при открытии позиции
-            state.equity_curve.append({"timestamp": entry_time, "balance": state.balance})
-
-        # 8. Закрываем все оставшиеся открытые позиции
-        # Сортируем позиции по exit_time для корректной обработки reset
-        positions_to_close = sorted([p for p in state.open_positions if p.exit_time is not None], 
-                                   key=lambda p: p.exit_time if p.exit_time else datetime.max)
         
-        # Обрабатываем позиции по времени закрытия, проверяя reset
-        for pos in positions_to_close:
-            # Обрабатываем частичные выходы Runner перед финальным закрытием
-            is_runner = pos.meta.get("runner_ladder", False)
-            if is_runner:
-                # Обрабатываем все оставшиеся частичные выходы
-                # Используем exit_time как current_time для обработки всех уровней
-                if pos.exit_time:
-                    partial_result = self._process_runner_partial_exits(
-                        pos=pos,
-                        current_time=pos.exit_time,
-                        balance=state.balance,
-                        equity_curve=state.equity_curve,
-                        closed_positions=state.closed_positions,
-                    )
-                    state.balance = partial_result["balance"]
-                    state.peak_balance = max(state.peak_balance, state.balance)
-                    
-                    # Если позиция уже закрыта частичными выходами, пропускаем
-                    if pos.size <= 1e-9:
-                        continue
+        # 4. Закрываем все оставшиеся открытые позиции (финальная обработка)
+        # Это нужно для позиций, у которых exit_time находится после последнего события
+        # Сортируем позиции по exit_time для корректной обработки reset
+        remaining_positions = sorted(
+            [p for p in state.open_positions if p.exit_time is not None and p.status == "open"], 
+            key=lambda p: p.exit_time if p.exit_time else datetime.max
+        )
+        
+        # Обрабатываем оставшиеся позиции
+        for pos in remaining_positions:
+            if pos.status != "open":
+                continue  # Позиция уже закрыта
             
-            # Если позиция уже закрыта по reset и помечена, пропускаем
-            if pos.meta and pos.meta.get("closed_by_reset"):
-                continue
+            # Используем exit_time как current_time для финального закрытия
+            final_exit_time = pos.exit_time if pos.exit_time else datetime.now(timezone.utc)
             
-            # Обновляем equity_peak_in_cycle перед закрытием позиции (для portfolio-level reset)
+            # Обрабатываем закрытие позиции
+            self._process_position_exit(
+                pos=pos,
+                current_time=final_exit_time,
+                state=state,
+                positions_by_signal_id=positions_by_signal_id,
+            )
+            
+            # Обновляем equity_peak_in_cycle после закрытия позиции
             if self.config.resolved_profit_reset_enabled():
                 state.update_equity_peak()
                 
@@ -1249,97 +1370,35 @@ class PortfolioEngine:
                         if p.signal_id != pos.signal_id and p.status == "open" and not p.meta.get("closed_by_reset")
                     ]
                     
-                    # Используем новый метод для обработки portfolio-level reset
-                    # pos еще открыта, но будет закрыта нормально сразу после этого - используем её как marker
-                    reset_time_portfolio = pos.exit_time if pos.exit_time else datetime.now(timezone.utc)
+                    # Выбираем marker детерминированно: позиция с максимальным PnL
+                    # pos еще открыта, но будет закрыта нормально
+                    # Используем все закрытые позиции + pos (которая будет закрыта)
+                    closed_candidates = state.closed_positions + [pos]
+                    open_candidates = positions_to_force_close
+                    marker_position = self._select_profit_reset_marker(
+                        state=state,
+                        closed_positions_candidates=closed_candidates,
+                        open_positions_candidates=open_candidates,
+                    )
+                    
+                    if marker_position is None:
+                        # Fallback: используем pos как marker
+                        marker_position = pos
+                    
+                    reset_time_portfolio = final_exit_time
                     self._apply_reset(
                         state=state,
-                        marker_position=pos,  # pos будет закрыта нормально, используем как marker
+                        marker_position=marker_position,
                         reset_time=reset_time_portfolio,
                         positions_to_force_close=positions_to_force_close,
                         reason=ResetReason.EQUITY_THRESHOLD,
                     )
-                    self._dbg_meta(pos, "AFTER_process_portfolio_level_reset_line_1118_final_close")
-            
-            # Проверка runner reset: если позиция достигает XN, закрываем все остальные открытые позиции
-            # Проверяем по raw ценам, а не по effective (slippage не должен влиять на XN)
-            should_trigger_reset = False
-            if self.config.runner_reset_enabled and pos.exit_time is not None:
-                raw_entry_price = pos.meta.get("raw_entry_price")
-                raw_exit_price = pos.meta.get("raw_exit_price")
-                if raw_entry_price and raw_exit_price and raw_entry_price > 0:
-                    multiplying_return = raw_exit_price / raw_entry_price
-                    if multiplying_return >= self.config.runner_reset_multiple:
-                        should_trigger_reset = True
-                        reset_time_final = pos.exit_time
-                        # Флаг triggered_reset будет установлен в _apply_reset()
-                        
-                        # Закрываем все остальные открытые позиции через новый механизм
-                        other_positions = [p for p in positions_to_close if p.signal_id != pos.signal_id and not p.meta.get("closed_by_reset")]
-                        
-                        # Применяем runner reset через единый механизм
-                        self._apply_reset(
-                            state=state,
-                            marker_position=pos,
-                            reset_time=reset_time_final,
-                            positions_to_force_close=other_positions,
-                            reason=ResetReason.RUNNER_XN,
-                        )
-                        
-                        self._dbg(
-                            "runner_reset_final_count_incremented",
-                            old_reset_count=state.runner_reset_count - 1,
-                            new_reset_count=state.runner_reset_count,
-                            reset_time=reset_time_final,
-                            trigger_pos=pos,
-                        )
-            
-            # При закрытии: возвращаем размер позиции + прибыль/убыток
-            # Вычитаем fees (swap + LP) из возвращаемого нотионала
-            # Fees применяются дважды: при входе и при выходе (round-trip)
-            network_fee_exit = self.execution_model.network_fee()
-            trade_pnl_sol = pos.size * (pos.pnl_pct or 0.0)
-            
-            # Применяем fees к возвращаемому нотионалу (round-trip: вход + выход)
-            notional_returned = pos.size + trade_pnl_sol
-            # Fees применяются дважды (вход и выход)
-            notional_after_entry_fees = self.execution_model.apply_fees(notional_returned)
-            notional_after_exit_fees = self.execution_model.apply_fees(notional_after_entry_fees)
-            fees_total = notional_returned - notional_after_exit_fees
-            
-            state.balance += notional_after_exit_fees  # Возвращаем размер + PnL минус fees (round-trip)
-            state.balance -= network_fee_exit  # Network fee при выходе
-            
-            # КРИТИЧЕСКОЕ МЕСТО: используем _ensure_meta чтобы НЕ потерять reset-флаги
-            # НЕ создаем новый dict, только обновляем существующий
-            # Важно: сохраняем reset-флаги, если они были установлены
-            m = self._ensure_meta(pos)
-            # Сохраняем reset-флаги перед обновлением
-            closed_by_reset = m.get("closed_by_reset", False)
-            triggered_portfolio_reset = m.get("triggered_portfolio_reset", False)
-            m.update({
-                "pnl_sol": trade_pnl_sol,
-                "fees_total_sol": fees_total,
-            })
-            # Восстанавливаем reset-флаги, если они были установлены
-            if closed_by_reset:
-                m["closed_by_reset"] = True
-            if triggered_portfolio_reset:
-                m["triggered_portfolio_reset"] = True
-            # Обновляем общий network_fee_sol (вход + выход)
-            m["network_fee_sol"] = m.get("network_fee_sol", 0.0) + network_fee_exit
-            
-            pos.status = "closed"
-            state.closed_positions.append(pos)
+                    self._dbg_meta(marker_position, "AFTER_process_portfolio_level_reset_final_close")
 
-            state.peak_balance = max(state.peak_balance, state.balance)
-            if pos.exit_time:
-                state.equity_curve.append({"timestamp": pos.exit_time, "balance": state.balance})
-
-        # 9. Сортируем equity curve по времени для корректного расчета drawdown
+        # 5. Сортируем equity curve по времени для корректного расчета drawdown
         state.equity_curve.sort(key=lambda x: x["timestamp"] if x.get("timestamp") else datetime.min)
         
-        # 10. Статистика
+        # 6. Статистика
         final_balance = state.balance
         total_return_pct = (final_balance - self.config.initial_balance_sol) / self.config.initial_balance_sol
 
