@@ -37,25 +37,21 @@ def parse_args():
 
     parser.add_argument(
         "--signals",
-        type=str,
         default="signals/example_signals.csv",
         help="Путь к CSV-файлу с сигналами"
     )
     parser.add_argument(
         "--strategies-config",
-        type=str,
         default="config/strategies_example.yaml",
         help="YAML-файл с описанием стратегий"
     )
     parser.add_argument(
         "--backtest-config",
-        type=str,
         default="config/backtest_example.yaml",
         help="YAML-файл с глобальными настройками бэктеста"
     )
     parser.add_argument(
         "--json-output",
-        type=str,
         default="output/results.json",
         help="Путь для сохранения JSON-отчета"
     )
@@ -67,7 +63,6 @@ def parse_args():
     )
     parser.add_argument(
         "--report-mode",
-        type=str,
         choices=["none", "summary", "top", "all"],
         default="summary",
         help="Режим генерации отчетов: none (только results.json), summary (агрегированные summary), top (top-N стратегий), all (все отчеты)"
@@ -80,7 +75,6 @@ def parse_args():
     )
     parser.add_argument(
         "--report-metric",
-        type=str,
         default="portfolio_return",
         choices=["portfolio_return", "strategy_total_pnl", "sharpe"],
         help="Метрика для выбора top-N стратегий (работает только с --report-mode top)"
@@ -99,7 +93,6 @@ def parse_args():
     )
     parser.add_argument(
         "--execution-profile",
-        type=str,
         choices=["realistic", "stress", "custom"],
         default=None,
         help="Execution profile для применения slippage (realistic/stress/custom). Переопределяет YAML конфиг."

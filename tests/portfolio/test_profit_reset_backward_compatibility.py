@@ -100,9 +100,9 @@ def test_profit_reset_falls_back_to_runner_alias():
             slippage_pct=0.0,  # Без slippage для простоты
             network_fee_sol=0.0005
         ),
-        # Новые поля не заданы
-        profit_reset_enabled=False,  # По умолчанию False
-        profit_reset_multiple=2.0,  # По умолчанию 2.0
+        # Новые поля не заданы (None = не задано, fallback на runner_reset_*)
+        profit_reset_enabled=None,
+        profit_reset_multiple=None,
         # Используем старые поля (deprecated alias)
         runner_reset_enabled=True,
         runner_reset_multiple=1.2  # x1.2 - низкий порог для теста

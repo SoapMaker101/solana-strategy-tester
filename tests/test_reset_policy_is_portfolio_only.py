@@ -235,9 +235,9 @@ def test_reset_flags_appear_only_in_portfolio_positions():
     после прогонки через PortfolioEngine.
     
     Сценарий:
-    - 2-3 сделки с ростом x2
-    - PortfolioEngine с runner_reset_enabled=True
-    - Ожидаем: у одной позиции triggered_reset=True, у других closed_by_reset=True
+    - 3 сделки, первая даёт крупный pnl → портфель пересекает equity threshold
+    - PortfolioEngine с profit_reset_enabled=True
+    - Ожидаем: у одной позиции triggered_portfolio_reset=True, у других closed_by_reset=True
     """
     from backtester.domain.portfolio import (
         FeeModel,
@@ -254,7 +254,7 @@ def test_reset_flags_appear_only_in_portfolio_positions():
         max_open_positions=10,
         fee_model=FeeModel(),
         profit_reset_enabled=True,
-        profit_reset_multiple=2.0  # x2
+        profit_reset_multiple=1.05  # +5% equity threshold (достижимо при 10% позиции и хорошем tp)
     )
     
     engine = PortfolioEngine(config)
@@ -267,7 +267,7 @@ def test_reset_flags_appear_only_in_portfolio_positions():
         entry_time = base_time + timedelta(minutes=i * 5)
         exit_time = entry_time + timedelta(hours=2)
         
-        # Первая сделка достигает x2 (триггер reset)
+        # Первая сделка даёт крупный pnl → портфель пересекает equity threshold
         # Остальные - обычные сделки
         if i == 0:
             exit_price = 2.0  # x2 от entry_price=1.0
@@ -305,12 +305,22 @@ def test_reset_flags_appear_only_in_portfolio_positions():
     trigger_position = next((p for p in portfolio_result.positions if p.signal_id == "reset_signal_1"), None)
     assert trigger_position is not None, "Триггерная позиция должна быть найдена"
     
-    # Проверяем, что триггерная позиция имеет метку triggered_reset
+    # Проверяем, что триггерная позиция имеет канонические reset-флаги
     assert trigger_position.meta is not None, "Position.meta не должен быть None"
-    assert trigger_position.meta.get("triggered_reset") == True, \
-        "Триггерная позиция должна иметь triggered_reset=True в Position.meta"
-    assert trigger_position.meta.get("closed_by_reset") != True, \
-        "Триггерная позиция не должна иметь closed_by_reset=True"
+    assert trigger_position.meta.get("triggered_portfolio_reset") is True, \
+        "Триггерная позиция должна иметь triggered_portfolio_reset=True в Position.meta"
+    assert trigger_position.meta.get("closed_by_reset") is True, \
+        "Триггерная позиция должна иметь closed_by_reset=True"
+    assert trigger_position.meta.get("reset_reason") == "profit", \
+        "Триггерная позиция должна иметь reset_reason='profit'"
+    
+    # Защитная проверка: ровно одна позиция должна иметь triggered_portfolio_reset=True
+    positions_with_triggered_reset = [
+        p for p in portfolio_result.positions 
+        if p.meta and p.meta.get("triggered_portfolio_reset") is True
+    ]
+    assert len(positions_with_triggered_reset) == 1, \
+        f"Должна быть ровно одна позиция с triggered_portfolio_reset=True, найдено: {len(positions_with_triggered_reset)}"
     
     # Проверяем, что остальные позиции имеют метку closed_by_reset
     other_positions = [p for p in portfolio_result.positions if p.signal_id != "reset_signal_1"]
@@ -318,10 +328,23 @@ def test_reset_flags_appear_only_in_portfolio_positions():
     
     for pos in other_positions:
         assert pos.meta is not None, f"Position.meta для {pos.signal_id} не должен быть None"
-        assert pos.meta.get("closed_by_reset") == True, \
+        assert pos.meta.get("closed_by_reset") is True, \
             f"Позиция {pos.signal_id} должна иметь closed_by_reset=True в Position.meta"
-        assert pos.meta.get("triggered_reset") != True, \
-            f"Позиция {pos.signal_id} не должна иметь triggered_reset=True"
+        assert pos.meta.get("reset_reason") == "profit", \
+            f"Позиция {pos.signal_id} должна иметь reset_reason='profit'"
+        assert pos.meta.get("triggered_portfolio_reset") is not True, \
+            f"Позиция {pos.signal_id} не должна иметь triggered_portfolio_reset=True"
+    
+    # Дополнительная проверка: все позиции, закрытые reset'ом, должны иметь closed_by_reset=True и reset_reason="profit"
+    positions_closed_by_reset = [
+        p for p in portfolio_result.positions 
+        if p.meta and p.meta.get("closed_by_reset") is True
+    ]
+    assert len(positions_closed_by_reset) == 3, \
+        f"Все 3 позиции должны быть закрыты reset'ом, найдено: {len(positions_closed_by_reset)}"
+    for pos in positions_closed_by_reset:
+        assert pos.meta.get("reset_reason") == "profit", \
+            f"Позиция {pos.signal_id}, закрытая reset'ом, должна иметь reset_reason='profit'"
 
 
 

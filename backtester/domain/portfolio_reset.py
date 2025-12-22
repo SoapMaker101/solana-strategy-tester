@@ -244,12 +244,19 @@ def apply_portfolio_reset(
     # НО она обязательно должна попасть в closed_positions в итоге
     marker = context.marker_position
     
+    # Убеждаемся, что meta существует
+    if marker.meta is None:
+        marker.meta = {}
+    
     # Устанавливаем флаги в зависимости от причины
     if context.reason == ResetReason.EQUITY_THRESHOLD:
         # Portfolio-level profit reset: marker помечается флагами
-        marker.meta.setdefault("closed_by_reset", True)
-        marker.meta.setdefault("triggered_portfolio_reset", True)
-        marker.meta.setdefault("reset_reason", "profit")
+        # ВАЖНО: используем update для гарантии установки флагов (не setdefault)
+        marker.meta.update({
+            "closed_by_reset": True,
+            "triggered_portfolio_reset": True,
+            "reset_reason": "profit",
+        })
     elif context.reason == ResetReason.CAPACITY_PRESSURE:
         # Portfolio-level capacity reset: marker закрывается отдельно через market close
         # (marker не в positions_to_force_close из-за архитектурного инварианта)
