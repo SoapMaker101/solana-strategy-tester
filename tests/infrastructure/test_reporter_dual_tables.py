@@ -230,3 +230,4 @@ def test_executions_table_has_partial_exits():
         assert len(partial_exit_events) >= 2, \
             f"Должно быть минимум 2 partial_exit events, получено: {len(partial_exit_events)}"
 
+
