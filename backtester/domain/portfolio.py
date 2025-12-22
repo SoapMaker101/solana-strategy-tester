@@ -773,14 +773,15 @@ class PortfolioEngine:
                 pos.meta[remainder_closed_key] = True
                 pos.size = 0.0
         
-        # Если позиция полностью закрыта
+        # Если позиция полностью закрыта после partial exits
+        # НЕ добавляем в closed_positions здесь - это будет сделано в _process_position_exit
+        # Просто обновляем статус и PnL
         if pos.size <= 1e-9:
             pos.status = "closed"
-            closed_positions.append(pos)
-            
             # Обновляем общий PnL позиции
             total_pnl_sol = sum(exit.get("pnl_sol", 0.0) for exit in pos.meta.get("partial_exits", []))
             pos.meta["pnl_sol"] = total_pnl_sol
+            # НЕ добавляем в closed_positions - это будет сделано в _process_position_exit
         
         return {"balance": balance}
 
@@ -822,10 +823,13 @@ class PortfolioEngine:
                 state.balance = partial_exits_processed["balance"]
                 state.peak_balance = max(state.peak_balance, state.balance)
             
-            # Если позиция полностью закрыта (size <= 0), удаляем из open
+            # Если позиция полностью закрыта после partial exits (size <= 0), удаляем из open
+            # Проверяем, не добавлена ли уже в closed_positions
             if pos.size <= 1e-9:
                 pos.status = "closed"
-                state.closed_positions.append(pos)
+                # Добавляем в closed_positions только если еще не добавлена
+                if pos not in state.closed_positions:
+                    state.closed_positions.append(pos)
                 state.open_positions = [p for p in state.open_positions if p.signal_id != pos.signal_id]
                 if pos.signal_id in positions_by_signal_id:
                     del positions_by_signal_id[pos.signal_id]
@@ -895,7 +899,9 @@ class PortfolioEngine:
             m["network_fee_sol"] = m.get("network_fee_sol", 0.0) + network_fee_exit
             
             pos.status = "closed"
-            state.closed_positions.append(pos)
+            # Добавляем в closed_positions только если еще не добавлена
+            if pos not in state.closed_positions:
+                state.closed_positions.append(pos)
             state.open_positions = [p for p in state.open_positions if p.signal_id != pos.signal_id]
             if pos.signal_id in positions_by_signal_id:
                 del positions_by_signal_id[pos.signal_id]
@@ -1200,6 +1206,7 @@ class PortfolioEngine:
 
         skipped_by_risk = 0
         skipped_by_reset = 0
+        trades_executed = 0  # Счетчик открытых позиций (инкрементируется только при ENTRY)
         
         # Инициализация capacity tracking
         capacity_tracking: Dict[str, Any] = {}
@@ -1268,6 +1275,7 @@ class PortfolioEngine:
                 # Позиция успешно открыта
                 state.open_positions.append(pos)
                 positions_by_signal_id[pos.signal_id] = pos
+                trades_executed += 1  # Инкрементируем счетчик только при открытии позиции
                 state.equity_curve.append({"timestamp": entry_time, "balance": state.balance})
             
             # После обработки всех событий на текущем timestamp: проверяем profit reset
@@ -1422,7 +1430,7 @@ class PortfolioEngine:
             final_balance_sol=final_balance,
             total_return_pct=total_return_pct,
             max_drawdown_pct=max_drawdown_pct,
-            trades_executed=len(state.closed_positions),
+            trades_executed=trades_executed,  # Используем счетчик открытых позиций, а не len(closed_positions)
             trades_skipped_by_risk=skipped_by_risk,
             trades_skipped_by_reset=skipped_by_reset,
             runner_reset_count=state.runner_reset_count,
