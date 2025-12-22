@@ -50,10 +50,22 @@ def parse_args():
         default="config/backtest_example.yaml",
         help="YAML-файл с глобальными настройками бэктеста"
     )
+    # Алиас для обратной совместимости
+    parser.add_argument(
+        "--config",
+        dest="backtest_config",
+        help="(DEPRECATED: use --backtest-config) YAML-файл с глобальными настройками бэктеста"
+    )
     parser.add_argument(
         "--json-output",
         default="output/results.json",
         help="Путь для сохранения JSON-отчета"
+    )
+    # Алиас для обратной совместимости
+    parser.add_argument(
+        "--output-dir",
+        dest="json_output",
+        help="(DEPRECATED: use --json-output) Путь для сохранения JSON-отчета"
     )
     parser.add_argument(
         "--max-workers",
@@ -259,47 +271,175 @@ def generate_strategy_summary(
 ) -> None:
     """
     Генерирует агрегированный summary отчет по всем стратегиям.
+    
+    Теперь считает метрики ТОЛЬКО из portfolio_positions.csv (portfolio-derived summary).
+    Это гарантирует единицы измерения в SOL и корректность метрик.
     """
+    import numpy as np
+    
+    # Загружаем portfolio_positions.csv (источник правды)
+    positions_path = output_dir / "portfolio_positions.csv"
+    
+    if not positions_path.exists():
+        print(f"⚠️  WARNING: portfolio_positions.csv not found at {positions_path}")
+        print("   Strategy summary will be empty. Run portfolio simulation first.")
+        # Создаем пустой summary
+        empty_data = {
+            "strategy": [],
+            "positions_total": [],
+            "positions_closed": [],
+            "positions_open": [],
+            "trades_executed": [],
+            "reset_closed_count": [],
+            "reset_trigger_count": [],
+            "profit_reset_count": [],
+            "capacity_reset_count": [],
+            "pnl_total_sol": [],
+            "fees_total_sol": [],
+            "pnl_net_sol": [],
+            "avg_pnl_sol": [],
+            "median_pnl_sol": [],
+            "best_pnl_sol": [],
+            "worst_pnl_sol": [],
+            "initial_balance_sol": [],
+            "final_balance_sol": [],
+            "portfolio_return_pct": [],
+            "p90_hold_minutes": [],
+            "avg_hold_minutes": [],
+            "hit_rate_x2": [],
+            "hit_rate_x5": []
+        }
+        df = pd.DataFrame(empty_data)
+        summary_path = output_dir / "strategy_summary.csv"
+        df.to_csv(summary_path, index=False)
+        print(f"\n📊 Saved empty strategy summary to {summary_path}")
+        return
+    
+    # Загружаем portfolio_positions.csv
+    positions_df = pd.read_csv(positions_path)
+    
+    if len(positions_df) == 0:
+        print(f"⚠️  WARNING: portfolio_positions.csv is empty")
+        empty_data = {
+            "strategy": [],
+            "positions_total": [],
+            "positions_closed": [],
+            "positions_open": [],
+            "trades_executed": [],
+            "reset_closed_count": [],
+            "reset_trigger_count": [],
+            "profit_reset_count": [],
+            "capacity_reset_count": [],
+            "pnl_total_sol": [],
+            "fees_total_sol": [],
+            "pnl_net_sol": [],
+            "avg_pnl_sol": [],
+            "median_pnl_sol": [],
+            "best_pnl_sol": [],
+            "worst_pnl_sol": [],
+            "initial_balance_sol": [],
+            "final_balance_sol": [],
+            "portfolio_return_pct": [],
+            "p90_hold_minutes": [],
+            "avg_hold_minutes": [],
+            "hit_rate_x2": [],
+            "hit_rate_x5": []
+        }
+        df = pd.DataFrame(empty_data)
+        summary_path = output_dir / "strategy_summary.csv"
+        df.to_csv(summary_path, index=False)
+        print(f"\n📊 Saved empty strategy summary to {summary_path}")
+        return
+    
+    # Группируем по стратегиям и считаем метрики
     summary_rows = []
     
-    for strategy_name, strategy_results in results_by_strategy.items():
-        metrics = reporter.calculate_metrics(strategy_results)
+    for strategy_name in positions_df["strategy"].unique():
+        strategy_positions = positions_df[positions_df["strategy"] == strategy_name]
+        
+        # Счетчики
+        positions_total = len(strategy_positions)
+        positions_closed = len(strategy_positions[strategy_positions["status"] == "closed"])
+        positions_open = len(strategy_positions[strategy_positions["status"] == "open"])
+        trades_executed = positions_total  # В контексте portfolio_positions это и есть исполненные позиции
+        
+        # Reset counts
+        reset_closed_count = strategy_positions["closed_by_reset"].sum() if "closed_by_reset" in strategy_positions.columns else 0
+        reset_trigger_count = strategy_positions["triggered_portfolio_reset"].sum() if "triggered_portfolio_reset" in strategy_positions.columns else 0
+        profit_reset_count = len(strategy_positions[strategy_positions["reset_reason"] == "profit"]) if "reset_reason" in strategy_positions.columns else 0
+        capacity_reset_count = len(strategy_positions[strategy_positions["reset_reason"] == "capacity"]) if "reset_reason" in strategy_positions.columns else 0
+        
+        # PnL в SOL
+        pnl_total_sol = strategy_positions["pnl_sol"].sum() if "pnl_sol" in strategy_positions.columns else 0.0
+        fees_total_sol = strategy_positions["fees_total_sol"].sum() if "fees_total_sol" in strategy_positions.columns else 0.0
+        pnl_net_sol = pnl_total_sol - fees_total_sol
+        
+        # Статистика PnL
+        if "pnl_sol" in strategy_positions.columns:
+            pnl_values = pd.Series(strategy_positions["pnl_sol"]).dropna()
+        else:
+            pnl_values = pd.Series([], dtype=float)
+        avg_pnl_sol = pnl_values.mean() if len(pnl_values) > 0 else 0.0
+        median_pnl_sol = pnl_values.median() if len(pnl_values) > 0 else 0.0
+        best_pnl_sol = pnl_values.max() if len(pnl_values) > 0 else 0.0
+        worst_pnl_sol = pnl_values.min() if len(pnl_values) > 0 else 0.0
+        
+        # Return% (из portfolio_results если доступно)
+        initial_balance_sol = None
+        final_balance_sol = None
+        portfolio_return_pct = None
+        if portfolio_results and strategy_name in portfolio_results:
+            p_result = portfolio_results[strategy_name]
+            initial_balance_sol = p_result.stats.final_balance_sol / (1 + p_result.stats.total_return_pct) if p_result.stats.total_return_pct != -1.0 else None
+            final_balance_sol = p_result.stats.final_balance_sol
+            portfolio_return_pct = p_result.stats.total_return_pct
+        
+        # Hold
+        if "hold_minutes" in strategy_positions.columns:
+            hold_minutes_values = pd.Series(strategy_positions["hold_minutes"]).dropna()
+        else:
+            hold_minutes_values = pd.Series([], dtype=float)
+        p90_hold_minutes = np.percentile(hold_minutes_values, 90) if len(hold_minutes_values) > 0 else None
+        avg_hold_minutes = hold_minutes_values.mean() if len(hold_minutes_values) > 0 else None
+        
+        # Hit rates (Runner)
+        hit_x2_count = strategy_positions["hit_x2"].sum() if "hit_x2" in strategy_positions.columns else 0
+        hit_x5_count = strategy_positions["hit_x5"].sum() if "hit_x5" in strategy_positions.columns else 0
+        hit_rate_x2 = hit_x2_count / positions_total if positions_total > 0 else 0.0
+        hit_rate_x5 = hit_x5_count / positions_total if positions_total > 0 else 0.0
         
         row = {
             "strategy": strategy_name,
-            "total_trades": metrics["total_trades"],
-            "winning_trades": metrics["winning_trades"],
-            "losing_trades": metrics["losing_trades"],
-            "winrate": metrics["winrate"],
-            "strategy_total_pnl": metrics["total_pnl"],
-            "avg_pnl": metrics["avg_pnl"],
-            "median_pnl": metrics["median_pnl"],
-            "best_trade": metrics["best_trade"],
-            "worst_trade": metrics["worst_trade"],
-            "sharpe": metrics["sharpe_ratio"],
-            "max_drawdown": metrics["max_drawdown"],
-            "profit_factor": metrics["profit_factor"],
+            "positions_total": positions_total,
+            "positions_closed": positions_closed,
+            "positions_open": positions_open,
+            "trades_executed": trades_executed,
+            "reset_closed_count": reset_closed_count,
+            "reset_trigger_count": reset_trigger_count,
+            "profit_reset_count": profit_reset_count,
+            "capacity_reset_count": capacity_reset_count,
+            "pnl_total_sol": pnl_total_sol,
+            "fees_total_sol": fees_total_sol,
+            "pnl_net_sol": pnl_net_sol,
+            "avg_pnl_sol": avg_pnl_sol,
+            "median_pnl_sol": median_pnl_sol,
+            "best_pnl_sol": best_pnl_sol,
+            "worst_pnl_sol": worst_pnl_sol,
+            "initial_balance_sol": initial_balance_sol,
+            "final_balance_sol": final_balance_sol,
+            "portfolio_return_pct": portfolio_return_pct,
+            "p90_hold_minutes": p90_hold_minutes,
+            "avg_hold_minutes": avg_hold_minutes,
+            "hit_rate_x2": hit_rate_x2,
+            "hit_rate_x5": hit_rate_x5,
         }
-        
-        # Добавляем портфельные метрики если есть
-        if portfolio_results and strategy_name in portfolio_results:
-            p_result = portfolio_results[strategy_name]
-            row["portfolio_return"] = p_result.stats.total_return_pct
-            row["final_balance_sol"] = p_result.stats.final_balance_sol
-            row["portfolio_max_drawdown"] = p_result.stats.max_drawdown_pct
-            row["trades_executed"] = p_result.stats.trades_executed
-        else:
-            row["portfolio_return"] = None
-            row["final_balance_sol"] = None
-            row["portfolio_max_drawdown"] = None
-            row["trades_executed"] = None
         
         summary_rows.append(row)
     
     df = pd.DataFrame(summary_rows)
     summary_path = output_dir / "strategy_summary.csv"
     df.to_csv(summary_path, index=False)
-    print(f"\n📊 Saved strategy summary to {summary_path}")
+    print(f"\n📊 Saved strategy summary (portfolio-derived) to {summary_path}")
 
 
 def generate_portfolio_summary(

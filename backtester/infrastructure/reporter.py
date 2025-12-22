@@ -746,6 +746,9 @@ class Reporter:
         - triggered_portfolio_reset: триггернула ли portfolio-level reset (bool)
         - reset_reason: причина reset (profit/capacity/runner/manual/none)
         - hold_minutes: длительность удержания позиции в минутах
+        - max_xn: максимальный XN достигнутый по exit цене (exec_exit/exec_entry или raw_exit/raw_entry)
+        - hit_x2: достигнут ли XN >= 2.0 (bool)
+        - hit_x5: достигнут ли XN >= 5.0 (bool)
         
         Запрещено: дублировать строки одной позиции из-за partial close.
         Positions-level = агрегат.
@@ -805,6 +808,18 @@ class Reporter:
                     hold_delta = pos.exit_time - pos.entry_time
                     hold_minutes = int(hold_delta.total_seconds() / 60)
                 
+                # Вычисляем max_xn (максимальный XN достигнутый по exit цене)
+                # Используем exec цены если есть оба, иначе raw цены
+                max_xn = None
+                if exec_entry_price and exec_exit_price and exec_entry_price > 0:
+                    max_xn = exec_exit_price / exec_entry_price
+                elif raw_entry_price and raw_exit_price and raw_entry_price > 0:
+                    max_xn = raw_exit_price / raw_entry_price
+                
+                # Вычисляем hit flags
+                hit_x2 = max_xn is not None and max_xn >= 2.0
+                hit_x5 = max_xn is not None and max_xn >= 5.0
+                
                 trade_row = {
                     "strategy": strategy_name,
                     "signal_id": pos.signal_id,
@@ -823,6 +838,9 @@ class Reporter:
                     "triggered_portfolio_reset": triggered_portfolio_reset,
                     "reset_reason": reset_reason,
                     "hold_minutes": hold_minutes,
+                    "max_xn": max_xn,
+                    "hit_x2": hit_x2,
+                    "hit_x5": hit_x5,
                 }
                 
                 trades_rows.append(trade_row)
@@ -843,6 +861,7 @@ class Reporter:
                 "exec_entry_price", "exec_exit_price",
                 "raw_entry_price", "raw_exit_price",
                 "closed_by_reset", "triggered_portfolio_reset", "reset_reason", "hold_minutes",
+                "max_xn", "hit_x2", "hit_x5",
             ])
         
         # Удаляем дубликаты по (strategy, signal_id, contract_address) - positions-level агрегат

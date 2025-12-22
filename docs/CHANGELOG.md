@@ -1,5 +1,135 @@
 # Changelog
 
+## [Refactor: Portfolio-Derived Metrics & Hit Rates] - 2025-01-XX
+
+### Нормализация метрик отчётов + Runner hit-rate + единицы измерения
+
+#### 🎯 Цель изменений
+
+1. **Единый источник правды:** Stage A и Stage B работают ТОЛЬКО с `portfolio_positions.csv`
+2. **Нормализация метрик:** `strategy_summary.csv` считается из `portfolio_positions.csv` (все метрики в SOL)
+3. **Hit rates для Runner:** Hit rates считаются из `max_xn` в `portfolio_positions.csv`
+4. **CLI backward compatibility:** Добавлены алиасы `--config` и `--output-dir`
+
+#### ✨ Основные изменения
+
+##### 1. **Добавлены max_xn, hit_x2, hit_x5 в portfolio_positions.csv**
+
+**Файл:** `backtester/infrastructure/reporter.py`
+
+**Добавлено:**
+- Колонка `max_xn` - максимальный XN достигнутый по exit цене
+- Колонка `hit_x2` - достигнут ли XN >= 2.0 (bool)
+- Колонка `hit_x5` - достигнут ли XN >= 5.0 (bool)
+
+**Расчет:**
+- Используется `exec_exit_price / exec_entry_price` если оба доступны
+- Иначе используется `raw_exit_price / raw_entry_price`
+- Иначе `max_xn = None/NaN`
+
+##### 2. **strategy_summary.csv теперь portfolio-derived**
+
+**Файл:** `main.py` → `generate_strategy_summary()`
+
+**Изменения:**
+- Теперь считает метрики **ТОЛЬКО** из `portfolio_positions.csv`
+- Все метрики в **SOL** (pnl_total_sol, fees_total_sol, avg_pnl_sol и т.д.)
+- Добавлены hit_rate_x2 и hit_rate_x5 из max_xn
+- Добавлены reset counts, hold metrics
+
+**Удалено:**
+- Использование `StrategyOutput.pnl` для расчета метрик
+- Смешанные единицы измерения (units/multiple/percent)
+
+##### 3. **Stage B читает hit rates из portfolio_positions**
+
+**Файл:** `backtester/research/strategy_stability.py`
+
+**Изменения:**
+- `calculate_runner_metrics()` переделан для использования `portfolio_positions.csv`
+- Hit rates считаются из `max_xn` или `hit_x2`/`hit_x5` колонок
+- Tail contribution считается из `pnl_sol` и `max_xn`
+
+**Результат:** Hit rates больше не равны 0, если по данным это не так.
+
+##### 4. **CLI backward compatibility**
+
+**Файл:** `main.py`
+
+**Добавлено:**
+- Алиас `--config` → `--backtest-config` (deprecated)
+- Алиас `--output-dir` → `--json-output` (deprecated)
+
+##### 5. **Документация**
+
+**Файлы:**
+- `docs/PORTFOLIO_LAYER.md` - добавлен раздел "Reporting Contract"
+- `docs/RESEARCH_PIPELINE.md` - новый файл с описанием pipeline
+- `docs/CHANGELOG.md` - добавлена запись о рефакторинге
+
+#### 📊 Результаты
+
+**До изменений:**
+- ❌ `strategy_summary.csv` содержал смешанные единицы (units/multiple/percent)
+- ❌ Hit rates для Runner были 0 из-за неправильного источника данных
+- ❌ Stage A/B могли использовать разные источники данных
+
+**После изменений:**
+- ✅ Все метрики в SOL (единые единицы измерения)
+- ✅ Hit rates считаются корректно из `portfolio_positions.csv`
+- ✅ Stage A/B используют только `portfolio_positions.csv` (источник правды)
+
+#### 🧪 Тесты
+
+**Добавлены тесты:**
+- `tests/reports/test_portfolio_positions_max_xn.py` - проверка расчета max_xn/hit flags
+- `tests/reports/test_strategy_summary_portfolio_derived.py` - проверка portfolio-derived summary
+- `tests/decision/test_stage_b_hit_rates_from_portfolio_positions.py` - проверка hit rates в Stage B
+- `tests/cli/test_main_cli_aliases.py` - проверка CLI backward compatibility
+
+#### 📝 Измененные файлы
+
+**Код:**
+- `backtester/infrastructure/reporter.py` - добавлены max_xn/hit_x2/hit_x5
+- `main.py` - переделан generate_strategy_summary для portfolio-derived
+- `backtester/research/strategy_stability.py` - обновлен calculate_runner_metrics
+- `main.py` - добавлены CLI алиасы
+
+**Тесты:**
+- `tests/reports/test_portfolio_positions_max_xn.py` (новый)
+- `tests/reports/test_strategy_summary_portfolio_derived.py` (новый)
+- `tests/decision/test_stage_b_hit_rates_from_portfolio_positions.py` (новый)
+- `tests/cli/test_main_cli_aliases.py` (новый)
+
+**Документация:**
+- `docs/PORTFOLIO_LAYER.md` - добавлен раздел "Reporting Contract"
+- `docs/RESEARCH_PIPELINE.md` (новый)
+- `docs/CHANGELOG.md` - добавлена запись
+
+#### 🔧 Технические детали
+
+**Reporting Contract:**
+- `portfolio_positions.csv` = единственный источник для Stage A/B
+- Reset flags появляются только в `Position.meta` (не в `StrategyOutput.meta`)
+- Все метрики в SOL (не в процентах или units)
+
+**Инварианты:**
+- ✅ Stage A/B не используют executions-level CSV
+- ✅ Stage A/B не используют strategy output напрямую
+- ✅ Hit rates считаются из `max_xn` в `portfolio_positions.csv`
+
+#### 💡 Коммиты
+
+```
+feat: add max_xn and hit flags to portfolio_positions report
+refactor: derive strategy_summary from portfolio_positions (SOL-consistent)
+fix: stage_b compute hit rates from portfolio_positions
+test: add coverage for portfolio-derived summaries and hit rates
+docs: clarify units and research source-of-truth
+```
+
+---
+
 ## [Fix: Time-Aware Portfolio Simulation & Trades Executed] - 2025-01-XX
 
 ### Исправление: Event-driven симуляция портфеля и корректный подсчет trades_executed

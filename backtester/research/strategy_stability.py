@@ -98,148 +98,122 @@ def calculate_stability_metrics(
 
 
 def calculate_runner_metrics(
-    trades_df: pd.DataFrame,
+    strategy_name: str,
+    portfolio_positions_path: Optional[Path] = None,
     portfolio_summary_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """
-    Вычисляет Runner-специфичные метрики из trades DataFrame.
+    Вычисляет Runner-специфичные метрики из portfolio_positions.csv (источник правды).
     
-    :param trades_df: DataFrame с колонками entry_time, exit_time, pnl_pct, meta (JSON строка).
+    Теперь использует portfolio_positions.csv вместо strategy output для корректных hit rates.
+    
+    :param strategy_name: Имя стратегии для фильтрации позиций.
+    :param portfolio_positions_path: Путь к portfolio_positions.csv.
     :param portfolio_summary_path: Опциональный путь к portfolio_summary.csv для max_drawdown_pct.
     :return: Словарь с Runner метриками.
     """
-    if len(trades_df) == 0:
-        return {
-            "hit_rate_x2": 0.0,
-            "hit_rate_x5": 0.0,
-            "p90_hold_days": 0.0,
-            "tail_contribution": 0.0,
-            "max_drawdown_pct": 0.0,
-        }
+    # Значения по умолчанию
+    default_metrics = {
+        "hit_rate_x2": 0.0,
+        "hit_rate_x5": 0.0,
+        "p90_hold_days": 0.0,
+        "tail_contribution": 0.0,
+        "max_drawdown_pct": 0.0,
+    }
     
-    # Парсим meta для получения levels_hit
-    total_trades = len(trades_df)
-    hit_x2_count = 0
-    hit_x5_count = 0
-    hold_days_list = []
-    pnl_list = []
+    # Загружаем portfolio_positions.csv
+    if not portfolio_positions_path or not portfolio_positions_path.exists():
+        return default_metrics
     
-    for _, row in trades_df.iterrows():
-        # Парсим meta (может быть JSON строка или dict)
-        meta_str = row.get("meta", "{}")
-        if isinstance(meta_str, str):
-            try:
-                meta = json.loads(meta_str)
-            except (json.JSONDecodeError, ValueError):
-                try:
-                    meta = ast.literal_eval(meta_str)
-                except (ValueError, SyntaxError):
-                    meta = {}
+    try:
+        positions_df = pd.read_csv(portfolio_positions_path)
+    except Exception:
+        return default_metrics
+    
+    if len(positions_df) == 0:
+        return default_metrics
+    
+    # Фильтруем по стратегии
+    strategy_positions = positions_df[positions_df["strategy"] == strategy_name]
+    
+    if len(strategy_positions) == 0:
+        return default_metrics
+    
+    # Hit rates из max_xn или hit_x2/hit_x5 колонок
+    if "hit_x2" in strategy_positions.columns:
+        hit_x2_count = strategy_positions["hit_x2"].sum()
+        hit_x5_count = strategy_positions["hit_x5"].sum()
+    elif "max_xn" in strategy_positions.columns:
+        hit_x2_count = (strategy_positions["max_xn"] >= 2.0).sum()
+        hit_x5_count = (strategy_positions["max_xn"] >= 5.0).sum()
+    else:
+        # Fallback: вычисляем из exec или raw цен
+        hit_x2_count = 0
+        hit_x5_count = 0
+        for _, row in strategy_positions.iterrows():
+            max_xn = None
+            if pd.notna(row.get("exec_entry_price")) and pd.notna(row.get("exec_exit_price")) and row.get("exec_entry_price", 0) > 0:
+                max_xn = row["exec_exit_price"] / row["exec_entry_price"]
+            elif pd.notna(row.get("raw_entry_price")) and pd.notna(row.get("raw_exit_price")) and row.get("raw_entry_price", 0) > 0:
+                max_xn = row["raw_exit_price"] / row["raw_entry_price"]
+            
+            if max_xn is not None:
+                if max_xn >= 2.0:
+                    hit_x2_count += 1
+                if max_xn >= 5.0:
+                    hit_x5_count += 1
+    
+    total_positions = len(strategy_positions)
+    hit_rate_x2 = hit_x2_count / total_positions if total_positions > 0 else 0.0
+    hit_rate_x5 = hit_x5_count / total_positions if total_positions > 0 else 0.0
+    
+    # p90_hold_days из hold_minutes
+    if "hold_minutes" in strategy_positions.columns:
+        hold_minutes_values = strategy_positions["hold_minutes"].dropna()
+        if len(hold_minutes_values) > 0:
+            hold_days_values = hold_minutes_values / (24 * 60)  # Конвертируем минуты в дни
+            p90_hold_days = np.percentile(hold_days_values, 90)
         else:
-            meta = meta_str if isinstance(meta_str, dict) else {}
-        
-        # Проверяем levels_hit
-        levels_hit = meta.get("levels_hit", {})
-        if isinstance(levels_hit, str):
-            try:
-                levels_hit = json.loads(levels_hit)
-            except (json.JSONDecodeError, ValueError):
-                try:
-                    levels_hit = ast.literal_eval(levels_hit)
-                except (ValueError, SyntaxError):
-                    levels_hit = {}
-        
-        # Проверяем, достигнут ли уровень x2
-        if levels_hit:
-            # levels_hit может быть dict с ключами как строки "2.0" или числа
-            hit_levels = []
-            for k, v in levels_hit.items():
-                try:
-                    level = float(k)
-                    hit_levels.append(level)
-                except (ValueError, TypeError):
-                    continue
-            
-            if any(level >= 2.0 for level in hit_levels):
-                hit_x2_count += 1
-            if any(level >= 5.0 for level in hit_levels):
-                hit_x5_count += 1
-        
-        # Вычисляем время удержания в днях
-        entry_time = row.get("entry_time")
-        exit_time = row.get("exit_time")
-        if entry_time and exit_time:
-            if isinstance(entry_time, str):
-                entry_time = pd.to_datetime(entry_time, utc=True)
-            if isinstance(exit_time, str):
-                exit_time = pd.to_datetime(exit_time, utc=True)
-            
-            if isinstance(entry_time, datetime) and isinstance(exit_time, datetime):
-                hold_days = (exit_time - entry_time).total_seconds() / (24 * 3600)
-                hold_days_list.append(hold_days)
-        
-        # Собираем PnL для tail contribution
-        pnl = row.get("pnl_pct", 0.0)
-        if isinstance(pnl, (int, float)):
-            pnl_list.append(pnl)
-    
-    # Вычисляем hit rates
-    hit_rate_x2 = hit_x2_count / total_trades if total_trades > 0 else 0.0
-    hit_rate_x5 = hit_x5_count / total_trades if total_trades > 0 else 0.0
-    
-    # Вычисляем p90_hold_days
-    if hold_days_list:
-        p90_hold_days = np.percentile(hold_days_list, 90)
+            p90_hold_days = 0.0
     else:
         p90_hold_days = 0.0
     
-    # Вычисляем tail_contribution (доля PnL от сделок с realized_multiple >= 5x)
+    # tail_contribution: доля PnL от позиций с max_xn >= 5.0
     tail_contribution = 0.0
-    if pnl_list:
-        total_pnl = sum(pnl_list)
-        if total_pnl > 0:
-            # Собираем PnL от сделок с realized_multiple >= 5x
-            tail_pnl = 0.0
-            for idx, row in trades_df.iterrows():
-                # Парсим meta для получения realized_multiple
-                meta_str = row.get("meta", "{}")
-                if isinstance(meta_str, str):
-                    try:
-                        meta = json.loads(meta_str)
-                    except (json.JSONDecodeError, ValueError):
-                        try:
-                            meta = ast.literal_eval(meta_str)
-                        except (ValueError, SyntaxError):
-                            meta = {}
-                else:
-                    meta = meta_str if isinstance(meta_str, dict) else {}
+    if "pnl_sol" in strategy_positions.columns and "max_xn" in strategy_positions.columns:
+        total_pnl_sol = strategy_positions["pnl_sol"].sum()
+        if total_pnl_sol > 0:
+            tail_pnl_sol = strategy_positions[strategy_positions["max_xn"] >= 5.0]["pnl_sol"].sum()
+            tail_contribution = tail_pnl_sol / total_pnl_sol
+    elif "pnl_sol" in strategy_positions.columns:
+        # Fallback: вычисляем max_xn на лету
+        total_pnl_sol = strategy_positions["pnl_sol"].sum()
+        if total_pnl_sol > 0:
+            tail_pnl_sol = 0.0
+            for _, row in strategy_positions.iterrows():
+                max_xn = None
+                if pd.notna(row.get("exec_entry_price")) and pd.notna(row.get("exec_exit_price")) and row.get("exec_entry_price", 0) > 0:
+                    max_xn = row["exec_exit_price"] / row["exec_entry_price"]
+                elif pd.notna(row.get("raw_entry_price")) and pd.notna(row.get("raw_exit_price")) and row.get("raw_entry_price", 0) > 0:
+                    max_xn = row["raw_exit_price"] / row["raw_entry_price"]
                 
-                # Проверяем realized_multiple (может быть в meta или meta_realized_multiple)
-                realized_multiple = meta.get("realized_multiple", row.get("meta_realized_multiple", 1.0))
-                if isinstance(realized_multiple, str):
-                    try:
-                        realized_multiple = float(realized_multiple)
-                    except (ValueError, TypeError):
-                        realized_multiple = 1.0
-                
-                # Если realized_multiple >= 5x, добавляем PnL этой сделки
-                if isinstance(realized_multiple, (int, float)) and realized_multiple >= 5.0:
-                    pnl_val = row.get("pnl_pct", 0.0)
-                    if isinstance(pnl_val, (int, float)):
-                        tail_pnl += pnl_val
-            
-            tail_contribution = tail_pnl / total_pnl if total_pnl > 0 else 0.0
+                if max_xn is not None and max_xn >= 5.0:
+                    tail_pnl_sol += row.get("pnl_sol", 0.0)
+            tail_contribution = tail_pnl_sol / total_pnl_sol if total_pnl_sol > 0 else 0.0
     
     # Загружаем max_drawdown_pct из portfolio_summary (если доступен)
-    # Примечание: portfolio_summary обычно содержит одну строку на стратегию
-    # или агрегированные данные, поэтому берем первое значение
     max_drawdown_pct = 0.0
     if portfolio_summary_path and portfolio_summary_path.exists():
         try:
             portfolio_df = pd.read_csv(portfolio_summary_path)
             if len(portfolio_df) > 0 and "max_drawdown_pct" in portfolio_df.columns:
-                # Берем первое значение (обычно portfolio_summary содержит одну строку)
-                max_drawdown_pct = float(portfolio_df.iloc[0]["max_drawdown_pct"])
+                # Ищем строку для нашей стратегии
+                strategy_row = portfolio_df[portfolio_df["strategy"] == strategy_name]
+                if len(strategy_row) > 0:
+                    max_drawdown_pct = float(strategy_row.iloc[0]["max_drawdown_pct"])
+                else:
+                    # Fallback: берем первое значение
+                    max_drawdown_pct = float(portfolio_df.iloc[0]["max_drawdown_pct"])
         except Exception:
             pass  # Игнорируем ошибки при загрузке portfolio_summary
     
@@ -307,16 +281,16 @@ def build_stability_table(
                 "windows_total": stability_metrics["windows_total"],
             }
             
-            # Для Runner стратегий добавляем Runner-метрики
+            # Для Runner стратегий добавляем Runner-метрики из portfolio_positions.csv
             if is_runner_strategy(strategy_name) and reports_dir:
-                trades_file = reports_dir / f"{strategy_name}_trades.csv"
+                portfolio_positions_file = reports_dir / "portfolio_positions.csv"
                 portfolio_summary_file = reports_dir / "portfolio_summary.csv"
                 
-                if trades_file.exists():
+                if portfolio_positions_file.exists():
                     try:
-                        trades_df = load_trades_csv(trades_file)
                         runner_metrics = calculate_runner_metrics(
-                            trades_df,
+                            strategy_name=strategy_name,
+                            portfolio_positions_path=portfolio_positions_file,
                             portfolio_summary_path=portfolio_summary_file if portfolio_summary_file.exists() else None
                         )
                         row.update(runner_metrics)
@@ -329,6 +303,15 @@ def build_stability_table(
                             "tail_contribution": 0.0,
                             "max_drawdown_pct": 0.0,
                         })
+                else:
+                    # Если portfolio_positions.csv не найден, используем значения по умолчанию
+                    row.update({
+                        "hit_rate_x2": 0.0,
+                        "hit_rate_x5": 0.0,
+                        "p90_hold_days": 0.0,
+                        "tail_contribution": 0.0,
+                        "max_drawdown_pct": 0.0,
+                    })
             
             stability_rows.append(row)
     

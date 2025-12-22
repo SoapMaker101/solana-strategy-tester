@@ -446,6 +446,72 @@ portfolio_result = engine.simulate(all_results, strategy_name="RR_10_20")
 - `{strategy_name}_portfolio_positions.csv` - все портфельные позиции
 - `{strategy_name}_portfolio_stats.json` - статистика портфеля
 - `{strategy_name}_portfolio_equity.png` - график equity curve
+- `portfolio_positions.csv` - агрегированная таблица всех позиций по всем стратегиям (источник правды для Stage A/B)
+- `strategy_summary.csv` - агрегированный summary по всем стратегиям (portfolio-derived)
+
+## Reporting Contract (Источник правды)
+
+### portfolio_positions.csv - единственный источник для Stage A/B
+
+**ВАЖНО:** `portfolio_positions.csv` является единственным источником данных для research pipeline (Stage A и Stage B).
+
+**Обязательные колонки:**
+- `strategy` - название стратегии
+- `signal_id` - идентификатор сигнала
+- `contract_address` - адрес контракта
+- `entry_time`, `exit_time` - времена входа/выхода (ISO)
+- `status` - статус позиции ("open" или "closed")
+- `size` - размер позиции в SOL
+- `pnl_sol` - портфельный PnL в SOL (обязательно!)
+- `fees_total_sol` - суммарные комиссии в SOL
+- `exec_entry_price`, `exec_exit_price` - исполненные цены (с slippage)
+- `raw_entry_price`, `raw_exit_price` - сырые цены (без slippage)
+- `closed_by_reset` - закрыта ли позиция по reset (bool)
+- `triggered_portfolio_reset` - триггернула ли portfolio-level reset (bool)
+- `reset_reason` - причина reset ("profit"/"capacity"/"runner"/"manual"/"none")
+- `hold_minutes` - длительность удержания позиции в минутах
+- `max_xn` - максимальный XN достигнутый по exit цене (exec_exit/exec_entry или raw_exit/raw_entry)
+- `hit_x2` - достигнут ли XN >= 2.0 (bool)
+- `hit_x5` - достигнут ли XN >= 5.0 (bool)
+
+**Расчет max_xn:**
+1. Используем `exec_exit_price / exec_entry_price` если оба доступны
+2. Иначе используем `raw_exit_price / raw_entry_price`
+3. Иначе `max_xn = None/NaN`
+
+**Расчет hit flags:**
+- `hit_x2 = max_xn >= 2.0` (если max_xn не None)
+- `hit_x5 = max_xn >= 5.0` (если max_xn не None)
+
+**Reset flags contract:**
+- Reset flags (`closed_by_reset`, `triggered_portfolio_reset`, `reset_reason`) появляются **только** в `Position.meta` и только на portfolio уровне
+- `StrategyOutput.meta` **НЕ содержит** reset flags
+- Reset flags записываются в `portfolio_positions.csv` из `Position.meta`
+
+**Запрещено:**
+- Использовать executions-level CSV или strategy output для Stage A/B
+- Дублировать строки одной позиции из-за partial close (positions-level = агрегат)
+- Использовать `StrategyOutput.pnl` для расчета метрик (используется только `pnl_sol` из portfolio_positions)
+
+### strategy_summary.csv - portfolio-derived summary
+
+**ВАЖНО:** `strategy_summary.csv` считается **ТОЛЬКО** из `portfolio_positions.csv`, а не из StrategyOutput.
+
+**Обязательные поля:**
+- `strategy` - название стратегии
+- `positions_total`, `positions_closed`, `positions_open` - счетчики позиций
+- `trades_executed` - количество исполненных позиций (= positions_total)
+- `reset_closed_count`, `reset_trigger_count`, `profit_reset_count`, `capacity_reset_count` - счетчики reset
+- `pnl_total_sol`, `fees_total_sol`, `pnl_net_sol` - PnL в SOL
+- `avg_pnl_sol`, `median_pnl_sol`, `best_pnl_sol`, `worst_pnl_sol` - статистика PnL в SOL
+- `initial_balance_sol`, `final_balance_sol`, `portfolio_return_pct` - return метрики
+- `p90_hold_minutes`, `avg_hold_minutes` - метрики удержания
+- `hit_rate_x2`, `hit_rate_x5` - hit rates для Runner стратегий (из max_xn)
+
+**Единицы измерения:**
+- Все PnL метрики в **SOL** (не в процентах или units)
+- Все цены в **SOL** (или нативных единицах токена)
+- Все времена в **минутах** или **ISO datetime**
 
 ### DEBUG-логирование
 
