@@ -32,7 +32,7 @@ def check_portfolio_positions(positions_path: Path) -> bool:
             return False
         
         # Проверяем обязательные колонки
-        required_cols = ["strategy", "signal_id", "pnl_sol", "max_xn", "hit_x2", "hit_x5"]
+        required_cols = ["strategy", "signal_id", "pnl_sol", "max_xn_reached", "hit_x2", "hit_x5"]
         missing_cols = [col for col in required_cols if col not in df.columns]
         
         if missing_cols:
@@ -149,13 +149,15 @@ def check_hit_rates(positions_path: Path, selection_path: Path) -> bool:
         # Загружаем portfolio_positions.csv
         positions_df = pd.read_csv(positions_path)
         
-        # Проверяем наличие позиций с max_xn>=2
-        if "max_xn" in positions_df.columns:
-            positions_with_x2 = positions_df[positions_df["max_xn"] >= 2.0]
+        # Проверяем наличие позиций с max_xn_reached>=2
+        if "max_xn_reached" in positions_df.columns:
+            positions_with_x2 = positions_df[positions_df["max_xn_reached"] >= 2.0]
             if len(positions_with_x2) > 0:
-                print(f"ℹ️  INFO: Found {len(positions_with_x2)} positions with max_xn>=2.0")
+                print(f"ℹ️  INFO: Found {len(positions_with_x2)} positions with max_xn_reached>=2.0")
             else:
-                print(f"ℹ️  INFO: No positions with max_xn>=2.0 found (this is OK)")
+                print(f"ℹ️  INFO: No positions with max_xn_reached>=2.0 found (this is OK)")
+        else:
+            positions_with_x2 = pd.DataFrame()  # Пустой DataFrame если колонки нет
         
         # Загружаем strategy_selection.csv
         if not selection_path.exists():
@@ -173,13 +175,13 @@ def check_hit_rates(positions_path: Path, selection_path: Path) -> bool:
             print(f"⚠️  WARNING: hit_rate_x2/x5 columns not found in strategy_selection.csv")
             return True
         
-        # Проверяем что hit rates не все нули (если есть позиции с max_xn>=2)
+        # Проверяем что hit rates не все нули (если есть позиции с max_xn_reached>=2)
         if len(positions_with_x2) > 0:
             runner_strategies = selection_df[selection_df["strategy"].str.lower().str.contains("runner", na=False)]
             if len(runner_strategies) > 0:
                 all_zero_x2 = (runner_strategies["hit_rate_x2"] == 0.0).all()
                 if all_zero_x2:
-                    print(f"❌ ERROR: All hit_rate_x2 are 0, but positions with max_xn>=2 exist")
+                    print(f"❌ ERROR: All hit_rate_x2 are 0, but positions with max_xn_reached>=2 exist")
                     return False
                 else:
                     print(f"✅ OK: hit_rate_x2 is not all zeros for Runner strategies")

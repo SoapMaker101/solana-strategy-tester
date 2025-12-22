@@ -23,8 +23,9 @@ from backtester.infrastructure.reporter import Reporter
 
 # Базовая стратегия и конкретные реализации стратегий
 from backtester.domain.strategy_base import StrategyConfig, Strategy
-from backtester.domain.rr_strategy import RRStrategy
-from backtester.domain.rrd_strategy import RRDStrategy
+# LEGACY: RR/RRD признаны неэффективными, исключены из пайплайна с декабря 2025
+from backtester.domain.rr_strategy import RRStrategy  # LEGACY
+from backtester.domain.rrd_strategy import RRDStrategy  # LEGACY
 from backtester.domain.runner_strategy import RunnerStrategy
 from backtester.domain.runner_config import RunnerConfig, create_runner_config_from_dict
 
@@ -33,7 +34,9 @@ def parse_args():
     """
     Разбирает аргументы, переданные при запуске скрипта из командной строки.
     """
-    parser = argparse.ArgumentParser(description="Solana strategy backtester")
+    parser = argparse.ArgumentParser(
+        description="Solana strategy backtester (Runner-only since Dec 2025). RR/RRD are legacy and excluded from pipeline."
+    )
 
     parser.add_argument(
         "--signals",
@@ -109,6 +112,12 @@ def parse_args():
         default=None,
         help="Execution profile для применения slippage (realistic/stress/custom). Переопределяет YAML конфиг."
     )
+    parser.add_argument(
+        "--reports-dir",
+        type=str,
+        default="output/reports",
+        help="Directory for research artifacts (portfolio_positions.csv, strategy_summary.csv, etc.). Default: output/reports"
+    )
     return parser.parse_args()
 
 
@@ -127,11 +136,17 @@ def load_yaml(path: str):
 def build_strategy(cfg: StrategyConfig) -> Strategy:
     """
     По типу стратегии создает и возвращает соответствующий объект стратегии.
+    
+    ⚠️ ВАЖНО: С декабря 2025 проект работает только с RUNNER.
+    RR/RRD признаны неэффективными и исключены из пайплайна.
+    Они остаются только как legacy-код для обратной совместимости.
     """
     t = cfg.type.upper()
     if t == "RR":
+        # LEGACY: RR признана неэффективной, исключена из пайплайна
         return RRStrategy(cfg)
     if t == "RRD":
+        # LEGACY: RRD признана неэффективной, исключена из пайплайна
         return RRDStrategy(cfg)
     if t == "RUNNER":
         return RunnerStrategy(cfg)
@@ -286,28 +301,32 @@ def generate_strategy_summary(
         # Создаем пустой summary
         empty_data = {
             "strategy": [],
+            "total_trades": [],
+            "winning_trades": [],
+            "losing_trades": [],
+            "winrate": [],
             "positions_total": [],
             "positions_closed": [],
             "positions_open": [],
-            "trades_executed": [],
-            "reset_closed_count": [],
-            "reset_trigger_count": [],
-            "profit_reset_count": [],
-            "capacity_reset_count": [],
-            "pnl_total_sol": [],
+            "strategy_total_pnl_sol": [],
             "fees_total_sol": [],
             "pnl_net_sol": [],
             "avg_pnl_sol": [],
             "median_pnl_sol": [],
-            "best_pnl_sol": [],
-            "worst_pnl_sol": [],
+            "best_trade_pnl_sol": [],
+            "worst_trade_pnl_sol": [],
             "initial_balance_sol": [],
             "final_balance_sol": [],
             "portfolio_return_pct": [],
-            "p90_hold_minutes": [],
             "avg_hold_minutes": [],
+            "p50_hold_minutes": [],
+            "p90_hold_minutes": [],
             "hit_rate_x2": [],
-            "hit_rate_x5": []
+            "hit_rate_x5": [],
+            "profit_reset_closed_count": [],
+            "capacity_reset_closed_count": [],
+            "closed_by_reset_count": [],
+            "triggered_portfolio_reset_count": [],
         }
         df = pd.DataFrame(empty_data)
         summary_path = output_dir / "strategy_summary.csv"
@@ -322,28 +341,32 @@ def generate_strategy_summary(
         print(f"⚠️  WARNING: portfolio_positions.csv is empty")
         empty_data = {
             "strategy": [],
+            "total_trades": [],
+            "winning_trades": [],
+            "losing_trades": [],
+            "winrate": [],
             "positions_total": [],
             "positions_closed": [],
             "positions_open": [],
-            "trades_executed": [],
-            "reset_closed_count": [],
-            "reset_trigger_count": [],
-            "profit_reset_count": [],
-            "capacity_reset_count": [],
-            "pnl_total_sol": [],
+            "strategy_total_pnl_sol": [],
             "fees_total_sol": [],
             "pnl_net_sol": [],
             "avg_pnl_sol": [],
             "median_pnl_sol": [],
-            "best_pnl_sol": [],
-            "worst_pnl_sol": [],
+            "best_trade_pnl_sol": [],
+            "worst_trade_pnl_sol": [],
             "initial_balance_sol": [],
             "final_balance_sol": [],
             "portfolio_return_pct": [],
-            "p90_hold_minutes": [],
             "avg_hold_minutes": [],
+            "p50_hold_minutes": [],
+            "p90_hold_minutes": [],
             "hit_rate_x2": [],
-            "hit_rate_x5": []
+            "hit_rate_x5": [],
+            "profit_reset_closed_count": [],
+            "capacity_reset_closed_count": [],
+            "closed_by_reset_count": [],
+            "triggered_portfolio_reset_count": [],
         }
         df = pd.DataFrame(empty_data)
         summary_path = output_dir / "strategy_summary.csv"
@@ -361,7 +384,17 @@ def generate_strategy_summary(
         positions_total = len(strategy_positions)
         positions_closed = len(strategy_positions[strategy_positions["status"] == "closed"])
         positions_open = len(strategy_positions[strategy_positions["status"] == "open"])
-        trades_executed = positions_total  # В контексте portfolio_positions это и есть исполненные позиции
+        total_trades = positions_total  # В контексте portfolio_positions это и есть исполненные позиции
+        
+        # Winning/losing trades
+        if "pnl_sol" in strategy_positions.columns:
+            winning_trades = (strategy_positions["pnl_sol"] > 0).sum()
+            losing_trades = (strategy_positions["pnl_sol"] < 0).sum()
+            winrate = winning_trades / positions_total if positions_total > 0 else 0.0
+        else:
+            winning_trades = 0
+            losing_trades = 0
+            winrate = 0.0
         
         # Reset counts
         reset_closed_count = strategy_positions["closed_by_reset"].sum() if "closed_by_reset" in strategy_positions.columns else 0
@@ -400,6 +433,7 @@ def generate_strategy_summary(
         else:
             hold_minutes_values = pd.Series([], dtype=float)
         p90_hold_minutes = np.percentile(hold_minutes_values, 90) if len(hold_minutes_values) > 0 else None
+        p50_hold_minutes = np.percentile(hold_minutes_values, 50) if len(hold_minutes_values) > 0 else None
         avg_hold_minutes = hold_minutes_values.mean() if len(hold_minutes_values) > 0 else None
         
         # Hit rates (Runner)
@@ -410,28 +444,32 @@ def generate_strategy_summary(
         
         row = {
             "strategy": strategy_name,
+            "total_trades": total_trades,
+            "winning_trades": winning_trades,
+            "losing_trades": losing_trades,
+            "winrate": winrate,
             "positions_total": positions_total,
             "positions_closed": positions_closed,
             "positions_open": positions_open,
-            "trades_executed": trades_executed,
-            "reset_closed_count": reset_closed_count,
-            "reset_trigger_count": reset_trigger_count,
-            "profit_reset_count": profit_reset_count,
-            "capacity_reset_count": capacity_reset_count,
-            "pnl_total_sol": pnl_total_sol,
+            "strategy_total_pnl_sol": pnl_total_sol,
             "fees_total_sol": fees_total_sol,
             "pnl_net_sol": pnl_net_sol,
             "avg_pnl_sol": avg_pnl_sol,
             "median_pnl_sol": median_pnl_sol,
-            "best_pnl_sol": best_pnl_sol,
-            "worst_pnl_sol": worst_pnl_sol,
+            "best_trade_pnl_sol": best_pnl_sol,
+            "worst_trade_pnl_sol": worst_pnl_sol,
             "initial_balance_sol": initial_balance_sol,
             "final_balance_sol": final_balance_sol,
             "portfolio_return_pct": portfolio_return_pct,
-            "p90_hold_minutes": p90_hold_minutes,
             "avg_hold_minutes": avg_hold_minutes,
+            "p50_hold_minutes": p50_hold_minutes,
+            "p90_hold_minutes": p90_hold_minutes,
             "hit_rate_x2": hit_rate_x2,
             "hit_rate_x5": hit_rate_x5,
+            "profit_reset_closed_count": profit_reset_count,
+            "capacity_reset_closed_count": capacity_reset_count,
+            "closed_by_reset_count": reset_closed_count,
+            "triggered_portfolio_reset_count": reset_trigger_count,
         }
         
         summary_rows.append(row)
@@ -561,9 +599,12 @@ def main():
     strategies = load_strategies(args.strategies_config)
 
     # Создаем Reporter для генерации отчетов
-    report_cfg = backtest_cfg.get("report", {})
-    output_dir = report_cfg.get("output_dir", "output/reports")
-    base_reporter = Reporter(output_dir=output_dir)
+    # Жестко фиксируем reports_dir: CLI аргумент имеет приоритет, затем YAML, затем дефолт
+    reports_dir = args.reports_dir
+    if reports_dir is None:
+        report_cfg = backtest_cfg.get("report", {})
+        reports_dir = report_cfg.get("output_dir", "output/reports")
+    base_reporter = Reporter(output_dir=reports_dir)
     
     # Определяем дефолты для no_charts и no_html в зависимости от режима
     # Если флаг явно не указан (None), используем дефолт на основе режима:
@@ -706,7 +747,7 @@ def main():
     
     # Генерируем summary отчеты
     if args.report_mode in ["summary", "top"]:
-        output_path_obj = Path(output_dir)
+        output_path_obj = Path(reports_dir)
         output_path_obj.mkdir(parents=True, exist_ok=True)
         generate_strategy_summary(results_by_strategy, portfolio_results, output_path_obj, base_reporter)
         if portfolio_results:

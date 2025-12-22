@@ -2,7 +2,9 @@
 
 ## Обзор
 
-Портфельный слой реализован поверх существующих стратегий (RR, RRD, Runner) и обеспечивает:
+> **⚠️ ВАЖНО:** С декабря 2025 проект работает только с RUNNER. RR/RRD признаны неэффективными и исключены из пайплайна. Они остаются только как legacy-код для обратной совместимости, но не используются в примерах, документации и research pipeline.
+
+Портфельный слой реализован поверх стратегий Runner и обеспечивает:
 
 > **Дата реализации:** Phase 4 (2025-01-XX)  
 > **Цель:** Реалистичная симуляция торговли с учетом комиссий, проскальзывания и портфельных ограничений
@@ -245,7 +247,9 @@ portfolio:
 
 ## Обзор
 
-Портфельный слой реализован поверх существующих стратегий (RR, RRD, Runner) и обеспечивает:
+> **⚠️ ВАЖНО:** С декабря 2025 проект работает только с RUNNER. RR/RRD признаны неэффективными и исключены из пайплайна.
+
+Портфельный слой реализован поверх стратегий Runner и обеспечивает:
 
 - Единый баланс в SOL
 - Динамическое/фиксированное управление размером позиций
@@ -470,18 +474,23 @@ portfolio_result = engine.simulate(all_results, strategy_name="RR_10_20")
 - `triggered_portfolio_reset` - триггернула ли portfolio-level reset (bool)
 - `reset_reason` - причина reset ("profit"/"capacity"/"runner"/"manual"/"none")
 - `hold_minutes` - длительность удержания позиции в минутах
-- `max_xn` - максимальный XN достигнутый по exit цене (exec_exit/exec_entry или raw_exit/raw_entry)
+- `max_xn_reached` - максимальный XN достигнутый (из levels_hit или fallback на цены)
 - `hit_x2` - достигнут ли XN >= 2.0 (bool)
 - `hit_x5` - достигнут ли XN >= 5.0 (bool)
 
-**Расчет max_xn:**
-1. Используем `exec_exit_price / exec_entry_price` если оба доступны
-2. Иначе используем `raw_exit_price / raw_entry_price`
-3. Иначе `max_xn = None/NaN`
+**Расчет max_xn_reached (приоритет источников):**
+1. **Runner truth:** `Position.meta["levels_hit"]` - dict вида {"2.0": "...", "7.0": "..."}
+   - `max_xn_reached = max(float(k) for k in levels_hit.keys())`
+   - Если ключи не парсятся → warning в логах и fallback
+2. **Fallback:** ratio цен
+   - Сначала пробуем `raw_exit_price / raw_entry_price`
+   - Если raw цены недоступны, пробуем `exec_exit_price / exec_entry_price`
+   - Иначе `max_xn_reached = None/NaN`
 
 **Расчет hit flags:**
-- `hit_x2 = max_xn >= 2.0` (если max_xn не None)
-- `hit_x5 = max_xn >= 5.0` (если max_xn не None)
+- `hit_x2 = (max_xn_reached is not None and max_xn_reached >= 2.0)`
+- `hit_x5 = (max_xn_reached is not None and max_xn_reached >= 5.0)`
+- Если `max_xn_reached is None` → оба `False`
 
 **Reset flags contract:**
 - Reset flags (`closed_by_reset`, `triggered_portfolio_reset`, `reset_reason`) появляются **только** в `Position.meta` и только на portfolio уровне
@@ -493,20 +502,39 @@ portfolio_result = engine.simulate(all_results, strategy_name="RR_10_20")
 - Дублировать строки одной позиции из-за partial close (positions-level = агрегат)
 - Использовать `StrategyOutput.pnl` для расчета метрик (используется только `pnl_sol` из portfolio_positions)
 
-### strategy_summary.csv - portfolio-derived summary
+### strategy_summary.csv - portfolio-derived summary (Runner-only)
 
 **ВАЖНО:** `strategy_summary.csv` считается **ТОЛЬКО** из `portfolio_positions.csv`, а не из StrategyOutput.
 
-**Обязательные поля:**
+**Обязательные поля (Runner-only):**
+
+**Базовые счетчики:**
 - `strategy` - название стратегии
+- `total_trades` - количество исполненных позиций (= count rows в portfolio_positions)
+- `winning_trades`, `losing_trades`, `winrate` - статистика выигрышных/проигрышных сделок
 - `positions_total`, `positions_closed`, `positions_open` - счетчики позиций
-- `trades_executed` - количество исполненных позиций (= positions_total)
-- `reset_closed_count`, `reset_trigger_count`, `profit_reset_count`, `capacity_reset_count` - счетчики reset
-- `pnl_total_sol`, `fees_total_sol`, `pnl_net_sol` - PnL в SOL
-- `avg_pnl_sol`, `median_pnl_sol`, `best_pnl_sol`, `worst_pnl_sol` - статистика PnL в SOL
-- `initial_balance_sol`, `final_balance_sol`, `portfolio_return_pct` - return метрики
-- `p90_hold_minutes`, `avg_hold_minutes` - метрики удержания
-- `hit_rate_x2`, `hit_rate_x5` - hit rates для Runner стратегий (из max_xn)
+
+**PnL и комиссии:**
+- `strategy_total_pnl_sol` - суммарный PnL в SOL
+- `fees_total_sol` - суммарные комиссии в SOL
+- `pnl_net_sol` - чистый PnL (total - fees)
+- `avg_pnl_sol`, `median_pnl_sol` - средний и медианный PnL в SOL
+- `best_trade_pnl_sol`, `worst_trade_pnl_sol` - лучшая и худшая сделка в SOL
+
+**Return метрики:**
+- `initial_balance_sol`, `final_balance_sol`, `portfolio_return_pct` - return метрики (из portfolio_results)
+
+**Hold метрики:**
+- `avg_hold_minutes`, `p50_hold_minutes`, `p90_hold_minutes` - метрики удержания
+
+**Runner hits:**
+- `hit_rate_x2`, `hit_rate_x5` - hit rates для Runner стратегий (mean hit_x2/hit_x5)
+
+**Reset counts:**
+- `profit_reset_closed_count` - количество позиций закрытых по profit reset (reset_reason == "profit")
+- `capacity_reset_closed_count` - количество позиций закрытых по capacity reset (reset_reason == "capacity")
+- `closed_by_reset_count` - количество позиций закрытых по reset (closed_by_reset == True)
+- `triggered_portfolio_reset_count` - количество позиций триггернувших reset (triggered_portfolio_reset == True)
 
 **Единицы измерения:**
 - Все PnL метрики в **SOL** (не в процентах или units)

@@ -80,6 +80,13 @@ def main():
         help="Path to strategy_stability.csv from Stage A",
     )
     
+    # Deprecated alias for backward compatibility
+    parser.add_argument(
+        "--input",
+        dest="stability_csv",
+        help="(DEPRECATED: use --stability-csv) Path to strategy_stability.csv from Stage A",
+    )
+    
     parser.add_argument(
         "--output-csv",
         type=str,
@@ -88,6 +95,11 @@ def main():
     )
     
     args = parser.parse_args()
+    
+    # Warn if deprecated alias is used
+    import sys
+    if '--input' in sys.argv:
+        print("⚠️  WARNING: --input is deprecated. Use --stability-csv instead.")
     
     stability_csv_path = Path(args.stability_csv)
     

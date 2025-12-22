@@ -2,6 +2,8 @@
 
 ## Обзор
 
+> **⚠️ ВАЖНО:** С декабря 2025 проект работает только с RUNNER. RR/RRD признаны неэффективными и исключены из пайплайна. Stage A/B работают только с Runner стратегиями.
+
 Research pipeline состоит из двух этапов:
 
 1. **Stage A** - анализ устойчивости стратегий (window-based analysis)
@@ -11,22 +13,30 @@ Research pipeline состоит из двух этапов:
 
 ## Структура output папки
 
+**ВАЖНО:** Все research артефакты сохраняются в единую папку `output/reports/`.
+
 После запуска `main.py` создается следующая структура:
 
 ```
 output/
-├── reports/
+├── reports/                          # ⭐ Единая папка для всех research артефактов
 │   ├── portfolio_positions.csv      # ⭐ Источник правды для Stage A/B
-│   ├── strategy_summary.csv         # Portfolio-derived summary
-│   ├── portfolio_summary.csv        # Агрегированный портфельный summary
+│   ├── strategy_summary.csv          # Portfolio-derived summary (только из positions)
+│   ├── portfolio_summary.csv         # Агрегированный портфельный summary
+│   ├── portfolio_executions.csv     # Executions-level (для дебага, Stage A/B не используют)
+│   ├── strategy_stability.csv       # Результат Stage A
+│   ├── strategy_selection.csv        # Результат Stage B
 │   ├── {strategy}_equity_curve.csv  # Equity curve для каждой стратегии
-│   ├── {strategy}_portfolio_stats.json  # Статистика для каждой стратегии
-│   └── ...
+│   └── {strategy}_portfolio_stats.json  # Статистика для каждой стратегии
 └── charts/
     └── ...
 ```
 
+**Запрещено:** Сохранять research-артефакты в run-specific dirs типа `output/run_.../research`.
+
 ## Запуск pipeline
+
+**ВАЖНО:** Все outputs сохраняются в `output/reports/` (единая папка для research артефактов).
 
 ### Шаг 1: Запуск бэктеста (main.py)
 
@@ -36,17 +46,17 @@ python main.py `
   --signals signals/example_signals.csv `
   --strategies-config config/strategies_example.yaml `
   --backtest-config config/backtest_example.yaml `
-  --json-output output/results.json
+  --reports-dir output/reports
 
 # Linux/macOS
 python main.py \
   --signals signals/example_signals.csv \
   --strategies-config config/strategies_example.yaml \
   --backtest-config config/backtest_example.yaml \
-  --json-output output/results.json
+  --reports-dir output/reports
 ```
 
-**Результат:** Создается `output/reports/portfolio_positions.csv` и другие файлы.
+**Результат:** Создается `output/reports/portfolio_positions.csv` и `output/reports/strategy_summary.csv`.
 
 ### Шаг 2: Stage A - Анализ устойчивости
 
@@ -54,13 +64,15 @@ python main.py \
 # Windows PowerShell
 python -m backtester.research.run_stage_a `
   --reports-dir output/reports `
-  --output-csv output/reports/strategy_stability.csv
+  --splits 2 3 4 5
 
 # Linux/macOS
 python -m backtester.research.run_stage_a \
   --reports-dir output/reports \
-  --output-csv output/reports/strategy_stability.csv
+  --splits 2 3 4 5
 ```
+
+**Примечание:** `--splits` опционально. Если не указано, используются дефолтные splits.
 
 **Что делает Stage A:**
 - Читает `portfolio_positions.csv` (источник правды)
@@ -86,10 +98,12 @@ python -m backtester.decision.run_stage_b \
 ```
 
 **Что делает Stage B:**
-- Читает `strategy_stability.csv` (результат Stage A)
-- Для Runner стратегий: использует hit rates из `strategy_stability.csv` (которые были рассчитаны из `portfolio_positions.csv`)
+- Читает `strategy_stability.csv` (результат Stage A) из `output/reports/`
+- Для Runner стратегий: использует hit rates и tail_contribution из `strategy_stability.csv` (которые были рассчитаны из `portfolio_positions.csv`)
+- Hit rates: `hit_rate_x2 = mean(hit_x2)`, `hit_rate_x5 = mean(hit_x5)` по стратегии
+- Tail contribution: `tail_contribution = pnl_tail / pnl_total` где tail trades: `max_xn_reached >= 5.0`
 - Применяет критерии отбора (v1 или custom)
-- Генерирует `strategy_selection.csv` с колонкой `passed` (bool)
+- Генерирует `strategy_selection.csv` с колонкой `passed` (bool) и `failed_reasons` (List[str])
 
 **Результат:** `output/reports/strategy_selection.csv`
 
@@ -103,23 +117,49 @@ python -m backtester.decision.run_stage_b \
 - ❌ Не используют strategy output напрямую
 - ❌ Не используют `StrategyOutput.pnl` (используется только `pnl_sol` из portfolio_positions)
 
-**Обязательные колонки для Stage A/B:**
-- `strategy`, `signal_id`, `contract_address`
-- `entry_time`, `exit_time`, `status`
-- `pnl_sol`, `fees_total_sol` (в SOL!)
-- `max_xn`, `hit_x2`, `hit_x5` (для Runner hit rates)
-- `closed_by_reset`, `triggered_portfolio_reset`, `reset_reason` (для reset analysis)
+**Обязательные колонки для Stage A/B (Runner-only):**
+
+**ID и времена:**
+- `strategy` - название стратегии
+- `signal_id` - идентификатор сигнала
+- `contract_address` - адрес контракта
+- `entry_time`, `exit_time` - времена входа/выхода (ISO)
+- `status` - статус позиции ("open" или "closed")
+
+**PnL и комиссии:**
+- `pnl_sol` - портфельный PnL в SOL (обязательно!)
+- `fees_total_sol` - суммарные комиссии в SOL
+
+**Цены:**
+- `exec_entry_price`, `exec_exit_price` - исполненные цены (с slippage)
+- `raw_entry_price`, `raw_exit_price` - сырые цены (без slippage)
+
+**Hold:**
+- `hold_minutes` - длительность удержания позиции в минутах
+
+**Reset flags:**
+- `closed_by_reset` - закрыта ли позиция по reset (bool)
+- `triggered_portfolio_reset` - триггернула ли portfolio-level reset (bool)
+- `reset_reason` - причина reset ("profit"/"capacity"/"runner"/"manual"/"none")
+
+**Runner hits:**
+- `max_xn_reached` - максимальный XN достигнутый (из levels_hit или fallback на цены)
+- `hit_x2` - достигнут ли XN >= 2.0 (bool)
+- `hit_x5` - достигнут ли XN >= 5.0 (bool)
 
 ### Hit rates для Runner стратегий
 
 **Расчет hit rates:**
-- Stage A читает `max_xn` из `portfolio_positions.csv`
-- Считает `hit_rate_x2 = count(hit_x2=True) / total_positions`
-- Считает `hit_rate_x5 = count(hit_x5=True) / total_positions`
+- Stage A читает `max_xn_reached` и `hit_x2`/`hit_x5` из `portfolio_positions.csv`
+- `max_xn_reached` рассчитывается по приоритету:
+  1. `Position.meta["levels_hit"]` (Runner truth) - dict вида {"2.0": "...", "7.0": "..."}
+  2. Fallback: `raw_exit_price / raw_entry_price` или `exec_exit_price / exec_entry_price`
+- Считает `hit_rate_x2 = mean(hit_x2)` по стратегии
+- Считает `hit_rate_x5 = mean(hit_x5)` по стратегии
 - Записывает в `strategy_stability.csv`
 - Stage B использует hit rates из `strategy_stability.csv` для критериев отбора
 
-**Важно:** Hit rates считаются из `max_xn` в `portfolio_positions.csv`, а не из `StrategyOutput.meta` или `levels_hit`.
+**Важно:** Hit rates считаются из `max_xn_reached` в `portfolio_positions.csv`, который приоритетно берется из `levels_hit`, а не из цен выхода.
 
 ### Reset flags
 
@@ -159,9 +199,21 @@ python -m backtester.decision.run_stage_b --stability-csv output/reports/strateg
 
 ### Ошибка: "hit_rate_x2/x5 is 0" для Runner стратегий
 
-**Причина:** `portfolio_positions.csv` не содержит `max_xn` или `hit_x2`/`hit_x5` колонок.
+**Причина:** `portfolio_positions.csv` не содержит `max_xn_reached` или `hit_x2`/`hit_x5` колонок, либо `levels_hit` отсутствует в `Position.meta`.
 
-**Решение:** Убедитесь, что используется последняя версия кода, которая добавляет эти колонки.
+**Решение:** 
+1. Убедитесь, что используется последняя версия кода, которая добавляет эти колонки
+2. Проверьте что Runner стратегии сохраняют `levels_hit` в `Position.meta`
+3. Проверьте что `Reporter.save_portfolio_positions_table()` использует `compute_max_xn_reached()`
+
+### Ошибка: "portfolio_positions.csv not found" в Stage A
+
+**Причина:** Stage A требует `portfolio_positions.csv` в `--reports-dir` (по умолчанию `output/reports/`).
+
+**Решение:** 
+1. Запустите `main.py` сначала для генерации `portfolio_positions.csv`
+2. Убедитесь что файл находится в `output/reports/portfolio_positions.csv`
+3. Если используете другой путь, укажите `--reports-dir` в Stage A
 
 ### Ошибка: "strategy_stability.csv not found"
 

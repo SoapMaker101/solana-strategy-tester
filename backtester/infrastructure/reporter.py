@@ -721,6 +721,71 @@ class Reporter:
             print(f"[WARNING] Failed to plot portfolio equity curve: {e}")
             return None
 
+    def compute_max_xn_reached(self, pos) -> Optional[float]:
+        """
+        Вычисляет максимальный достигнутый XN для позиции.
+        
+        Приоритет источников (по убыванию доверия):
+        1. Runner truth: Position.meta["levels_hit"] - dict вида {"2.0": "...", "7.0": "...", ...}
+        2. Fallback: ratio цен (raw_entry_price/raw_exit_price или exec_entry_price/exec_exit_price)
+        
+        Args:
+            pos: Position объект
+            
+        Returns:
+            Optional[float]: максимальный XN или None если данных нет
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Приоритет 1: levels_hit из meta (Runner truth)
+        if pos.meta and "levels_hit" in pos.meta:
+            levels_hit_raw = pos.meta["levels_hit"]
+            if levels_hit_raw and isinstance(levels_hit_raw, dict):
+                try:
+                    # Парсим ключи как float
+                    levels = []
+                    for k_str in levels_hit_raw.keys():
+                        try:
+                            levels.append(float(k_str))
+                        except (ValueError, TypeError):
+                            # Пропускаем невалидные ключи
+                            continue
+                    
+                    if levels:
+                        max_xn = max(levels)
+                        return max_xn
+                    else:
+                        logger.warning(
+                            "[report] Invalid levels_hit keys for %s: %s (no valid float keys)",
+                            pos.signal_id,
+                            list(levels_hit_raw.keys())
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "[report] Error parsing levels_hit for %s: %s",
+                        pos.signal_id,
+                        str(e)
+                    )
+        
+        # Fallback: ratio цен
+        # Сначала пробуем raw цены
+        raw_entry_price = pos.meta.get("raw_entry_price", pos.entry_price) if pos.meta else pos.entry_price
+        raw_exit_price = pos.meta.get("raw_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+        
+        if raw_entry_price and raw_exit_price and raw_entry_price > 0:
+            return raw_exit_price / raw_entry_price
+        
+        # Если raw цены недоступны, пробуем exec цены
+        exec_entry_price = pos.meta.get("exec_entry_price", pos.entry_price) if pos.meta else pos.entry_price
+        exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+        
+        if exec_entry_price and exec_exit_price and exec_entry_price > 0:
+            return exec_exit_price / exec_entry_price
+        
+        # Нет данных
+        return None
+
     def save_portfolio_positions_table(self, portfolio_results: Dict[str, Any]) -> None:
         """
         Сохраняет positions-level таблицу для всех стратегий в CSV.
@@ -746,7 +811,7 @@ class Reporter:
         - triggered_portfolio_reset: триггернула ли portfolio-level reset (bool)
         - reset_reason: причина reset (profit/capacity/runner/manual/none)
         - hold_minutes: длительность удержания позиции в минутах
-        - max_xn: максимальный XN достигнутый по exit цене (exec_exit/exec_entry или raw_exit/raw_entry)
+        - max_xn_reached: максимальный XN достигнутый (из levels_hit или fallback на цены)
         - hit_x2: достигнут ли XN >= 2.0 (bool)
         - hit_x5: достигнут ли XN >= 5.0 (bool)
         
@@ -808,17 +873,13 @@ class Reporter:
                     hold_delta = pos.exit_time - pos.entry_time
                     hold_minutes = int(hold_delta.total_seconds() / 60)
                 
-                # Вычисляем max_xn (максимальный XN достигнутый по exit цене)
-                # Используем exec цены если есть оба, иначе raw цены
-                max_xn = None
-                if exec_entry_price and exec_exit_price and exec_entry_price > 0:
-                    max_xn = exec_exit_price / exec_entry_price
-                elif raw_entry_price and raw_exit_price and raw_entry_price > 0:
-                    max_xn = raw_exit_price / raw_entry_price
+                # Вычисляем max_xn_reached (максимальный XN достигнутый)
+                # Приоритет: levels_hit из meta (Runner truth), fallback на цены
+                max_xn_reached = self.compute_max_xn_reached(pos)
                 
                 # Вычисляем hit flags
-                hit_x2 = max_xn is not None and max_xn >= 2.0
-                hit_x5 = max_xn is not None and max_xn >= 5.0
+                hit_x2 = max_xn_reached is not None and max_xn_reached >= 2.0
+                hit_x5 = max_xn_reached is not None and max_xn_reached >= 5.0
                 
                 trade_row = {
                     "strategy": strategy_name,
@@ -838,7 +899,7 @@ class Reporter:
                     "triggered_portfolio_reset": triggered_portfolio_reset,
                     "reset_reason": reset_reason,
                     "hold_minutes": hold_minutes,
-                    "max_xn": max_xn,
+                    "max_xn_reached": max_xn_reached,
                     "hit_x2": hit_x2,
                     "hit_x5": hit_x5,
                 }
@@ -861,7 +922,7 @@ class Reporter:
                 "exec_entry_price", "exec_exit_price",
                 "raw_entry_price", "raw_exit_price",
                 "closed_by_reset", "triggered_portfolio_reset", "reset_reason", "hold_minutes",
-                "max_xn", "hit_x2", "hit_x5",
+                "max_xn_reached", "hit_x2", "hit_x5",
             ])
         
         # Удаляем дубликаты по (strategy, signal_id, contract_address) - positions-level агрегат

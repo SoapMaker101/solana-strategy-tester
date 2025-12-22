@@ -139,11 +139,15 @@ def calculate_runner_metrics(
     if len(strategy_positions) == 0:
         return default_metrics
     
-    # Hit rates из max_xn или hit_x2/hit_x5 колонок
+    # Hit rates из max_xn_reached или hit_x2/hit_x5 колонок
     if "hit_x2" in strategy_positions.columns:
         hit_x2_count = strategy_positions["hit_x2"].sum()
         hit_x5_count = strategy_positions["hit_x5"].sum()
+    elif "max_xn_reached" in strategy_positions.columns:
+        hit_x2_count = (strategy_positions["max_xn_reached"] >= 2.0).sum()
+        hit_x5_count = (strategy_positions["max_xn_reached"] >= 5.0).sum()
     elif "max_xn" in strategy_positions.columns:
+        # Backward compatibility: старая колонка max_xn
         hit_x2_count = (strategy_positions["max_xn"] >= 2.0).sum()
         hit_x5_count = (strategy_positions["max_xn"] >= 5.0).sum()
     else:
@@ -178,17 +182,36 @@ def calculate_runner_metrics(
     else:
         p90_hold_days = 0.0
     
-    # tail_contribution: доля PnL от позиций с max_xn >= 5.0
+    # tail_contribution: доля PnL от позиций с max_xn_reached >= 5.0
+    # Определение tail: max_xn_reached >= tail_threshold (по умолчанию 5.0)
+    tail_threshold = 5.0  # Порог для tail trades (можно вынести в конфиг Stage B)
     tail_contribution = 0.0
-    if "pnl_sol" in strategy_positions.columns and "max_xn" in strategy_positions.columns:
+    
+    if "pnl_sol" in strategy_positions.columns and "max_xn_reached" in strategy_positions.columns:
         total_pnl_sol = strategy_positions["pnl_sol"].sum()
-        if total_pnl_sol > 0:
-            tail_pnl_sol = strategy_positions[strategy_positions["max_xn"] >= 5.0]["pnl_sol"].sum()
+        # Исправление: проверяем abs(pnl_total) < eps
+        eps = 1e-6
+        if abs(total_pnl_sol) < eps:
+            tail_contribution = 0.0
+        else:
+            tail_pnl_sol = strategy_positions[strategy_positions["max_xn_reached"] >= tail_threshold]["pnl_sol"].sum()
+            tail_contribution = tail_pnl_sol / total_pnl_sol
+    elif "pnl_sol" in strategy_positions.columns and "max_xn" in strategy_positions.columns:
+        # Backward compatibility: старая колонка max_xn
+        total_pnl_sol = strategy_positions["pnl_sol"].sum()
+        eps = 1e-6
+        if abs(total_pnl_sol) < eps:
+            tail_contribution = 0.0
+        else:
+            tail_pnl_sol = strategy_positions[strategy_positions["max_xn"] >= tail_threshold]["pnl_sol"].sum()
             tail_contribution = tail_pnl_sol / total_pnl_sol
     elif "pnl_sol" in strategy_positions.columns:
         # Fallback: вычисляем max_xn на лету
         total_pnl_sol = strategy_positions["pnl_sol"].sum()
-        if total_pnl_sol > 0:
+        eps = 1e-6
+        if abs(total_pnl_sol) < eps:
+            tail_contribution = 0.0
+        else:
             tail_pnl_sol = 0.0
             for _, row in strategy_positions.iterrows():
                 max_xn = None
@@ -197,9 +220,9 @@ def calculate_runner_metrics(
                 elif pd.notna(row.get("raw_entry_price")) and pd.notna(row.get("raw_exit_price")) and row.get("raw_entry_price", 0) > 0:
                     max_xn = row["raw_exit_price"] / row["raw_entry_price"]
                 
-                if max_xn is not None and max_xn >= 5.0:
+                if max_xn is not None and max_xn >= tail_threshold:
                     tail_pnl_sol += row.get("pnl_sol", 0.0)
-            tail_contribution = tail_pnl_sol / total_pnl_sol if total_pnl_sol > 0 else 0.0
+            tail_contribution = tail_pnl_sol / total_pnl_sol
     
     # Загружаем max_drawdown_pct из portfolio_summary (если доступен)
     max_drawdown_pct = 0.0
