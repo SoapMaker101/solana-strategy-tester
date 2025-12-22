@@ -256,12 +256,15 @@ portfolio:
 - Backtest window (ограничение по датам)
 - Equity curve (кривая баланса)
 - **Portfolio-level reset (profit):** Закрытие всех позиций при достижении порога equity (market close)
+  - Управляется параметрами `profit_reset_enabled` и `profit_reset_multiple`
+  - **DEPRECATED:** Старые параметры `runner_reset_enabled` и `runner_reset_multiple` поддерживаются для обратной совместимости, но помечены как deprecated
 - **Capacity reset (v1.6):** Закрытие всех позиций при capacity pressure (портфель заполнен, мало закрытий, много отклонений)
   - Все позиции закрываются через market close (ExecutionModel)
   - Marker позиция исключается из `positions_to_force_close` (архитектурный инвариант) и закрывается отдельно
   - Все закрытые позиции получают `closed_by_reset=True`, `reset_reason="capacity"`
   - Marker дополнительно получает `triggered_portfolio_reset=True`
 - **Runner-XN reset:** Закрытие всех позиций при достижении позицией XN уровня
+  - Управляется параметрами `runner_reset_enabled` и `runner_reset_multiple` (это отдельный функционал, не связанный с profit reset)
 - **Runner частичные выходы:** Обработка частичного закрытия позиций на разных уровнях TP
 - **Dual reporting (v1.6):** Positions-level и executions-level таблицы для разных целей анализа
 
@@ -432,7 +435,7 @@ portfolio_result = engine.simulate(all_results, strategy_name="RR_10_20")
 - **final_balance_sol**: Финальный баланс в SOL
 - **total_return_pct**: Общая доходность в долях
 - **max_drawdown_pct**: Максимальная просадка в долях
-- **trades_executed**: Количество исполненных сделок
+- **trades_executed**: Количество открытых позиций (инкрементируется только при ENTRY, не при partial exits)
 - **trades_skipped_by_risk**: Количество пропущенных сделок из-за лимитов
 
 ### Сохраненные файлы
@@ -463,21 +466,59 @@ logging.basicConfig(level=logging.DEBUG)
 
 ## Логика работы
 
+### Event-driven симуляция (Time-aware)
+
+Портфельная симуляция использует **event-driven подход** для корректного моделирования одновременного удержания позиций:
+
+1. **Построение событий**: Для каждой сделки создаются два события:
+   - **ENTRY событие** в `entry_time` (открытие позиции)
+   - **EXIT событие** в `exit_time` (закрытие позиции)
+2. **Сортировка событий**: События сортируются по времени (EXIT перед ENTRY на одном timestamp)
+3. **Обработка событий по времени**:
+   - На каждом timestamp сначала обрабатываются все **EXIT события** (закрытие позиций)
+   - Затем обрабатываются все **ENTRY события** (открытие позиций)
+   - После обработки всех событий на timestamp проверяется profit reset
+4. **Результат**: Позиции реально держатся открытыми между `entry_time` и `exit_time`, что позволяет:
+   - Profit reset корректно закрывать все открытые позиции в момент срабатывания
+   - Честно моделировать одновременное удержание позиций
+   - Корректно учитывать `max_open_positions` и `max_exposure`
+
+### Детальная логика обработки
+
 1. **Фильтрация сделок**: Отбираются только сделки с валидными entry_time и exit_time в пределах backtest window
-2. **Сортировка**: Сделки сортируются по entry_time
-3. **Закрытие позиций**: Перед открытием новой позиции закрываются все позиции, у которых exit_time <= entry_time новой
-4. **Проверка лимитов**: 
+2. **Построение событий**: Для каждой сделки создаются ENTRY и EXIT события
+3. **Сортировка событий**: События сортируются по времени (EXIT перед ENTRY на одном timestamp)
+4. **Обработка EXIT событий**: Закрываются позиции, у которых `exit_time <= current_time`
+   - Для Runner стратегий обрабатываются partial exits
+   - Позиция остается в `open_positions` до полного закрытия
+5. **Обработка ENTRY событий**: Открываются новые позиции
    - Проверяется количество открытых позиций (`max_open_positions`)
    - Проверяется текущая экспозиция (`max_exposure`)
    - **Важно:** В fixed mode `total_capital` = `initial_balance_sol` (размер позиции рассчитывается от начального баланса)
    - В dynamic mode `total_capital` = `available_balance + total_open_notional` (размер позиции рассчитывается от текущего баланса)
-5. **Расчет размера позиции**: На основе allocation_mode и percent_per_trade
-   - `percent_per_trade` используется как доля (0.002 = 0.2%), не делится на 100
-   - Fixed mode: `position_size = initial_balance_sol * percent_per_trade`
-   - Dynamic mode: `position_size = current_balance * percent_per_trade`
-6. **Применение комиссий**: Из PnL вычитаются комиссии и проскальзывание
-7. **Обновление баланса**: Баланс обновляется при закрытии позиций
-8. **DEBUG-логирование**: Перед risk-check выводится DEBUG-лог с балансом, размером позиции, открытым нотионалом и максимально допустимой экспозицией
+   - **Расчет размера позиции**: На основе allocation_mode и percent_per_trade
+     - `percent_per_trade` используется как доля (0.002 = 0.2%), не делится на 100
+     - Fixed mode: `position_size = initial_balance_sol * percent_per_trade`
+     - Dynamic mode: `position_size = current_balance * percent_per_trade`
+   - **Инкремент trades_executed**: Счетчик увеличивается только при успешном открытии позиции (ENTRY событие)
+6. **Проверка profit reset**: После обработки всех событий на timestamp проверяется profit reset
+   - Если `equity_peak_in_cycle >= cycle_start_equity * profit_reset_multiple`, закрываются все открытые позиции
+7. **Применение комиссий**: Из PnL вычитаются комиссии и проскальзывание
+8. **Обновление баланса**: Баланс обновляется при закрытии позиций и partial exits
+9. **DEBUG-логирование**: Перед risk-check выводится DEBUG-лог с балансом, размером позиции, открытым нотионалом и максимально допустимой экспозицией
+
+### Подсчет trades_executed
+
+**Важно:** `trades_executed` инкрементируется только при открытии позиции (ENTRY событие), а не при:
+- Partial exits (Runner стратегия)
+- Финальном закрытии позиции
+- Execution events
+- Reset close
+
+**Контракт:**
+- Один входной трейд → `trades_executed == 1`
+- Partial exits не увеличивают `trades_executed`
+- Счетчик увеличивается только при реальном открытии позиции (entry исполнен)
 
 ## Комиссии и Execution Profiles
 

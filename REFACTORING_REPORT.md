@@ -92,8 +92,16 @@
    - Используется `load_stability_csv()` для загрузки `strategy_stability.csv`
 
 8. ✅ **reset не влияет на Stage A / Stage B (если выключен)**
-   - `runner_reset_enabled` контролируется через конфиг
+   - `profit_reset_enabled` (или `runner_reset_enabled` для backward compatibility) контролируется через конфиг
    - Если `False`, reset-логика не выполняется
+   
+9. ✅ **Рефакторинг терминов runner_reset_* → profit_reset_* (BC-safe)**
+   - Новые поля: `profit_reset_enabled`, `profit_reset_multiple`
+   - Старые поля: `runner_reset_enabled`, `runner_reset_multiple` (deprecated, но поддерживаются)
+   - Resolved методы: `resolved_profit_reset_enabled()`, `resolved_profit_reset_multiple()`
+   - Приоритет: `profit_reset_*` > `runner_reset_*` (deprecated alias)
+   - Warning выводится только один раз за прогон при использовании deprecated ключей
+   - **Важно:** `runner_reset_*` также используются для Runner XN reset (отдельный функционал)
 
 ---
 
@@ -185,9 +193,56 @@ python -m pytest tests/ -v
 
 ---
 
+## ✅ Этап 7: Рефакторинг терминов runner_reset_* → profit_reset_*
+
+### Выполненные изменения:
+
+1. **Добавлены новые поля в PortfolioConfig:**
+   - `profit_reset_enabled: Optional[bool] = None`
+   - `profit_reset_multiple: Optional[float] = None`
+   - Старые поля `runner_reset_enabled` и `runner_reset_multiple` оставлены как deprecated для обратной совместимости
+
+2. **Добавлены resolved методы:**
+   - `resolved_profit_reset_enabled()` - возвращает `profit_reset_enabled` или fallback на `runner_reset_enabled`
+   - `resolved_profit_reset_multiple()` - возвращает `profit_reset_multiple` или fallback на `runner_reset_multiple`
+   - Приоритет: новые поля > старые поля (deprecated alias)
+
+3. **Обновлен YAML парсинг:**
+   - Поддержка обоих вариантов ключей: `profit_reset_*` и `runner_reset_*`
+   - Если заданы оба - приоритет у `profit_reset_*`
+   - Добавлен механизм warn once для deprecated ключей (warning выводится только один раз за прогон)
+
+4. **Обновлен код PortfolioEngine:**
+   - Profit reset использует `resolved_profit_reset_*` методы
+   - Runner XN reset использует `runner_reset_*` напрямую (это отдельный функционал)
+
+5. **Обновлены примеры YAML:**
+   - Все конфиги используют `profit_reset_*` вместо `runner_reset_*`
+   - Старые ключи не используются в примерах
+
+6. **Добавлены тесты на backward compatibility:**
+   - `test_profit_reset_uses_new_fields` - проверка новых полей
+   - `test_profit_reset_falls_back_to_runner_alias` - проверка fallback на старые поля
+   - `test_profit_reset_new_fields_have_priority` - проверка приоритета новых полей
+
+7. **Обновлена документация:**
+   - CHANGELOG.md - добавлена запись о рефакторинге
+   - PORTFOLIO_LAYER.md - обновлены примеры и описания
+   - VARIABLES_REFERENCE.md - старые поля помечены как deprecated
+
+### Инварианты после рефакторинга:
+
+1. ✅ **Обратная совместимость сохранена:** старые YAML с `runner_reset_*` продолжают работать
+2. ✅ **Новые YAML используют `profit_reset_*`:** семантически правильные названия
+3. ✅ **Логика reset не изменилась:** только переименование параметров для profit reset
+4. ✅ **Runner XN reset остался прежним:** использует `runner_reset_*` напрямую (отдельный функционал)
+5. ✅ **Warning выводится только один раз:** механизм warn once предотвращает спам
+
+---
+
 ## ✅ Заключение
 
-Проект прошёл полный инженерный рефакторинг и аудит. Все критически важные инварианты проверены и подтверждены. Код очищен от лишних пустых строк и избыточных импортов. 
+Проект прошёл полный инженерный рефакторинг и аудит. Все критически важные инварианты проверены и подтверждены. Код очищен от лишних пустых строк и избыточных импортов. Рефакторинг терминов `runner_reset_*` → `profit_reset_*` выполнен с сохранением обратной совместимости.
 
 **Проект готов к финальному массовому прогону Runner-стратегий.**
 

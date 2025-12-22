@@ -17,6 +17,20 @@ from ..utils.warn_dedup import WarnDedup  # Потокобезопасный к�
 
 logger = logging.getLogger(__name__)
 
+# Модульный флаг для warn once о deprecated runner_reset_* ключах
+_warned_runner_reset_deprecated = False
+_warned_runner_reset_both_specified = False
+
+def _warn_runner_reset_deprecated_once(msg: str) -> None:
+    """Выводит предупреждение о deprecated ключах только один раз за прогон."""
+    global _warned_runner_reset_deprecated, _warned_runner_reset_both_specified
+    if "DEPRECATED" in msg and not _warned_runner_reset_deprecated:
+        logger.warning(msg)
+        _warned_runner_reset_deprecated = True
+    elif "Both profit_reset_*" in msg and not _warned_runner_reset_both_specified:
+        logger.warning(msg)
+        _warned_runner_reset_both_specified = True
+
 class BacktestRunner:
     """
     Класс, отвечающий за запуск бэктестов:
@@ -341,18 +355,18 @@ class BacktestRunner:
         final_profit_reset_enabled = profit_reset_enabled if profit_reset_enabled is not None else runner_reset_enabled
         final_profit_reset_multiple = profit_reset_multiple if profit_reset_multiple is not None else runner_reset_multiple
         
-        # Выводим предупреждение, если используются старые поля
+        # Выводим предупреждение, если используются старые поля (только один раз за прогон)
         if runner_reset_enabled is not None or runner_reset_multiple is not None:
             if profit_reset_enabled is None and profit_reset_multiple is None:
                 # Используются только старые поля
-                logger.warning(
+                _warn_runner_reset_deprecated_once(
                     "DEPRECATED: runner_reset_enabled and runner_reset_multiple are renamed to "
                     "profit_reset_enabled and profit_reset_multiple. "
                     "Please update your YAML config. Old keys will be removed in a future version."
                 )
             elif profit_reset_enabled is not None or profit_reset_multiple is not None:
                 # Оба варианта заданы - новые имеют приоритет
-                logger.warning(
+                _warn_runner_reset_deprecated_once(
                     "Both profit_reset_* and runner_reset_* are specified in config. "
                     "Using profit_reset_* values (runner_reset_* ignored)."
                 )
