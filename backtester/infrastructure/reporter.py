@@ -881,6 +881,42 @@ class Reporter:
                 hit_x2 = max_xn_reached is not None and max_xn_reached >= 2.0
                 hit_x5 = max_xn_reached is not None and max_xn_reached >= 5.0
                 
+                # Вычисляем realized PnL метрики для Runner с частичными закрытиями
+                # TAIL_XN_THRESHOLD = 4.0 (tail threshold для Runner)
+                TAIL_XN_THRESHOLD = 4.0
+                
+                # realized_total_pnl_sol: суммарный realized PnL из partial_exits
+                # Если partial_exits есть, суммируем все exit["pnl_sol"]
+                # Иначе используем pnl_sol из meta (fallback)
+                realized_total_pnl_sol = 0.0
+                realized_tail_pnl_sol = 0.0
+                
+                if pos.meta and "partial_exits" in pos.meta:
+                    partial_exits = pos.meta.get("partial_exits", [])
+                    if partial_exits:
+                        # Считаем realized_total_pnl_sol как сумму всех partial_exits
+                        realized_total_pnl_sol = sum(exit.get("pnl_sol", 0.0) for exit in partial_exits)
+                        # Считаем realized_tail_pnl_sol как сумму exit["pnl_sol"] для exit["xn"] >= 4.0
+                        realized_tail_pnl_sol = sum(
+                            exit.get("pnl_sol", 0.0) 
+                            for exit in partial_exits 
+                            if exit.get("xn", 0.0) >= TAIL_XN_THRESHOLD
+                        )
+                    else:
+                        # partial_exits пустой список - используем fallback
+                        realized_total_pnl_sol = pnl_sol
+                        if max_xn_reached is not None and max_xn_reached >= TAIL_XN_THRESHOLD:
+                            realized_tail_pnl_sol = pnl_sol
+                        else:
+                            realized_tail_pnl_sol = 0.0
+                else:
+                    # partial_exits отсутствует - fallback
+                    realized_total_pnl_sol = pnl_sol
+                    if max_xn_reached is not None and max_xn_reached >= TAIL_XN_THRESHOLD:
+                        realized_tail_pnl_sol = pnl_sol
+                    else:
+                        realized_tail_pnl_sol = 0.0
+                
                 trade_row = {
                     "strategy": strategy_name,
                     "signal_id": pos.signal_id,
@@ -902,6 +938,8 @@ class Reporter:
                     "max_xn_reached": max_xn_reached,
                     "hit_x2": hit_x2,
                     "hit_x5": hit_x5,
+                    "realized_total_pnl_sol": realized_total_pnl_sol,
+                    "realized_tail_pnl_sol": realized_tail_pnl_sol,
                 }
                 
                 trades_rows.append(trade_row)
@@ -923,6 +961,7 @@ class Reporter:
                 "raw_entry_price", "raw_exit_price",
                 "closed_by_reset", "triggered_portfolio_reset", "reset_reason", "hold_minutes",
                 "max_xn_reached", "hit_x2", "hit_x5",
+                "realized_total_pnl_sol", "realized_tail_pnl_sol",
             ])
         
         # Удаляем дубликаты по (strategy, signal_id, contract_address) - positions-level агрегат

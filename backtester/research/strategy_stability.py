@@ -116,8 +116,11 @@ def calculate_runner_metrics(
     default_metrics = {
         "hit_rate_x2": 0.0,
         "hit_rate_x5": 0.0,
+        "hit_rate_x4": 0.0,  # Новое поле для tail threshold x4
         "p90_hold_days": 0.0,
         "tail_contribution": 0.0,
+        "tail_pnl_share": 0.0,  # Новое поле: доля прибыли от tail-ног (0..1)
+        "non_tail_pnl_share": 0.0,  # Новое поле: доля прибыли от non-tail (может быть <0)
         "max_drawdown_pct": 0.0,
     }
     
@@ -171,6 +174,30 @@ def calculate_runner_metrics(
     hit_rate_x2 = hit_x2_count / total_positions if total_positions > 0 else 0.0
     hit_rate_x5 = hit_x5_count / total_positions if total_positions > 0 else 0.0
     
+    # hit_rate_x4: доля сделок, где max_xn_reached >= 4.0 (tail threshold)
+    TAIL_XN_THRESHOLD = 4.0
+    if "hit_x4" in strategy_positions.columns:
+        hit_x4_count = strategy_positions["hit_x4"].sum()
+    elif "max_xn_reached" in strategy_positions.columns:
+        hit_x4_count = (strategy_positions["max_xn_reached"] >= TAIL_XN_THRESHOLD).sum()
+    elif "max_xn" in strategy_positions.columns:
+        # Backward compatibility
+        hit_x4_count = (strategy_positions["max_xn"] >= TAIL_XN_THRESHOLD).sum()
+    else:
+        # Fallback: вычисляем из exec или raw цен
+        hit_x4_count = 0
+        for _, row in strategy_positions.iterrows():
+            max_xn = None
+            if pd.notna(row.get("exec_entry_price")) and pd.notna(row.get("exec_exit_price")) and row.get("exec_entry_price", 0) > 0:
+                max_xn = row["exec_exit_price"] / row["exec_entry_price"]
+            elif pd.notna(row.get("raw_entry_price")) and pd.notna(row.get("raw_exit_price")) and row.get("raw_entry_price", 0) > 0:
+                max_xn = row["raw_exit_price"] / row["raw_entry_price"]
+            
+            if max_xn is not None and max_xn >= TAIL_XN_THRESHOLD:
+                hit_x4_count += 1
+    
+    hit_rate_x4 = hit_x4_count / total_positions if total_positions > 0 else 0.0
+    
     # p90_hold_days из hold_minutes
     if "hold_minutes" in strategy_positions.columns:
         hold_minutes_values = strategy_positions["hold_minutes"].dropna()
@@ -182,10 +209,16 @@ def calculate_runner_metrics(
     else:
         p90_hold_days = 0.0
     
-    # tail_contribution: доля PnL от позиций с max_xn_reached >= 5.0
+    # tail_contribution: доля PnL от позиций с max_xn_reached >= 5.0 (legacy, оставляем для совместимости)
     # Определение tail: max_xn_reached >= tail_threshold (по умолчанию 5.0)
     tail_threshold = 5.0  # Порог для tail trades (можно вынести в конфиг Stage B)
     tail_contribution = 0.0
+    
+    # tail_pnl_share и non_tail_pnl_share: новые метрики на основе realized PnL
+    # Используем realized_tail_pnl_sol и realized_total_pnl_sol из portfolio_positions.csv
+    TAIL_XN_THRESHOLD = 4.0  # Tail threshold для Runner (x4)
+    tail_pnl_share = 0.0
+    non_tail_pnl_share = 0.0
     
     if "pnl_sol" in strategy_positions.columns and "max_xn_reached" in strategy_positions.columns:
         total_pnl_sol = strategy_positions["pnl_sol"].sum()
@@ -224,6 +257,78 @@ def calculate_runner_metrics(
                     tail_pnl_sol += row.get("pnl_sol", 0.0)
             tail_contribution = tail_pnl_sol / total_pnl_sol
     
+    # Вычисляем tail_pnl_share и non_tail_pnl_share из realized PnL
+    if "realized_total_pnl_sol" in strategy_positions.columns and "realized_tail_pnl_sol" in strategy_positions.columns:
+        pnl_total_sol_pos = strategy_positions["realized_total_pnl_sol"].sum()
+        pnl_tail_sol = strategy_positions["realized_tail_pnl_sol"].sum()
+        
+        eps = 1e-6
+        if abs(pnl_total_sol_pos) > eps:
+            tail_pnl_share = pnl_tail_sol / pnl_total_sol_pos
+            # Clamp 0..1 для tail_pnl_share
+            tail_pnl_share = max(0.0, min(1.0, tail_pnl_share))
+            # non_tail_pnl_share может быть отрицательным (leak)
+            non_tail_pnl_share = (pnl_total_sol_pos - pnl_tail_sol) / pnl_total_sol_pos
+        else:
+            tail_pnl_share = 0.0
+            non_tail_pnl_share = 0.0
+    else:
+        # Fallback: если колонок нет, создаем их на лету из pnl_sol и max_xn_reached
+        TAIL_XN_THRESHOLD = 4.0
+        if "pnl_sol" in strategy_positions.columns:
+            # Создаем realized колонки на лету
+            strategy_positions = strategy_positions.copy()
+            
+            # Вычисляем realized_total_pnl_sol = pnl_sol
+            strategy_positions["realized_total_pnl_sol"] = strategy_positions["pnl_sol"]
+            
+            # Вычисляем realized_tail_pnl_sol из max_xn_reached
+            if "max_xn_reached" in strategy_positions.columns:
+                # realized_tail_pnl_sol = pnl_sol if max_xn_reached >= 4.0 else 0.0
+                strategy_positions["realized_tail_pnl_sol"] = strategy_positions.apply(
+                    lambda row: row["pnl_sol"] if pd.notna(row.get("max_xn_reached")) and row["max_xn_reached"] >= TAIL_XN_THRESHOLD else 0.0,
+                    axis=1
+                )
+            elif "max_xn" in strategy_positions.columns:
+                # Backward compatibility
+                strategy_positions["realized_tail_pnl_sol"] = strategy_positions.apply(
+                    lambda row: row["pnl_sol"] if pd.notna(row.get("max_xn")) and row["max_xn"] >= TAIL_XN_THRESHOLD else 0.0,
+                    axis=1
+                )
+            else:
+                # Fallback: вычисляем max_xn на лету из цен
+                def calc_tail_pnl(row):
+                    max_xn = None
+                    if pd.notna(row.get("exec_entry_price")) and pd.notna(row.get("exec_exit_price")) and row.get("exec_entry_price", 0) > 0:
+                        max_xn = row["exec_exit_price"] / row["exec_entry_price"]
+                    elif pd.notna(row.get("raw_entry_price")) and pd.notna(row.get("raw_exit_price")) and row.get("raw_entry_price", 0) > 0:
+                        max_xn = row["raw_exit_price"] / row["raw_entry_price"]
+                    
+                    if max_xn is not None and max_xn >= TAIL_XN_THRESHOLD:
+                        return row.get("pnl_sol", 0.0)
+                    return 0.0
+                
+                strategy_positions["realized_tail_pnl_sol"] = strategy_positions.apply(calc_tail_pnl, axis=1)
+            
+            # Теперь используем созданные колонки для расчета метрик
+            pnl_total_sol_pos = strategy_positions["realized_total_pnl_sol"].sum()
+            pnl_tail_sol = strategy_positions["realized_tail_pnl_sol"].sum()
+            
+            eps = 1e-6
+            if abs(pnl_total_sol_pos) > eps:
+                tail_pnl_share = pnl_tail_sol / pnl_total_sol_pos
+                # Clamp 0..1 для tail_pnl_share
+                tail_pnl_share = max(0.0, min(1.0, tail_pnl_share))
+                # non_tail_pnl_share может быть отрицательным (leak)
+                non_tail_pnl_share = (pnl_total_sol_pos - pnl_tail_sol) / pnl_total_sol_pos
+            else:
+                tail_pnl_share = 0.0
+                non_tail_pnl_share = 0.0
+        else:
+            # Если нет даже pnl_sol, оставляем 0.0
+            tail_pnl_share = 0.0
+            non_tail_pnl_share = 0.0
+    
     # Загружаем max_drawdown_pct из portfolio_summary (если доступен)
     max_drawdown_pct = 0.0
     if portfolio_summary_path and portfolio_summary_path.exists():
@@ -243,8 +348,11 @@ def calculate_runner_metrics(
     return {
         "hit_rate_x2": hit_rate_x2,
         "hit_rate_x5": hit_rate_x5,
+        "hit_rate_x4": hit_rate_x4,  # Новое поле
         "p90_hold_days": p90_hold_days,
-        "tail_contribution": tail_contribution,
+        "tail_contribution": tail_contribution,  # Legacy, оставляем для совместимости
+        "tail_pnl_share": tail_pnl_share,  # Новое поле
+        "non_tail_pnl_share": non_tail_pnl_share,  # Новое поле
         "max_drawdown_pct": max_drawdown_pct,
     }
 
@@ -322,8 +430,11 @@ def build_stability_table(
                         row.update({
                             "hit_rate_x2": 0.0,
                             "hit_rate_x5": 0.0,
+                            "hit_rate_x4": 0.0,
                             "p90_hold_days": 0.0,
                             "tail_contribution": 0.0,
+                            "tail_pnl_share": 0.0,
+                            "non_tail_pnl_share": 0.0,
                             "max_drawdown_pct": 0.0,
                         })
                 else:
@@ -331,8 +442,11 @@ def build_stability_table(
                     row.update({
                         "hit_rate_x2": 0.0,
                         "hit_rate_x5": 0.0,
+                        "hit_rate_x4": 0.0,
                         "p90_hold_days": 0.0,
                         "tail_contribution": 0.0,
+                        "tail_pnl_share": 0.0,
+                        "non_tail_pnl_share": 0.0,
                         "max_drawdown_pct": 0.0,
                     })
             

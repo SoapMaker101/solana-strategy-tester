@@ -11,7 +11,11 @@ from .strategy_selector import (
     load_stability_csv,
     select_strategies,
 )
-from .selection_rules import DEFAULT_CRITERIA, DEFAULT_RUNNER_CRITERIA, DEFAULT_CRITERIA_V1, DEFAULT_RUNNER_CRITERIA_V1
+from .selection_rules import (
+    DEFAULT_CRITERIA, DEFAULT_RUNNER_CRITERIA, 
+    DEFAULT_CRITERIA_V1, DEFAULT_RUNNER_CRITERIA_V1,
+    DEFAULT_RUNNER_CRITERIA_V2
+)
 from .strategy_selector import is_runner_strategy
 
 
@@ -41,10 +45,18 @@ def format_selection_summary(selection_df) -> str:
         
         if is_runner_strategy(strategy):
             # Для Runner стратегий показываем Runner-метрики
-            hit_x2 = f"{row.get('hit_rate_x2', 0.0):.2f}" if 'hit_rate_x2' in row else "N/A"
-            hit_x5 = f"{row.get('hit_rate_x5', 0.0):.2f}" if 'hit_rate_x5' in row else "N/A"
-            tail = f"{row.get('tail_contribution', 0.0):.2f}" if 'tail_contribution' in row else "N/A"
-            lines.append(f"{strategy:<30} {passed:<8} HitX2:{hit_x2:<6} HitX5:{hit_x5:<6} Tail:{tail:<6}")
+            # Показываем v2 метрики если доступны, иначе v1
+            if 'hit_rate_x4' in row and 'tail_pnl_share' in row:
+                hit_x4 = f"{row.get('hit_rate_x4', 0.0):.2f}"
+                tail_share = f"{row.get('tail_pnl_share', 0.0):.2f}"
+                non_tail_share = f"{row.get('non_tail_pnl_share', 0.0):.2f}"
+                lines.append(f"{strategy:<30} {passed:<8} HitX4:{hit_x4:<6} TailShare:{tail_share:<6} NonTail:{non_tail_share:<6}")
+            else:
+                # Fallback на v1 метрики
+                hit_x2 = f"{row.get('hit_rate_x2', 0.0):.2f}" if 'hit_rate_x2' in row else "N/A"
+                hit_x5 = f"{row.get('hit_rate_x5', 0.0):.2f}" if 'hit_rate_x5' in row else "N/A"
+                tail = f"{row.get('tail_contribution', 0.0):.2f}" if 'tail_contribution' in row else "N/A"
+                lines.append(f"{strategy:<30} {passed:<8} HitX2:{hit_x2:<6} HitX5:{hit_x5:<6} Tail:{tail:<6}")
         else:
             # Для RR/RRD стратегий показываем стандартные метрики
             survival = f"{row.get('survival_rate', 0.0):.2f}" if 'survival_rate' in row else "N/A"
@@ -94,6 +106,14 @@ def main():
         help="Path for output strategy_selection.csv (default: same dir as stability-csv)",
     )
     
+    parser.add_argument(
+        "--criteria-version",
+        type=str,
+        choices=["v1", "v2"],
+        default="v1",
+        help="Version of selection criteria to use. v1: legacy (hit_rate_x5, tail_contribution). v2: new (hit_rate_x4, tail_pnl_share). Default: v1",
+    )
+    
     args = parser.parse_args()
     
     # Warn if deprecated alias is used
@@ -110,27 +130,43 @@ def main():
     
     print(f"Stage B: Strategy Selection (Decision Layer)")
     print(f"Stability CSV: {stability_csv_path}")
-    print(f"Using v1 criteria (fixed/1%/exposure=0.95/100 pos/no reset)")
-    print(f"RR/RRD Criteria v1: min_survival_rate={DEFAULT_CRITERIA_V1.min_survival_rate}, "
-          f"max_pnl_variance={DEFAULT_CRITERIA_V1.max_pnl_variance}, "
-          f"min_worst_window_pnl={DEFAULT_CRITERIA_V1.min_worst_window_pnl}, "
-          f"min_median_window_pnl={DEFAULT_CRITERIA_V1.min_median_window_pnl}, "
-          f"min_windows={DEFAULT_CRITERIA_V1.min_windows}")
-    print(f"Runner Criteria v1: min_hit_rate_x2={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x2}, "
-          f"min_hit_rate_x5={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x5}, "
-          f"max_tail_contribution={DEFAULT_RUNNER_CRITERIA_V1.max_tail_contribution}, "
-          f"max_p90_hold_days={DEFAULT_RUNNER_CRITERIA_V1.max_p90_hold_days}, "
-          f"max_drawdown_pct={DEFAULT_RUNNER_CRITERIA_V1.max_drawdown_pct}")
+    print(f"Using {args.criteria_version} criteria")
+    
+    # Выбираем критерии в зависимости от версии
+    if args.criteria_version == "v2":
+        runner_criteria = DEFAULT_RUNNER_CRITERIA_V2
+        print(f"RR/RRD Criteria v1: min_survival_rate={DEFAULT_CRITERIA_V1.min_survival_rate}, "
+              f"max_pnl_variance={DEFAULT_CRITERIA_V1.max_pnl_variance}, "
+              f"min_worst_window_pnl={DEFAULT_CRITERIA_V1.min_worst_window_pnl}, "
+              f"min_median_window_pnl={DEFAULT_CRITERIA_V1.min_median_window_pnl}, "
+              f"min_windows={DEFAULT_CRITERIA_V1.min_windows}")
+        print(f"Runner Criteria v2: min_hit_rate_x4={DEFAULT_RUNNER_CRITERIA_V2.min_hit_rate_x4}, "
+              f"min_tail_pnl_share={DEFAULT_RUNNER_CRITERIA_V2.min_tail_pnl_share}, "
+              f"min_non_tail_pnl_share={DEFAULT_RUNNER_CRITERIA_V2.min_non_tail_pnl_share}, "
+              f"max_p90_hold_days={DEFAULT_RUNNER_CRITERIA_V2.max_p90_hold_days}, "
+              f"max_drawdown_pct={DEFAULT_RUNNER_CRITERIA_V2.max_drawdown_pct}")
+    else:
+        runner_criteria = DEFAULT_RUNNER_CRITERIA_V1
+        print(f"RR/RRD Criteria v1: min_survival_rate={DEFAULT_CRITERIA_V1.min_survival_rate}, "
+              f"max_pnl_variance={DEFAULT_CRITERIA_V1.max_pnl_variance}, "
+              f"min_worst_window_pnl={DEFAULT_CRITERIA_V1.min_worst_window_pnl}, "
+              f"min_median_window_pnl={DEFAULT_CRITERIA_V1.min_median_window_pnl}, "
+              f"min_windows={DEFAULT_CRITERIA_V1.min_windows}")
+        print(f"Runner Criteria v1: min_hit_rate_x2={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x2}, "
+              f"min_hit_rate_x5={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x5}, "
+              f"max_tail_contribution={DEFAULT_RUNNER_CRITERIA_V1.max_tail_contribution}, "
+              f"max_p90_hold_days={DEFAULT_RUNNER_CRITERIA_V1.max_p90_hold_days}, "
+              f"max_drawdown_pct={DEFAULT_RUNNER_CRITERIA_V1.max_drawdown_pct}")
     print("")
     
-    # Генерируем таблицу отбора (используем v1 критерии)
+    # Генерируем таблицу отбора
     try:
         output_path = Path(args.output_csv) if args.output_csv else None
         selection_df = generate_selection_table_from_stability(
             stability_csv_path=stability_csv_path,
             output_path=output_path,
             criteria=DEFAULT_CRITERIA_V1,
-            runner_criteria=DEFAULT_RUNNER_CRITERIA_V1,
+            runner_criteria=runner_criteria,
         )
         
         # Печатаем summary

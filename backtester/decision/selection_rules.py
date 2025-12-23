@@ -55,6 +55,16 @@ class SelectionCriteria:
     
     max_tail_contribution: Optional[float] = None
     """Максимальная допустимая доля PnL от сделок с realized_multiple >= 5x (tail contribution)."""
+    
+    # Runner критерии v2 (новые метрики для частичных закрытий)
+    min_hit_rate_x4: Optional[float] = None
+    """Минимальный hit_rate для уровня x4 (tail threshold, доля сделок, достигших x4)."""
+    
+    min_tail_pnl_share: Optional[float] = None
+    """Минимальная доля прибыли от tail-ног (0..1, из realized_tail_pnl_sol / realized_total_pnl_sol)."""
+    
+    min_non_tail_pnl_share: Optional[float] = None
+    """Минимальная доля прибыли от non-tail ног (может быть <0, leak)."""
 
 
 # Базовые критерии для RR/RRD (DEFAULT)
@@ -131,6 +141,28 @@ DEFAULT_RUNNER_CRITERIA_V1 = SelectionCriteria(
     max_p90_hold_days=35.0,  # Максимум 35 дней (90-й перцентиль)
     min_tail_contribution=None,  # Не ограничиваем минимум
     max_tail_contribution=0.80,  # Максимум 80% PnL от сделок с realized_multiple >= 5x
+    max_drawdown_pct=-0.60,  # Максимальная просадка не более 60%
+)
+
+# Runner критерии v2 (для частичных закрытий, использует hit_rate_x4 и tail_pnl_share)
+# Использует новые метрики: hit_rate_x4 (tail threshold x4), tail_pnl_share (0..1), non_tail_pnl_share
+DEFAULT_RUNNER_CRITERIA_V2 = SelectionCriteria(
+    # RR/RRD критерии не используются для Runner
+    min_survival_rate=0.0,
+    max_pnl_variance=float('inf'),
+    min_worst_window_pnl=-float('inf'),
+    min_median_window_pnl=-float('inf'),
+    min_windows=1,
+    # Runner критерии v2 - V1 поля явно отключены
+    min_hit_rate_x2=None,  # Не используется в v2 (используем hit_rate_x4)
+    min_hit_rate_x5=None,  # Не используется в v2 (используем hit_rate_x4)
+    min_hit_rate_x4=0.10,  # Минимум 10% сделок должны достичь x4 (tail threshold)
+    min_p90_hold_days=None,  # Не используется в v2
+    max_p90_hold_days=None,  # Не используется в v2
+    min_tail_contribution=None,  # Не используется в v2 (используем tail_pnl_share)
+    max_tail_contribution=None,  # Не используется в v2 (используем tail_pnl_share)
+    min_tail_pnl_share=0.3,  # Минимум 30% прибыли от tail-ног (x4+)
+    min_non_tail_pnl_share=-0.2,  # Минимум -20% (допускаем leak, но не слишком большой)
     max_drawdown_pct=-0.60,  # Максимальная просадка не более 60%
 )
 
