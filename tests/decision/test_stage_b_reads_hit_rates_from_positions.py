@@ -123,3 +123,5 @@ def test_stage_b_tail_contribution_calculation(tmp_path):
     row = selection_df.iloc[0]
     assert abs(row["tail_contribution"] - (5.0 / 7.0)) < 0.001, f"tail_contribution должен быть ~0.714, получен {row['tail_contribution']}"
 
+
+

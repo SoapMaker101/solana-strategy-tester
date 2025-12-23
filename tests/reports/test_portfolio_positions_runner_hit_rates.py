@@ -343,3 +343,5 @@ def test_levels_hit_invalid_keys(tmp_path, caplog):
     row = df.iloc[0]
     assert abs(row["max_xn_reached"] - 3.0) < 0.001, f"max_xn_reached должен быть ~3.0 (fallback на raw цены), получен {row['max_xn_reached']}"
 
+
+
