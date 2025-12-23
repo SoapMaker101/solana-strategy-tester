@@ -144,3 +144,5 @@ def test_cli_priority_new_over_alias():
         # Восстанавливаем оригинальные аргументы
         sys.argv = original_argv
 
+
+
