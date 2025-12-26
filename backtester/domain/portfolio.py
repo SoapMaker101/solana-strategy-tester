@@ -117,6 +117,19 @@ class PortfolioConfig:
     capacity_max_blocked_ratio: float = 0.4  # Максимальная доля отклоненных сигналов за окно (0.4 = 40%)
     capacity_max_avg_hold_days: float = 10.0  # Максимальное среднее время удержания открытых позиций (дни)
     
+    # Capacity prune конфигурация (v1.7)
+    capacity_reset_mode: Literal["close_all", "prune"] = "close_all"  # Режим capacity reset: close_all (старое поведение) или prune (частичное закрытие)
+    prune_fraction: float = 0.5  # Доля кандидатов для закрытия при prune (0.5 = 50%)
+    prune_min_hold_days: float = 1.0  # Минимальное время удержания для кандидата (дни)
+    prune_max_mcap_usd: float = 20000.0  # Максимальный mcap для кандидата (USD)
+    prune_max_current_pnl_pct: float = -0.30  # Максимальный текущий PnL для кандидата (-0.30 = -30%)
+    
+    # Capacity prune hardening (v1.7.1)
+    prune_cooldown_signals: int = 0  # Cooldown по количеству сигналов (0 = отключен)
+    prune_cooldown_days: Optional[float] = None  # Cooldown по времени в днях (None = отключен)
+    prune_min_candidates: int = 3  # Минимальное количество кандидатов для выполнения prune
+    prune_protect_min_max_xn: Optional[float] = 2.0  # Защита позиций с max_xn >= этого значения (None = отключено)
+    
     def resolved_profit_reset_enabled(self) -> bool:
         """
         Возвращает значение profit_reset_enabled с fallback на runner_reset_enabled для обратной совместимости.
@@ -186,6 +199,16 @@ class PortfolioStats:
     
     cycle_start_equity: float = 0.0  # Equity в начале текущего цикла
     equity_peak_in_cycle: float = 0.0  # Пик equity в текущем цикле
+    
+    # Capacity prune tracking (v1.7)
+    portfolio_capacity_prune_count: int = 0  # Количество срабатываний capacity prune
+    last_capacity_prune_time: Optional[datetime] = None  # Время последнего capacity prune
+    
+    # Capacity prune observability (v1.7.1)
+    capacity_prune_events: List[Dict[str, Any]] = field(default_factory=list)  # Список событий prune для статистики
+    
+    # Capacity prune observability (v1.7.1)
+    capacity_prune_events: List[Dict[str, Any]] = field(default_factory=list)  # Список событий prune для статистики
 
 
 @dataclass
@@ -303,6 +326,80 @@ class PortfolioEngine:
         if pos.meta is None:
             pos.meta = {}
         return pos.meta
+    
+    def _forced_close_position(
+        self,
+        pos: Position,
+        current_time: datetime,
+        reset_reason: str,
+        additional_meta: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, float]:
+        """
+        Единый метод для принудительного закрытия позиции (forced close).
+        
+        Используется для:
+        - Profit reset
+        - Capacity reset (close-all)
+        - Capacity prune
+        
+        Args:
+            pos: Позиция для закрытия
+            current_time: Время закрытия
+            reset_reason: Причина закрытия ("profit", "capacity", "capacity_prune", "runner", "manual")
+            additional_meta: Дополнительные поля для meta (опционально)
+            
+        Returns:
+            Dict с ключами: exit_pnl_sol, fees_total, network_fee_exit, effective_exit_price
+        """
+        from .portfolio_reset import get_mark_price_for_position
+        
+        # Получаем mark price
+        raw_exit_price = get_mark_price_for_position(pos, current_time)
+        
+        # Применяем slippage (используем reason="manual" для forced close)
+        effective_exit_price = self.execution_model.apply_exit(raw_exit_price, reason="manual")
+        
+        # Вычисляем PnL на основе исполненных цен
+        exec_entry_price = pos.meta.get("exec_entry_price", pos.entry_price) if pos.meta else pos.entry_price
+        exit_pnl_pct = (effective_exit_price - exec_entry_price) / exec_entry_price if exec_entry_price > 0 else 0.0
+        exit_pnl_sol = pos.size * exit_pnl_pct
+        
+        # Применяем fees к возвращаемому нотионалу
+        notional_returned = pos.size + exit_pnl_sol
+        notional_after_fees = self.execution_model.apply_fees(notional_returned)
+        fees_total = notional_returned - notional_after_fees
+        network_fee_exit = self.execution_model.network_fee()
+        
+        # Обновляем позицию
+        pos.exit_time = current_time
+        pos.exit_price = raw_exit_price  # Сохраняем raw цену
+        if pos.meta:
+            pos.meta.setdefault("exec_exit_price", effective_exit_price)
+        pos.pnl_pct = exit_pnl_pct
+        pos.status = "closed"
+        
+        # Устанавливаем meta поля
+        meta_updates = {
+            "pnl_sol": exit_pnl_sol,
+            "fees_total_sol": fees_total,
+            "closed_by_reset": True,
+            "reset_reason": reset_reason,
+        }
+        
+        # Добавляем дополнительные поля если есть
+        if additional_meta:
+            meta_updates.update(additional_meta)
+        
+        if pos.meta:
+            pos.meta.update(meta_updates)
+            pos.meta["network_fee_sol"] = pos.meta.get("network_fee_sol", 0.0) + network_fee_exit
+        
+        return {
+            "exit_pnl_sol": exit_pnl_sol,
+            "fees_total": fees_total,
+            "network_fee_exit": network_fee_exit,
+            "effective_exit_price": effective_exit_price,
+        }
 
     def _position_size(self, current_balance: float) -> float:
         """
@@ -321,7 +418,9 @@ class PortfolioEngine:
         capacity_tracking: Dict[str, Any],
     ) -> Optional[PortfolioResetContext]:
         """
-        Проверяет, должен ли сработать capacity reset.
+        Проверяет, должен ли сработать capacity reset (close-all режим).
+        
+        Для режима prune используйте _maybe_apply_capacity_prune().
         
         Триггер capacity reset:
         1. open_positions / max_open_positions >= capacity_open_ratio_threshold
@@ -337,6 +436,10 @@ class PortfolioEngine:
             PortfolioResetContext если reset должен сработать, иначе None
         """
         if not self.config.capacity_reset_enabled:
+            return None
+        
+        # Для режима prune не возвращаем context (prune обрабатывается отдельно)
+        if self.config.capacity_reset_mode == "prune":
             return None
         
         # Вычисляем open_ratio
@@ -391,6 +494,323 @@ class PortfolioEngine:
         )
         
         return context
+    
+    def _compute_current_pnl_pct(
+        self,
+        pos: Position,
+        current_time: datetime,
+    ) -> float:
+        """
+        Вычисляет текущий PnL позиции (mark-to-market) без использования price_loader.
+        
+        Использует существующий механизм получения mark price через get_mark_price_for_position
+        и применяет ExecutionModel для реалистичной цены с учетом slippage.
+        
+        Args:
+            pos: Позиция для расчета PnL
+            current_time: Текущее время
+            
+        Returns:
+            Текущий PnL в процентах (например, -0.30 = -30%)
+        """
+        from .portfolio_reset import get_mark_price_for_position
+        
+        # Получаем mark price
+        mark_price = get_mark_price_for_position(pos, current_time)
+        
+        # Применяем ExecutionModel для реалистичной цены выхода (slippage)
+        effective_mark_exit_price = self.execution_model.apply_exit(mark_price, reason="manual")
+        
+        # Получаем цену входа (исполненную, с slippage)
+        entry_price = pos.meta.get("exec_entry_price") if pos.meta else None
+        if entry_price is None:
+            entry_price = pos.entry_price
+        
+        if entry_price <= 0:
+            return 0.0
+        
+        # Вычисляем текущий PnL
+        current_pnl_pct = (effective_mark_exit_price - entry_price) / entry_price
+        return current_pnl_pct
+    
+    def _select_capacity_prune_candidates(
+        self,
+        state: PortfolioState,
+        current_time: datetime,
+    ) -> List[Position]:
+        """
+        Выбирает кандидатов для capacity prune.
+        
+        Кандидат должен одновременно удовлетворять:
+        1. hold_days >= prune_min_hold_days
+        2. mcap_usd <= prune_max_mcap_usd (если есть в meta)
+        3. current_pnl_pct <= prune_max_current_pnl_pct
+        
+        Args:
+            state: Состояние портфеля
+            current_time: Текущее время
+            
+        Returns:
+            Список позиций-кандидатов для prune
+        """
+        candidates = []
+        
+        for pos in state.open_positions:
+            if pos.status != "open" or pos.entry_time is None:
+                continue
+            
+            # Проверка 1: hold_days >= prune_min_hold_days
+            hold_seconds = (current_time - pos.entry_time).total_seconds()
+            hold_days = hold_seconds / (24 * 3600)
+            if hold_days < self.config.prune_min_hold_days:
+                continue
+            
+            # Проверка 2: mcap_usd <= prune_max_mcap_usd (если есть в meta)
+            # Используем entry_mcap_proxy из meta (если есть), иначе пропускаем
+            mcap_usd = None
+            if pos.meta:
+                # Пробуем разные варианты ключей
+                mcap_usd = pos.meta.get("mcap_usd") or pos.meta.get("mcap_usd_at_entry")
+                if mcap_usd is None:
+                    # Используем entry_mcap_proxy как fallback
+                    entry_mcap_proxy = pos.meta.get("entry_mcap_proxy")
+                    if entry_mcap_proxy is not None:
+                        mcap_usd = entry_mcap_proxy
+            
+            if mcap_usd is None:
+                # Если mcap_usd нет в meta, позиция НЕ кандидат (требование из промпта)
+                continue
+            
+            if mcap_usd > self.config.prune_max_mcap_usd:
+                continue
+            
+            # Проверка 3: current_pnl_pct <= prune_max_current_pnl_pct
+            current_pnl_pct = self._compute_current_pnl_pct(pos, current_time)
+            if current_pnl_pct > self.config.prune_max_current_pnl_pct:
+                continue
+            
+            # Проверка 4: protect tail - не закрываем позиции с max_xn >= protect_min_max_xn (hardening v1.7.1)
+            if self.config.prune_protect_min_max_xn is not None:
+                max_xn = None
+                if pos.meta:
+                    # Пробуем разные варианты ключей для max_xn
+                    max_xn = pos.meta.get("max_xn") or pos.meta.get("max_xn_reached")
+                    if max_xn is None:
+                        # Fallback: вычисляем из levels_hit (Runner)
+                        levels_hit = pos.meta.get("levels_hit", {})
+                        if levels_hit:
+                            try:
+                                max_xn = max(float(k) for k in levels_hit.keys() if k.replace('.', '', 1).isdigit())
+                            except (ValueError, TypeError):
+                                pass
+                
+                if max_xn is not None and max_xn >= self.config.prune_protect_min_max_xn:
+                    continue  # Позиция защищена от prune (tail potential)
+            
+            # Все условия выполнены - добавляем в кандидаты
+            candidates.append(pos)
+        
+        return candidates
+    
+    def _maybe_apply_capacity_prune(
+        self,
+        state: PortfolioState,
+        current_time: datetime,
+        capacity_tracking: Dict[str, Any],
+        signal_index: int,
+    ) -> bool:
+        """
+        Применяет capacity prune, если условия выполнены.
+        
+        Capacity prune закрывает ~50% "плохих" позиций без сброса profit cycle.
+        Это НЕ reset операция - не обновляет cycle_start_equity, equity_peak_in_cycle,
+        portfolio_reset_count.
+        
+        Args:
+            state: Состояние портфеля (изменяется in-place)
+            current_time: Текущее время
+            capacity_tracking: Dict с метриками capacity
+            
+        Returns:
+            True если prune был применен, False иначе
+        """
+        if not self.config.capacity_reset_enabled:
+            return False
+        
+        if self.config.capacity_reset_mode != "prune":
+            return False  # Режим close_all обрабатывается через _check_capacity_reset
+        
+        # Проверка cooldown (hardening v1.7.1)
+        if self.config.prune_cooldown_signals > 0:
+            if state.capacity_prune_cooldown_until_signal_index is not None:
+                if signal_index < state.capacity_prune_cooldown_until_signal_index:
+                    return False  # Cooldown активен
+        
+        if self.config.prune_cooldown_days is not None:
+            if state.capacity_prune_cooldown_until_time is not None:
+                if current_time < state.capacity_prune_cooldown_until_time:
+                    return False  # Cooldown активен
+        
+        # Проверяем условия capacity pressure (те же, что для capacity reset)
+        max_open = self.config.max_open_positions
+        if max_open <= 0:
+            return False
+        
+        open_ratio = len(state.open_positions) / max_open
+        if open_ratio < self.config.capacity_open_ratio_threshold:
+            return False
+        
+        blocked_window = capacity_tracking.get("blocked_by_capacity_in_window", 0)
+        signals_in_window = capacity_tracking.get("signals_in_window", 0)
+        avg_hold_days = capacity_tracking.get("avg_hold_time_open_positions", 0.0)
+        
+        if signals_in_window > 0:
+            blocked_ratio = blocked_window / signals_in_window
+            if blocked_ratio < self.config.capacity_max_blocked_ratio:
+                return False
+        else:
+            return False
+        
+        if avg_hold_days < self.config.capacity_max_avg_hold_days:
+            return False
+        
+        # Все условия capacity pressure выполнены - выбираем кандидатов для prune
+        candidates = self._select_capacity_prune_candidates(state, current_time)
+        
+        # Проверка min_candidates (hardening v1.7.1)
+        min_candidates = max(1, self.config.prune_min_candidates)  # Минимум 1 для backward compatibility
+        if len(candidates) < min_candidates:
+            # Не делаем prune если кандидатов меньше минимума
+            return False
+        
+        # Вычисляем score для каждого кандидата (более "плохие" = выше score)
+        candidate_scores = []
+        for pos in candidates:
+            hold_seconds = (current_time - pos.entry_time).total_seconds() if pos.entry_time else 0
+            hold_days = hold_seconds / (24 * 3600)
+            
+            mcap_usd = None
+            if pos.meta:
+                mcap_usd = pos.meta.get("mcap_usd") or pos.meta.get("mcap_usd_at_entry")
+                if mcap_usd is None:
+                    entry_mcap_proxy = pos.meta.get("entry_mcap_proxy")
+                    if entry_mcap_proxy is not None:
+                        mcap_usd = entry_mcap_proxy
+            
+            current_pnl_pct = self._compute_current_pnl_pct(pos, current_time)
+            
+            # Score: хуже pnl → выше score, дольше hold → выше score, меньше mcap → выше score
+            score = (-current_pnl_pct) * 100 + hold_days * 1.0
+            if mcap_usd is not None:
+                score += (self.config.prune_max_mcap_usd - mcap_usd) / self.config.prune_max_mcap_usd
+            
+            candidate_scores.append((pos, score, hold_days, mcap_usd, current_pnl_pct))
+        
+        # Сортируем по score DESC (более плохие первыми)
+        candidate_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Вычисляем количество позиций для закрытия
+        prune_count = max(1, int(self.config.prune_fraction * len(candidates)))
+        prune_count = min(prune_count, len(candidates))  # Не больше чем кандидатов
+        
+        # Берем top-K кандидатов
+        positions_to_prune = [item[0] for item in candidate_scores[:prune_count]]
+        
+        # Закрываем выбранные позиции через market close
+        for pos in positions_to_prune:
+            # Находим данные из candidate_scores (до закрытия позиции)
+            candidate_data = None
+            for item in candidate_scores:
+                if item[0].signal_id == pos.signal_id:
+                    candidate_data = item
+                    break
+            
+            # Подготавливаем дополнительные meta поля для prune
+            if candidate_data:
+                _, score, hold_days, mcap_usd, current_pnl_pct_before_close = candidate_data
+                current_pnl_pct = current_pnl_pct_before_close
+            else:
+                # Fallback если не нашли в candidate_scores
+                hold_seconds = (current_time - pos.entry_time).total_seconds() if pos.entry_time else 0
+                hold_days = hold_seconds / (24 * 3600)
+                mcap_usd = None
+                if pos.meta:
+                    mcap_usd = pos.meta.get("mcap_usd") or pos.meta.get("mcap_usd_at_entry")
+                    if mcap_usd is None:
+                        entry_mcap_proxy = pos.meta.get("entry_mcap_proxy")
+                        if entry_mcap_proxy is not None:
+                            mcap_usd = entry_mcap_proxy
+                # Используем exit_pnl_pct как fallback (будет вычислен в _forced_close_position)
+                current_pnl_pct = None  # Будет установлен после закрытия
+                score = 0.0
+            
+            # Используем единый метод для forced close
+            close_result = self._forced_close_position(
+                pos=pos,
+                current_time=current_time,
+                reset_reason="capacity_prune",
+                additional_meta={
+                    "capacity_prune": True,
+                    "capacity_prune_trigger_time": current_time.isoformat(),
+                    "capacity_prune_current_pnl_pct": current_pnl_pct if current_pnl_pct is not None else pos.pnl_pct,
+                    "capacity_prune_mcap_usd": mcap_usd,
+                    "capacity_prune_hold_days": hold_days,
+                    "capacity_prune_score": score,
+                }
+            )
+            
+            # Возвращаем капитал (size + pnl - fees - network_fee)
+            notional_returned = pos.size + close_result["exit_pnl_sol"]
+            notional_after_fees = notional_returned - close_result["fees_total"]
+            state.balance += notional_after_fees
+            state.balance -= close_result["network_fee_exit"]
+            
+            state.closed_positions.append(pos)
+            state.peak_balance = max(state.peak_balance, state.balance)
+            state.equity_curve.append({"timestamp": current_time, "balance": state.balance})
+        
+        # Удаляем закрытые позиции из open_positions
+        state.open_positions = [
+            p for p in state.open_positions
+            if p.signal_id not in {pos.signal_id for pos in positions_to_prune}
+        ]
+        
+        # Обновляем счетчики prune (НЕ reset счетчики!)
+        state.portfolio_capacity_prune_count = getattr(state, 'portfolio_capacity_prune_count', 0) + 1
+        state.last_capacity_prune_time = current_time
+        
+        # Устанавливаем cooldown (hardening v1.7.1)
+        if self.config.prune_cooldown_signals > 0:
+            state.capacity_prune_cooldown_until_signal_index = signal_index + self.config.prune_cooldown_signals
+        
+        if self.config.prune_cooldown_days is not None:
+            from datetime import timedelta
+            state.capacity_prune_cooldown_until_time = current_time + timedelta(days=self.config.prune_cooldown_days)
+        
+        # Сохраняем статистику для observability (hardening v1.7.1)
+        prune_event = {
+            "trigger_time": current_time.isoformat(),
+            "signal_index": signal_index,
+            "candidates_count": len(candidates),
+            "pruned_count": len(positions_to_prune),
+            "open_ratio": open_ratio,
+            "blocked_window": blocked_window,
+            "avg_hold_days": avg_hold_days,
+            "pruned_hold_days": [item[2] for item in candidate_scores[:len(positions_to_prune)]],  # hold_days закрытых
+            "pruned_current_pnl_pct": [item[4] for item in candidate_scores[:len(positions_to_prune)]],  # current_pnl_pct закрытых
+        }
+        if not hasattr(state, 'capacity_prune_events'):
+            state.capacity_prune_events = []
+        state.capacity_prune_events.append(prune_event)
+        
+        logger.info(
+            f"[CAPACITY_PRUNE] Triggered at {current_time.isoformat()}: "
+            f"candidates={len(candidates)}, pruned={len(positions_to_prune)}, "
+            f"open_ratio={open_ratio:.2f}, blocked_window={blocked_window}, "
+            f"avg_hold_days={avg_hold_days:.2f}, cooldown_until_signal={state.capacity_prune_cooldown_until_signal_index}"
+        )
+        
+        return True
     
     def _update_capacity_tracking(
         self,
@@ -1073,6 +1493,13 @@ class PortfolioEngine:
             pos_meta["time_stop_triggered"] = out.meta.get("time_stop_triggered", False)
             pos_meta["realized_multiple"] = out.meta.get("realized_multiple", 1.0)
         
+        # Сохраняем mcap_usd для capacity prune (используем entry_mcap_proxy из StrategyOutput.meta)
+        if out.meta:
+            entry_mcap_proxy = out.meta.get("entry_mcap_proxy")
+            if entry_mcap_proxy is not None:
+                pos_meta["mcap_usd"] = entry_mcap_proxy
+                pos_meta["mcap_usd_at_entry"] = entry_mcap_proxy
+        
         # Position.entry_price и Position.exit_price содержат RAW цены (для reset проверки)
         # Исполненные цены (с slippage) хранятся в meta["exec_entry_price"] и meta["exec_exit_price"]
         pos = Position(
@@ -1213,6 +1640,9 @@ class PortfolioEngine:
         
         # Mapping для быстрого поиска позиций по signal_id
         positions_by_signal_id: Dict[str, Position] = {}
+        
+        # Signal index для cooldown tracking (hardening v1.7.1)
+        signal_index = 0
 
         # 3. Event-driven обработка: группируем события по времени и обрабатываем
         i = 0
@@ -1276,9 +1706,12 @@ class PortfolioEngine:
                 state.open_positions.append(pos)
                 positions_by_signal_id[pos.signal_id] = pos
                 trades_executed += 1  # Инкрементируем счетчик только при открытии позиции
+                signal_index += 1  # Инкрементируем signal_index для cooldown tracking (hardening v1.7.1)
                 state.equity_curve.append({"timestamp": entry_time, "balance": state.balance})
             
-            # После обработки всех событий на текущем timestamp: проверяем profit reset
+            # После обработки всех событий на текущем timestamp: проверяем profit reset ПЕРЕД capacity
+            # Порядок приоритетов: profit reset > capacity (hardening v1.7.1)
+            profit_reset_triggered = False
             if self.config.resolved_profit_reset_enabled():
                 state.update_equity_peak()
                 reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
@@ -1310,36 +1743,59 @@ class PortfolioEngine:
                             reason=ResetReason.EQUITY_THRESHOLD,
                         )
                         self._dbg_meta(marker_position, "AFTER_profit_reset_at_timestamp")
+                        profit_reset_triggered = True  # Profit reset сработал
             
-            # Проверка capacity reset (после обработки событий на timestamp)
-            if self.config.capacity_reset_enabled:
-                capacity_reset_context = self._check_capacity_reset(
-                    state=state,
-                    current_time=current_time,
-                    capacity_tracking=capacity_tracking,
-                )
-                if capacity_reset_context is not None:
-                    # Применяем capacity reset
-                    self._apply_reset(
+            # Проверка capacity reset/prune (только если profit reset не сработал)
+            # Важно: profit reset имеет приоритет, capacity проверяется только если profit reset не сработал
+            if self.config.capacity_reset_enabled and not profit_reset_triggered:
+                if self.config.capacity_reset_mode == "prune":
+                    # Режим prune: применяем частичное закрытие
+                    prune_applied = self._maybe_apply_capacity_prune(
                         state=state,
-                        marker_position=capacity_reset_context.marker_position,
-                        reset_time=capacity_reset_context.reset_time,
-                        positions_to_force_close=capacity_reset_context.positions_to_force_close,
-                        reason=ResetReason.CAPACITY_PRESSURE,
+                        current_time=current_time,
+                        capacity_tracking=capacity_tracking,
+                        signal_index=signal_index,
                     )
-                    # Обновляем positions_by_signal_id после reset
-                    for pos in capacity_reset_context.positions_to_force_close:
-                        if pos.signal_id in positions_by_signal_id:
-                            del positions_by_signal_id[pos.signal_id]
-                    if capacity_reset_context.marker_position.signal_id in positions_by_signal_id:
-                        del positions_by_signal_id[capacity_reset_context.marker_position.signal_id]
-                    
-                    logger.info(
-                        f"[CAPACITY_RESET] Triggered at {current_time.isoformat()}: "
-                        f"open_ratio={capacity_reset_context.open_ratio:.2f}, "
-                        f"blocked_window={capacity_reset_context.blocked_window}, "
-                        f"turnover_window={capacity_reset_context.turnover_window}"
+                    if prune_applied:
+                        # Обновляем positions_by_signal_id после prune
+                        # (позиции уже удалены из open_positions в _maybe_apply_capacity_prune)
+                        pruned_signal_ids = {
+                            pos.signal_id for pos in state.closed_positions
+                            if pos.meta and pos.meta.get("capacity_prune", False)
+                            and pos.meta.get("capacity_prune_trigger_time") == current_time.isoformat()
+                        }
+                        for signal_id in pruned_signal_ids:
+                            if signal_id in positions_by_signal_id:
+                                del positions_by_signal_id[signal_id]
+                else:
+                    # Режим close_all: применяем полный reset
+                    capacity_reset_context = self._check_capacity_reset(
+                        state=state,
+                        current_time=current_time,
+                        capacity_tracking=capacity_tracking,
                     )
+                    if capacity_reset_context is not None:
+                        # Применяем capacity reset
+                        self._apply_reset(
+                            state=state,
+                            marker_position=capacity_reset_context.marker_position,
+                            reset_time=capacity_reset_context.reset_time,
+                            positions_to_force_close=capacity_reset_context.positions_to_force_close,
+                            reason=ResetReason.CAPACITY_PRESSURE,
+                        )
+                        # Обновляем positions_by_signal_id после reset
+                        for pos in capacity_reset_context.positions_to_force_close:
+                            if pos.signal_id in positions_by_signal_id:
+                                del positions_by_signal_id[pos.signal_id]
+                        if capacity_reset_context.marker_position.signal_id in positions_by_signal_id:
+                            del positions_by_signal_id[capacity_reset_context.marker_position.signal_id]
+                        
+                        logger.info(
+                            f"[CAPACITY_RESET] Triggered at {current_time.isoformat()}: "
+                            f"open_ratio={capacity_reset_context.open_ratio:.2f}, "
+                            f"blocked_window={capacity_reset_context.blocked_window}, "
+                            f"turnover_window={capacity_reset_context.turnover_window}"
+                        )
         
         # 4. Закрываем все оставшиеся открытые позиции (финальная обработка)
         # Это нужно для позиций, у которых exit_time находится после последнего события
@@ -1426,6 +1882,9 @@ class PortfolioEngine:
         # Обновляем equity_peak_in_cycle для финального значения
         state.update_equity_peak()
         
+        # Сохраняем prune events для observability (hardening v1.7.1)
+        capacity_prune_events = getattr(state, 'capacity_prune_events', [])
+        
         stats = PortfolioStats(
             final_balance_sol=final_balance,
             total_return_pct=total_return_pct,
@@ -1441,6 +1900,9 @@ class PortfolioEngine:
             portfolio_reset_capacity_count=getattr(state, 'portfolio_reset_capacity_count', 0),
             cycle_start_equity=state.cycle_start_equity,
             equity_peak_in_cycle=state.equity_peak_in_cycle,
+            portfolio_capacity_prune_count=getattr(state, 'portfolio_capacity_prune_count', 0),
+            last_capacity_prune_time=getattr(state, 'last_capacity_prune_time', None),
+            capacity_prune_events=capacity_prune_events,
         )
 
         # Все позиции помечаем closed для консистентности

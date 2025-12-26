@@ -1112,3 +1112,89 @@ class Reporter:
         executions_path = self.output_dir / "portfolio_executions.csv"
         df.to_csv(executions_path, index=False)
         print(f"🔧 Saved portfolio executions table to {executions_path} ({len(df)} execution events)")
+    
+    def save_portfolio_policy_summary(self, portfolio_results: Dict[str, Any]) -> None:
+        """
+        Сохраняет сводный отчет по политике reset/prune (hardening v1.7.1).
+        
+        Генерирует portfolio_policy_summary.csv с агрегированной статистикой по:
+        - profit reset событиям
+        - capacity reset (close-all) событиям
+        - capacity prune событиям
+        
+        Args:
+            portfolio_results: Dict[str, PortfolioResult] - результаты портфельной симуляции
+        """
+        from ..domain.portfolio import PortfolioResult
+        
+        summary_rows = []
+        
+        for strategy_name, p_result in portfolio_results.items():
+            if not isinstance(p_result, PortfolioResult):
+                continue
+            
+            stats = p_result.stats
+            
+            # Собираем данные о prune событиях из stats
+            prune_events = getattr(stats, 'capacity_prune_events', [])
+            
+            # Агрегируем prune статистику
+            if prune_events:
+                all_pruned_hold_days = []
+                all_pruned_current_pnl_pct = []
+                for event in prune_events:
+                    all_pruned_hold_days.extend(event.get("pruned_hold_days", []))
+                    all_pruned_current_pnl_pct.extend(event.get("pruned_current_pnl_pct", []))
+                
+                avg_pruned_positions_per_event = np.mean([e.get("pruned_count", 0) for e in prune_events]) if prune_events else 0.0
+                median_pruned_hold_days = np.median(all_pruned_hold_days) if all_pruned_hold_days else None
+                median_pruned_current_pnl_pct = np.median(all_pruned_current_pnl_pct) if all_pruned_current_pnl_pct else None
+            else:
+                avg_pruned_positions_per_event = 0.0
+                median_pruned_hold_days = None
+                median_pruned_current_pnl_pct = None
+            
+            # Считаем долю prune позиций от всех закрытых
+            total_closed = len([p for p in p_result.positions if p.status == "closed"])
+            pruned_closed = len([
+                p for p in p_result.positions
+                if p.meta and p.meta.get("capacity_prune", False)
+            ])
+            pruned_positions_share_of_all_closed = (
+                pruned_closed / total_closed if total_closed > 0 else 0.0
+            )
+            
+            row = {
+                "strategy": strategy_name,
+                "portfolio_reset_profit_count": stats.portfolio_reset_profit_count,
+                "portfolio_reset_capacity_count": stats.portfolio_reset_capacity_count,
+                "portfolio_capacity_prune_count": getattr(stats, 'portfolio_capacity_prune_count', 0),
+                "avg_pruned_positions_per_event": avg_pruned_positions_per_event,
+                "median_pruned_hold_days": median_pruned_hold_days,
+                "median_pruned_current_pnl_pct": median_pruned_current_pnl_pct,
+                "pruned_positions_share_of_all_closed": pruned_positions_share_of_all_closed,
+            }
+            
+            summary_rows.append(row)
+        
+        # Создаем DataFrame и сохраняем
+        if summary_rows:
+            df = pd.DataFrame(summary_rows)
+            summary_path = self.output_dir / "portfolio_policy_summary.csv"
+            df.to_csv(summary_path, index=False)
+            print(f"📊 Saved portfolio policy summary to {summary_path}")
+        else:
+            # Создаем пустой файл с правильными колонками
+            df = pd.DataFrame([], columns=[
+                "strategy",
+                "portfolio_reset_profit_count",
+                "portfolio_reset_capacity_count",
+                "portfolio_capacity_prune_count",
+                "avg_pruned_positions_per_event",
+                "median_pruned_hold_days",
+                "median_pruned_current_pnl_pct",
+                "pruned_positions_share_of_all_closed",
+            ])
+            summary_path = self.output_dir / "portfolio_policy_summary.csv"
+            df.to_csv(summary_path, index=False)
+            print(f"📊 Saved empty portfolio policy summary to {summary_path}")

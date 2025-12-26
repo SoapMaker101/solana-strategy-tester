@@ -263,10 +263,16 @@ portfolio:
   - Управляется параметрами `profit_reset_enabled` и `profit_reset_multiple`
   - **DEPRECATED:** Старые параметры `runner_reset_enabled` и `runner_reset_multiple` поддерживаются для обратной совместимости, но помечены как deprecated
 - **Capacity reset (v1.6):** Закрытие всех позиций при capacity pressure (портфель заполнен, мало закрытий, много отклонений)
-  - Все позиции закрываются через market close (ExecutionModel)
+  - Режим `close_all` (по умолчанию): все позиции закрываются через market close (ExecutionModel)
   - Marker позиция исключается из `positions_to_force_close` (архитектурный инвариант) и закрывается отдельно
   - Все закрытые позиции получают `closed_by_reset=True`, `reset_reason="capacity"`
   - Marker дополнительно получает `triggered_portfolio_reset=True`
+- **Capacity prune (v1.7):** Частичное закрытие позиций вместо полного reset
+  - Режим `prune`: закрывает ~50% "плохих" позиций для освобождения слотов
+  - Критерии кандидата: долго висит, низкий mcap, плохой текущий PnL
+  - Score-based selection: худшие позиции закрываются первыми
+  - **Важно:** Prune НЕ обновляет `cycle_start_equity`, `equity_peak_in_cycle`, `portfolio_reset_count`
+  - Закрытые позиции получают `reset_reason="capacity_prune"`, `capacity_prune=True`
 - **Runner-XN reset:** Закрытие всех позиций при достижении позицией XN уровня
   - Управляется параметрами `runner_reset_enabled` и `runner_reset_multiple` (это отдельный функционал, не связанный с profit reset)
 - **Runner частичные выходы:** Обработка частичного закрытия позиций на разных уровнях TP
@@ -316,6 +322,12 @@ portfolio:
     window_size: 7d              # Размер окна: дни (например, "7d" или 7) для time, количество сигналов для signals
     max_blocked_ratio: 0.4       # Максимальная доля отклоненных сигналов за окно (0.4 = 40%)
     max_avg_hold_days: 10.0      # Максимальное среднее время удержания открытых позиций (дни)
+    # Capacity prune (v1.7) - частичное закрытие вместо полного reset
+    mode: "close_all"            # "close_all" (старое поведение) или "prune" (частичное закрытие)
+    prune_fraction: 0.5          # Доля кандидатов для закрытия при prune (0.5 = 50%)
+    prune_min_hold_days: 1.0     # Минимальное время удержания для кандидата (дни)
+    prune_max_mcap_usd: 20000    # Максимальный mcap для кандидата (USD)
+    prune_max_current_pnl_pct: -0.30  # Максимальный текущий PnL для кандидата (-0.30 = -30%)
   execution_profile: "realistic"   # Профиль исполнения: "realistic", "stress", или "custom"
   fee:
     swap_fee_pct: 0.003           # Комиссия swap (0.3%)
@@ -533,6 +545,7 @@ portfolio_result = engine.simulate(all_results, strategy_name="RR_10_20")
 **Reset counts:**
 - `profit_reset_closed_count` - количество позиций закрытых по profit reset (reset_reason == "profit")
 - `capacity_reset_closed_count` - количество позиций закрытых по capacity reset (reset_reason == "capacity")
+- `capacity_prune_closed_count` - количество позиций закрытых по capacity prune (reset_reason == "capacity_prune") (v1.7)
 - `closed_by_reset_count` - количество позиций закрытых по reset (closed_by_reset == True)
 - `triggered_portfolio_reset_count` - количество позиций триггернувших reset (triggered_portfolio_reset == True)
 
@@ -714,6 +727,13 @@ portfolio:
 - [x] **Capacity reset (v1.6)** (реализовано)
   - Закрытие всех позиций при capacity pressure (портфель заполнен, много отклоненных сигналов, мало закрытий)
   - Независим от profit reset, имеет собственные счетчики: `portfolio_reset_capacity_count`
+- [x] **Capacity prune (v1.7)** (реализовано)
+  - Частичное закрытие позиций (~50% "плохих") вместо полного reset
+  - Критерии кандидата: долго висит, низкий mcap, плохой текущий PnL
+  - Score-based selection: худшие позиции закрываются первыми
+  - **Важно:** Prune НЕ обновляет `cycle_start_equity`, `equity_peak_in_cycle`, `portfolio_reset_count`
+  - Имеет собственные счетчики: `portfolio_capacity_prune_count`, `last_capacity_prune_time`
+  - Закрытые позиции получают `reset_reason="capacity_prune"`, `capacity_prune=True`
   - **Архитектурный инвариант:** marker позиция исключается из `positions_to_force_close` и закрывается отдельно через market close
   - Все закрытые позиции получают `closed_by_reset=True`, `reset_reason="capacity"`; marker дополнительно получает `triggered_portfolio_reset=True`
   - Закрытие происходит **market close** (по текущей цене через execution_model)

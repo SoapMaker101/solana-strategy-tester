@@ -184,19 +184,25 @@
   - Также используется для runner reset по XN (это отдельный функционал)
 - **Статус:** 🟡 deprecated (будет удалено в будущей версии)
 
-### Capacity Reset (v1.6)
+### Capacity Reset (v1.6) и Capacity Prune (v1.7)
 
 #### `capacity_reset.enabled`
 
 - **Где:** `portfolio.capacity_reset.enabled` (YAML), `PortfolioConfig.capacity_reset_enabled` (код)
 - **Тип:** `bool`
 - **Значение по умолчанию:** `True`
-- **Назначение:** Включить capacity reset: при заполнении портфеля и низком turnover закрываются все позиции
+- **Назначение:** Включить capacity reset/prune: при заполнении портфеля и низком turnover закрываются позиции
 - **Влияние:** 
-  - Если `True` и выполнены условия capacity pressure (портфель заполнен, высокая доля отклоненных сигналов, высокое среднее время удержания), все открытые позиции закрываются market close
+  - Если `True` и выполнены условия capacity pressure (портфель заполнен, высокая доля отклоненных сигналов, высокое среднее время удержания):
+    - При `capacity_reset_mode="close_all"` (legacy): все открытые позиции закрываются market close
+    - При `capacity_reset_mode="prune"` (рекомендуется, v1.7): закрывается ~50% "плохих" позиций
   - Независим от profit reset (по equity threshold)
-  - **Архитектурный инвариант:** marker позиция исключается из `positions_to_force_close` и закрывается отдельно через market close
-  - **Meta-флаги:** все закрытые позиции получают `closed_by_reset=True`, `reset_reason="capacity"`; marker дополнительно получает `triggered_portfolio_reset=True`
+  - **Архитектурный инвариант:** 
+    - `close_all`: marker позиция исключается из `positions_to_force_close` и закрывается отдельно через market close
+    - `prune`: не использует PortfolioResetContext, не имеет marker позиции
+  - **Meta-флаги:**
+    - `close_all`: все закрытые позиции получают `closed_by_reset=True`, `reset_reason="capacity"`; marker дополнительно получает `triggered_portfolio_reset=True`
+    - `prune`: закрытые позиции получают `closed_by_reset=True`, `reset_reason="capacity_prune"`, `capacity_prune=True`
 - **Используется в:** `PortfolioEngine.simulate()` — проверка capacity pressure
 - **Статус:** 🟢 stable (v1.6)
 
@@ -1003,7 +1009,7 @@ test1,ABC123...,2024-06-01T00:00:00Z,tg:12345,Test signal,1000000000
 - `raw_exit_price` — сырая цена выхода без slippage (float)
 - `closed_by_reset` — закрыта ли позиция по reset (bool)
 - `triggered_portfolio_reset` — триггернула ли portfolio-level reset (bool)
-- `reset_reason` — причина reset: `"profit"` | `"capacity"` | `"runner"` | `"manual"` | `"none"` (str)
+- `reset_reason` — причина reset: `"profit"` | `"capacity"` | `"capacity_prune"` | `"runner"` | `"manual"` | `"none"` (str)
 - `hold_minutes` — длительность удержания позиции в минутах (int)
 
 **Важно:** 
@@ -1027,7 +1033,7 @@ test1,ABC123...,2024-06-01T00:00:00Z,tg:12345,Test signal,1000000000
 - `exec_price` — исполненная цена с slippage (float)
 - `fees_sol` — комиссии для этого события (float)
 - `pnl_sol_delta` — изменение PnL для этого события (float)
-- `reset_reason` — причина reset (если force close): `"profit"` | `"capacity"` | `"runner"` | `None` (str)
+- `reset_reason` — причина reset (если force close): `"profit"` | `"capacity"` | `"capacity_prune"` | `"runner"` | `"manual"` | `None` (str)
 
 **Важно:**
 - Каждая строка = 1 execution event (entry, partial exit, final exit, force close)
@@ -1237,6 +1243,11 @@ test1,ABC123...,2024-06-01T00:00:00Z,tg:12345,Test signal,1000000000
 | Capacity window size | `portfolio.capacity_reset.window_size` | `PortfolioConfig.capacity_window_size = 7` |
 | Capacity max blocked ratio | `portfolio.capacity_reset.max_blocked_ratio` | `PortfolioConfig.capacity_max_blocked_ratio = 0.4` |
 | Capacity max avg hold days | `portfolio.capacity_reset.max_avg_hold_days` | `PortfolioConfig.capacity_max_avg_hold_days = 10.0` |
+| Capacity reset mode (v1.7) | `portfolio.capacity_reset.mode` | `PortfolioConfig.capacity_reset_mode = "prune"` |
+| Prune fraction (v1.7) | `portfolio.capacity_reset.prune_fraction` | `PortfolioConfig.prune_fraction = 0.5` |
+| Prune min hold days (v1.7) | `portfolio.capacity_reset.prune_min_hold_days` | `PortfolioConfig.prune_min_hold_days = 1.0` |
+| Prune max mcap USD (v1.7) | `portfolio.capacity_reset.prune_max_mcap_usd` | `PortfolioConfig.prune_max_mcap_usd = 20000.0` |
+| Prune max current PnL pct (v1.7) | `portfolio.capacity_reset.prune_max_current_pnl_pct` | `PortfolioConfig.prune_max_current_pnl_pct = -0.30` |
 | Execution profile | `portfolio.execution_profile` | `PortfolioConfig.execution_profile = "realistic"` |
 | Swap fee | `portfolio.fee.swap_fee_pct` | `FeeModel.swap_fee_pct = 0.003` |
 | LP fee | `portfolio.fee.lp_fee_pct` | `FeeModel.lp_fee_pct = 0.001` |

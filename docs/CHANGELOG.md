@@ -1,5 +1,168 @@
 # Changelog
 
+## [Feature: Capacity PRUNE (v1.7)] - 2025-01-XX
+
+### Реализация Capacity PRUNE: частичное закрытие позиций вместо полного reset
+
+#### 🎯 Цель изменений
+
+Заменить механизм capacity reset "close-all" на Capacity PRUNE (частичное закрытие ~50% "плохих" позиций) для предотвращения конфликта с profit reset. Capacity prune освобождает слоты портфеля без сброса profit cycle.
+
+#### ✨ Основные изменения
+
+##### 1. **Новый режим capacity reset: mode: prune**
+
+**Файл:** `backtester/domain/portfolio.py`
+
+**Добавлено:**
+- `capacity_reset_mode: Literal["close_all", "prune"]` - режим capacity reset
+- `prune_fraction: float` - доля кандидатов для закрытия (0.5 = 50%)
+- `prune_min_hold_days: float` - минимальное время удержания для кандидата
+- `prune_max_mcap_usd: float` - максимальный mcap для кандидата (USD)
+- `prune_max_current_pnl_pct: float` - максимальный текущий PnL для кандидата
+
+**Реализовано:**
+- `_compute_current_pnl_pct()` - расчет текущего PnL позиции (mark-to-market)
+- `_select_capacity_prune_candidates()` - выбор кандидатов по критериям
+- `_maybe_apply_capacity_prune()` - применение prune (закрытие ~50% плохих позиций)
+
+**Критерии кандидата для prune:**
+1. `hold_days >= prune_min_hold_days` - долго висит
+2. `mcap_usd <= prune_max_mcap_usd` - низкий mcap (если есть в meta)
+3. `current_pnl_pct <= prune_max_current_pnl_pct` - плохой текущий PnL
+
+**Score-based selection:**
+Кандидаты сортируются по score (более "плохие" = выше score):
+```
+score = (-current_pnl_pct) * 100 + hold_days * 1.0 + (prune_max_mcap_usd - mcap_usd) / prune_max_mcap_usd
+```
+
+##### 2. **Расширены PortfolioStats и PortfolioState**
+
+**Файлы:** `backtester/domain/portfolio.py`, `backtester/domain/portfolio_reset.py`
+
+**Добавлено:**
+- `portfolio_capacity_prune_count: int` - количество срабатываний capacity prune
+- `last_capacity_prune_time: Optional[datetime]` - время последнего capacity prune
+
+**Важно:** Prune НЕ увеличивает `portfolio_reset_count` и НЕ обновляет `cycle_start_equity` / `equity_peak_in_cycle`.
+
+##### 3. **Meta-флаги для закрытых prune позиций**
+
+**Файл:** `backtester/domain/portfolio.py`
+
+Каждая позиция, закрытая capacity prune, получает:
+- `closed_by_reset: True`
+- `reset_reason: "capacity_prune"`
+- `capacity_prune: True`
+- `capacity_prune_trigger_time: ISO timestamp`
+- `capacity_prune_current_pnl_pct: float`
+- `capacity_prune_mcap_usd: float`
+- `capacity_prune_hold_days: float`
+- `capacity_prune_score: float`
+
+##### 4. **Сохранение mcap_usd в Position.meta**
+
+**Файл:** `backtester/domain/portfolio.py`
+
+При создании позиции из StrategyOutput:
+- `mcap_usd` и `mcap_usd_at_entry` сохраняются из `entry_mcap_proxy` (если есть в StrategyOutput.meta)
+
+##### 5. **Обновлен парсинг YAML**
+
+**Файл:** `backtester/application/runner.py`
+
+Добавлено чтение новых полей:
+- `capacity_reset.mode`
+- `capacity_reset.prune_fraction`
+- `capacity_reset.prune_min_hold_days`
+- `capacity_reset.prune_max_mcap_usd`
+- `capacity_reset.prune_max_current_pnl_pct`
+
+**Backward compatibility:** Если `mode` не указан, используется `close_all` (старое поведение).
+
+##### 6. **Обновлен пример конфига**
+
+**Файл:** `config/backtest_example.yaml`
+
+Добавлен пример использования capacity prune с комментариями.
+
+#### 🔧 Технические детали
+
+**Архитектурное правило: PRUNE ≠ RESET**
+
+Capacity prune НЕ должен:
+- Увеличивать `portfolio_reset_count`
+- Менять `cycle_start_equity`
+- Менять `equity_peak_in_cycle`
+- Использовать `PortfolioResetContext` (marker invariant)
+
+Capacity prune ДОЛЖЕН:
+- Закрыть выбранные позиции через market close (ExecutionModel)
+- Пометить позиции meta-флагами
+- Вести отдельные счётчики (`portfolio_capacity_prune_count`)
+
+**Как выбираются позиции для prune:**
+
+1. Собираются кандидаты по критериям (hold_days, mcap, current_pnl)
+2. Вычисляется score для каждого кандидата
+3. Сортировка по score DESC (более плохие первыми)
+4. Берется top-K, где `K = ceil(prune_fraction * len(candidates))`, минимум 1
+5. Если кандидатов < 2, prune не делается (чтобы не было шумовых единичных закрытий)
+
+#### 📊 Результаты
+
+**До изменений:**
+- ❌ Capacity reset (close-all) часто срабатывал раньше profit reset
+- ❌ Profit reset почти никогда не случался
+- ❌ Портфель не мог достичь profit порога из-за частых capacity reset
+
+**После изменений:**
+- ✅ Capacity prune закрывает только ~50% плохих позиций
+- ✅ Profit reset может сработать после серии prune событий
+- ✅ Механики не конфликтуют: capacity = дыхание, profit = масштабирование
+
+#### 🧪 Тесты
+
+**Создан файл:** `tests/portfolio/test_portfolio_capacity_prune.py`
+
+**Тесты:**
+- `test_capacity_prune_closes_half_of_candidates` - проверяет закрытие ~50% кандидатов
+- `test_capacity_prune_does_not_update_cycle_start_equity` - проверяет, что prune не обновляет cycle tracking
+- `test_profit_reset_still_closes_all` - проверяет, что profit reset работает как раньше
+- `test_capacity_prune_and_profit_reset_can_both_happen` - проверяет, что оба механизма могут работать независимо
+
+#### 📝 Измененные файлы
+
+**Код:**
+- `backtester/domain/portfolio.py` - добавлены методы для capacity prune
+- `backtester/domain/portfolio_reset.py` - добавлены поля для prune tracking
+- `backtester/application/runner.py` - обновлен парсинг YAML
+
+**Конфиги:**
+- `config/backtest_example.yaml` - добавлен пример использования capacity prune
+
+**Тесты:**
+- `tests/portfolio/test_portfolio_capacity_prune.py` (новый)
+
+**Документация:**
+- `README.md` - обновлена информация о capacity prune
+- `docs/CHANGELOG.md` - добавлена запись о v1.7
+
+#### 💡 Коммиты
+
+```
+feat: implement capacity prune (v1.7) - partial position closure
+feat: add prune configuration fields to PortfolioConfig
+feat: add prune tracking fields to PortfolioStats/PortfolioState
+feat: implement _maybe_apply_capacity_prune and candidate selection
+feat: save mcap_usd in Position.meta for prune filtering
+test: add capacity prune tests
+docs: update README and CHANGELOG for capacity prune
+```
+
+---
+
 ## [Docs: Comprehensive Documentation Update] - 2025-12-XX
 
 ### Обновление всей документации согласно текущему состоянию проекта

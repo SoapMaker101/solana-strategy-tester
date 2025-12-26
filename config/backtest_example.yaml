@@ -22,8 +22,8 @@ portfolio:
   percent_per_trade: 0.01         # Доля капитала на одну сделку (1%)
   max_exposure: 0.95               # Максимальная экспозиция портфеля (80% капитала в рынке)
   max_open_positions: 100          # Максимальное количество одновременно открытых позиций
-  profit_reset_enabled: false     # Profit reset: при достижении порога equity портфеля закрываются все позиции
-  profit_reset_multiple: 1.2      # Множитель для profit reset (например, 2.0 = x2, 3.0 = x3). Используется только если profit_reset_enabled=true
+  profit_reset_enabled: true     # Profit reset: при достижении порога equity портфеля закрываются все позиции
+  profit_reset_multiple: 1.5      # Множитель для profit reset (например, 2.0 = x2, 3.0 = x3). Используется только если profit_reset_enabled=true
   # Capacity reset (v1.6) - предотвращает "capacity choke" (портфель перестает открывать новые сделки)
   capacity_reset:
     enabled: true                  # Включить capacity reset
@@ -31,6 +31,17 @@ portfolio:
     window_size: 7d               # Размер окна: дни (например, "7d" или 7) для time, количество сигналов для signals
     max_blocked_ratio: 0.7        # Максимальная доля отклоненных сигналов за окно (0.4 = 40%)
     max_avg_hold_days: 20.0       # Максимальное среднее время удержания открытых позиций (дни)
+    # Capacity prune (v1.7) - частичное закрытие плохих позиций вместо полного reset
+    mode: "prune"                 # Режим: "prune" (рекомендуется, частичное закрытие) или "close_all" (legacy, закрыть все)
+    prune_fraction: 0.5          # Доля кандидатов для закрытия при prune (0.5 = 50%)
+    prune_min_hold_days: 1.0      # Минимальное время удержания для кандидата (дни)
+    prune_max_mcap_usd: 20000     # Максимальный mcap для кандидата (USD)
+    prune_max_current_pnl_pct: -0.80  # Максимальный текущий PnL для кандидата (-0.80 = -80%)
+    # Capacity prune hardening (v1.7.1)
+    prune_cooldown_signals: 200   # Cooldown по количеству сигналов (0 = отключен)
+    prune_cooldown_days: null     # Cooldown по времени в днях (null = отключен)
+    prune_min_candidates: 3       # Минимальное количество кандидатов для выполнения prune
+    prune_protect_min_max_xn: 2.0 # Защита позиций с max_xn >= этого значения (null = отключено)
   execution_profile: "realistic"   # Профиль исполнения: "realistic" (по умолчанию), "stress", или "custom"
   fee:
     swap_fee_pct: 0.003          # Комиссия swap (0.3%)

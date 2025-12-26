@@ -29,6 +29,7 @@ The goal: batch-test different Runner configurations on historical candles and f
    - position management
    - portfolio-level reset (profit reset: close all positions when equity threshold reached)
    - capacity reset (v1.6): prevents "capacity choke" by closing all positions when portfolio is full and turnover is low
+   - capacity prune (v1.7): partial position closure instead of full reset, closes ~50% of "bad" positions to free up slots
 5. **Research Pipeline** — two-stage analysis:
    - **Stage A**: Window-based stability analysis → `strategy_stability.csv`
    - **Stage B**: Strategy selection by criteria → `strategy_selection.csv`
@@ -239,6 +240,12 @@ portfolio:
     window_size: 7d      # Window size (days for "time", count for "signals")
     max_blocked_ratio: 0.7    # Max ratio of blocked signals in window
     max_avg_hold_days: 20.0   # Max average hold time for open positions
+    # Capacity prune (v1.7) - partial closure instead of full reset
+    mode: "close_all"         # "close_all" (old behavior) or "prune" (partial closure)
+    prune_fraction: 0.5       # Fraction of candidates to close (0.5 = 50%)
+    prune_min_hold_days: 1.0  # Min hold time for candidate (days)
+    prune_max_mcap_usd: 20000 # Max mcap for candidate (USD)
+    prune_max_current_pnl_pct: -0.30  # Max current PnL for candidate (-0.30 = -30%)
   
   # Execution profiles with reason-based slippage
   execution_profile: "realistic"  # "realistic", "stress", or "custom"
@@ -295,6 +302,7 @@ python -m pytest tests/decision/ -v
 - ✅ Phase 5: Research pipeline (Stage A/B) for Runner strategies
 - ✅ Phase 5.5: Capacity reset (v1.6) - prevents capacity choke
 - ✅ Phase 5.6: Execution profiles with reason-based slippage
+- ✅ Phase 5.7: Capacity prune (v1.7) - partial position closure instead of full reset
 
 **Planned:**
 - Phase 6: Data sources integration (DexScreener, GMGN, Axiom adapters)

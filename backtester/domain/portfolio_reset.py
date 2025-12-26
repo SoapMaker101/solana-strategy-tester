@@ -17,7 +17,8 @@ from .position import Position
 class ResetReason(Enum):
     """Причина срабатывания reset."""
     EQUITY_THRESHOLD = "equity_threshold"  # Portfolio equity достигло порога (profit reset)
-    CAPACITY_PRESSURE = "capacity_pressure"  # Capacity reset: портфель забит, мало закрытий, много отклонений
+    CAPACITY_PRESSURE = "capacity_pressure"  # Capacity reset: портфель забит, мало закрытий, много отклонений (close-all)
+    CAPACITY_PRUNE = "capacity_prune"  # Capacity prune: частичное закрытие плохих позиций (v1.7)
     RUNNER_XN = "runner_xn"  # Runner позиция достигла XN уровня
     MANUAL = "manual"  # Ручной reset (для расширения в будущем)
 
@@ -82,6 +83,10 @@ class PortfolioState:
     portfolio_reset_profit_count: int = 0  # Количество profit reset
     portfolio_reset_capacity_count: int = 0  # Количество capacity reset
     
+    # Capacity prune tracking (v1.7)
+    portfolio_capacity_prune_count: int = 0  # Количество срабатываний capacity prune
+    last_capacity_prune_time: Optional[datetime] = None  # Время последнего capacity prune
+    
     # Обратная совместимость
     @property
     def reset_count(self) -> int:
@@ -103,6 +108,13 @@ class PortfolioState:
     blocked_by_capacity_in_window: int = 0  # Количество отклоненных сигналов по capacity за окно
     closed_in_window: int = 0  # Количество закрытых позиций за окно
     avg_hold_time_open_positions: float = 0.0  # Среднее время удержания открытых позиций (дни)
+    
+    # Capacity prune cooldown tracking (v1.7.1)
+    capacity_prune_cooldown_until_signal_index: Optional[int] = None  # Cooldown до signal index
+    capacity_prune_cooldown_until_time: Optional[datetime] = None  # Cooldown до времени (опционально)
+    
+    # Capacity prune observability (v1.7.1)
+    capacity_prune_events: List[Dict[str, Any]] = field(default_factory=list)  # Список событий prune для статистики
     
     def current_equity(self) -> float:
         """Текущая equity (balance + открытые позиции)."""
@@ -217,6 +229,7 @@ def apply_portfolio_reset(
         reset_reason_str = {
             ResetReason.EQUITY_THRESHOLD: "profit",
             ResetReason.CAPACITY_PRESSURE: "capacity",
+            ResetReason.CAPACITY_PRUNE: "capacity_prune",
             ResetReason.RUNNER_XN: "runner",
             ResetReason.MANUAL: "manual",
         }.get(context.reason, context.reason.value)

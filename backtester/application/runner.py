@@ -268,6 +268,31 @@ class BacktestRunner:
         # Execution profile (по умолчанию realistic)
         execution_profile = portfolio_cfg.get("execution_profile", "realistic")
         
+        # Profit reset конфигурация
+        profit_reset_enabled = portfolio_cfg.get("profit_reset_enabled")
+        profit_reset_multiple = portfolio_cfg.get("profit_reset_multiple")
+        
+        # Capacity reset конфигурация
+        capacity_reset_cfg = portfolio_cfg.get("capacity_reset", {}) or {}
+        capacity_reset_enabled = capacity_reset_cfg.get("enabled", True)
+        capacity_window_type = capacity_reset_cfg.get("window_type", "time")
+        capacity_window_size = capacity_reset_cfg.get("window_size", 7)
+        capacity_max_blocked_ratio = capacity_reset_cfg.get("max_blocked_ratio", 0.4)
+        capacity_max_avg_hold_days = capacity_reset_cfg.get("max_avg_hold_days", 10.0)
+        
+        # Capacity prune конфигурация (v1.7)
+        capacity_reset_mode = capacity_reset_cfg.get("mode", "close_all")  # По умолчанию close_all для backward compatibility
+        prune_fraction = capacity_reset_cfg.get("prune_fraction", 0.5)
+        prune_min_hold_days = capacity_reset_cfg.get("prune_min_hold_days", 1.0)
+        prune_max_mcap_usd = capacity_reset_cfg.get("prune_max_mcap_usd", 20000.0)
+        prune_max_current_pnl_pct = capacity_reset_cfg.get("prune_max_current_pnl_pct", -0.30)
+        
+        # Capacity prune hardening (v1.7.1)
+        prune_cooldown_signals = capacity_reset_cfg.get("prune_cooldown_signals", 0)
+        prune_cooldown_days = capacity_reset_cfg.get("prune_cooldown_days")
+        prune_min_candidates = capacity_reset_cfg.get("prune_min_candidates", 3)
+        prune_protect_min_max_xn = capacity_reset_cfg.get("prune_protect_min_max_xn", 2.0)
+        
         return PortfolioConfig(
             initial_balance_sol=float(portfolio_cfg.get("initial_balance_sol", 10.0)),
             allocation_mode=portfolio_cfg.get("allocation_mode", "dynamic"),
@@ -280,6 +305,22 @@ class BacktestRunner:
             backtest_end=backtest_end,
             runner_reset_enabled=portfolio_cfg.get("runner_reset_enabled", False),
             runner_reset_multiple=float(portfolio_cfg.get("runner_reset_multiple", 2.0)),
+            profit_reset_enabled=profit_reset_enabled,
+            profit_reset_multiple=profit_reset_multiple,
+            capacity_reset_enabled=capacity_reset_enabled,
+            capacity_window_type=capacity_window_type,
+            capacity_window_size=capacity_window_size,
+            capacity_max_blocked_ratio=float(capacity_max_blocked_ratio),
+            capacity_max_avg_hold_days=float(capacity_max_avg_hold_days),
+            capacity_reset_mode=capacity_reset_mode,
+            prune_fraction=float(prune_fraction),
+            prune_min_hold_days=float(prune_min_hold_days),
+            prune_max_mcap_usd=float(prune_max_mcap_usd),
+            prune_max_current_pnl_pct=float(prune_max_current_pnl_pct),
+            prune_cooldown_signals=int(prune_cooldown_signals),
+            prune_cooldown_days=float(prune_cooldown_days) if prune_cooldown_days is not None else None,
+            prune_min_candidates=int(prune_min_candidates),
+            prune_protect_min_max_xn=float(prune_protect_min_max_xn) if prune_protect_min_max_xn is not None else None,
         )
 
     def run_portfolio(self) -> Dict[str, PortfolioResult]:
