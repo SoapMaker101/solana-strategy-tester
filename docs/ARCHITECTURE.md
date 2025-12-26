@@ -141,10 +141,13 @@ class RunnerConfig(StrategyConfig):
 **Portfolio Engine** (`portfolio.py`):
 - Реалистичная симуляция торговли с учетом:
   - Комиссий (`FeeModel`)
-  - Проскальзывания (`ExecutionProfileConfig`)
+  - Проскальзывания (`ExecutionProfileConfig`) с reason-based multipliers
   - Ограничений портфеля (max positions, position sizing)
 - Обрабатывает частичные выходы Runner стратегий
-- Реализует portfolio-level reset (закрытие всех позиций при достижении equity threshold)
+- Реализует portfolio-level reset:
+  - **Profit reset**: закрытие всех позиций при достижении equity threshold
+  - **Capacity reset (v1.6)**: закрытие всех позиций при capacity pressure (портфель заполнен, низкий turnover)
+- Event-driven симуляция для корректного моделирования одновременного удержания позиций
 
 **Position** (`position.py`):
 - Модель позиции с поддержкой частичных выходов
@@ -152,8 +155,9 @@ class RunnerConfig(StrategyConfig):
 
 **Portfolio Reset** (`portfolio_reset.py`):
 - Логика portfolio-level reset
-- Проверка порогов equity
-- Закрытие всех позиций через ExecutionModel
+- **Profit reset**: проверка порогов equity (`equity_peak_in_cycle >= cycle_start_equity * profit_reset_multiple`)
+- **Capacity reset (v1.6)**: проверка capacity pressure (open_ratio, blocked_ratio, avg_hold_days)
+- Закрытие всех позиций через ExecutionModel (market close)
 
 **Trade Features** (`trade_features.py`):
 - Market cap proxy
@@ -164,8 +168,16 @@ class RunnerConfig(StrategyConfig):
 
 **ExecutionProfileConfig**:
 - Моделирование исполнения ордеров
-- Проскальзывание (slippage)
-- Различные профили исполнения (conservative, aggressive, etc.)
+- Reason-based slippage multipliers:
+  - `entry`: slippage при входе
+  - `exit_tp`: slippage при выходе по TP (меньше, т.к. ликвидность лучше)
+  - `exit_sl`: slippage при выходе по SL (больше, т.к. паника)
+  - `exit_timeout`: slippage при timeout (меньше, т.к. плановый выход)
+  - `exit_manual`: slippage при ручном выходе
+- Профили исполнения:
+  - `realistic` (по умолчанию): базовое slippage 3% с разными multipliers
+  - `stress`: базовое slippage 10% для stress-testing
+  - `custom`: пользовательский профиль из конфига
 
 ---
 
@@ -389,4 +401,7 @@ class RunnerConfig(StrategyConfig):
 - [`docs/PORTFOLIO_LAYER.md`](./PORTFOLIO_LAYER.md) — Portfolio layer детали
 - [`docs/RUNNER_COMPLETE_GUIDE.md`](./RUNNER_COMPLETE_GUIDE.md) — Runner strategy guide
 - [`docs/TECHNICAL_REPORT.md`](./TECHNICAL_REPORT.md) — Technical audit
+
+
+
 

@@ -25,9 +25,10 @@ The goal: batch-test different Runner configurations on historical candles and f
    - partial exits at different XN levels (2x, 5x, 10x),
    - time stop and portfolio-level reset
 4. **Portfolio Engine** — realistic simulation with:
-   - fees and slippage modeling
+   - fees and slippage modeling (execution profiles: realistic/stress/custom)
    - position management
-   - portfolio-level reset (close all positions when equity threshold reached)
+   - portfolio-level reset (profit reset: close all positions when equity threshold reached)
+   - capacity reset (v1.6): prevents "capacity choke" by closing all positions when portfolio is full and turnover is low
 5. **Research Pipeline** — two-stage analysis:
    - **Stage A**: Window-based stability analysis → `strategy_stability.csv`
    - **Stage B**: Strategy selection by criteria → `strategy_selection.csv`
@@ -230,6 +231,27 @@ class Candle:
 portfolio:
   profit_reset_enabled: true
   profit_reset_multiple: 2.0  # Close all positions when equity >= cycle_start_equity * 2.0
+  
+  # Capacity reset (v1.6) - prevents "capacity choke"
+  capacity_reset:
+    enabled: true
+    window_type: "time"  # "time" or "signals"
+    window_size: 7d      # Window size (days for "time", count for "signals")
+    max_blocked_ratio: 0.7    # Max ratio of blocked signals in window
+    max_avg_hold_days: 20.0   # Max average hold time for open positions
+  
+  # Execution profiles with reason-based slippage
+  execution_profile: "realistic"  # "realistic", "stress", or "custom"
+  fee:
+    profiles:
+      realistic:
+        base_slippage_pct: 0.03
+        slippage_multipliers:
+          entry: 1.0
+          exit_tp: 0.6
+          exit_sl: 1.3
+          exit_timeout: 0.25
+          exit_manual: 0.5
 ```
 
 ---
@@ -271,6 +293,8 @@ python -m pytest tests/decision/ -v
 - ✅ Phase 4: Portfolio layer (fees, slippage, portfolio-level reset)
 - ✅ Phase 4.5: Trade features (market cap proxy, volume/volatility windows)
 - ✅ Phase 5: Research pipeline (Stage A/B) for Runner strategies
+- ✅ Phase 5.5: Capacity reset (v1.6) - prevents capacity choke
+- ✅ Phase 5.6: Execution profiles with reason-based slippage
 
 **Planned:**
 - Phase 6: Data sources integration (DexScreener, GMGN, Axiom adapters)

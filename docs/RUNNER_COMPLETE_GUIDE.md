@@ -1,10 +1,12 @@
 # Полное руководство по Runner стратегии
 
-**Версия:** 2.1  
-**Дата:** 2025-01-XX  
+**Версия:** 2.2  
+**Дата:** 2025-12-XX  
 **Обновлено:** 
 - Добавлены Stage B критерии и portfolio-level reset
 - Исправлен расчет total_capital в fixed mode для множества мелких позиций
+- Добавлена информация о capacity reset (v1.6)
+- Добавлена информация об execution profiles с reason-based slippage
 
 ---
 
@@ -37,7 +39,10 @@ Runner стратегия — это стратегия с **лестницей 
 - ✅ **Несколько уровней TP:** Закрытие позиции частями на разных уровнях (x2, x5, x10)
 - ✅ **Частичные выходы:** Каждый уровень закрывает определенную долю позиции
 - ✅ **Time stop:** Автоматическое закрытие остатка через заданное время
-- ✅ **Portfolio-level reset:** Закрытие всех позиций при достижении порога equity
+- ✅ **Portfolio-level reset:** 
+  - **Profit reset**: Закрытие всех позиций при достижении порога equity
+  - **Capacity reset (v1.6)**: Закрытие всех позиций при capacity pressure (портфель заполнен, низкий turnover)
+- ✅ **Execution profiles**: Reason-based slippage multipliers для реалистичного моделирования
 - ✅ **Stage B критерии:** Отдельные критерии отбора для Runner стратегий
 
 ### Отличия от RR/RRD стратегий
@@ -47,7 +52,7 @@ Runner стратегия — это стратегия с **лестницей 
 | Выход | Полный выход по TP/SL | Частичные выходы на разных уровнях |
 | Время удержания | Короткое (часы-дни) | Длительное (дни-недели) |
 | Метрики Stage B | survival_rate, variance | hit_rate_x2, hit_rate_x5, tail_contribution |
-| Reset логика | Нет | Portfolio-level reset по equity |
+| Reset логика | Нет | Profit reset + Capacity reset (v1.6) |
 
 ---
 
@@ -151,15 +156,45 @@ Runner стратегия — это стратегия с **лестницей 
 portfolio:
   profit_reset_enabled: true      # Включить profit reset (portfolio-level reset)
   profit_reset_multiple: 2.0      # Порог: equity >= cycle_start_equity * 2.0
+  
+  # Capacity reset (v1.6) - предотвращает "capacity choke"
+  capacity_reset:
+    enabled: true                  # Включить capacity reset
+    window_type: "time"           # Тип окна: "time" (по времени) или "signals" (по количеству сигналов)
+    window_size: 7d               # Размер окна: дни (например, "7d" или 7) для time, количество сигналов для signals
+    max_blocked_ratio: 0.7        # Максимальная доля отклоненных сигналов за окно (0.7 = 70%)
+    max_avg_hold_days: 20.0      # Максимальное среднее время удержания открытых позиций (дни)
+  
+  # Execution profiles с reason-based slippage
+  execution_profile: "realistic"   # "realistic" (по умолчанию), "stress", или "custom"
+  fee:
+    profiles:
+      realistic:
+        base_slippage_pct: 0.03   # Базовое проскальзывание 3%
+        slippage_multipliers:
+          entry: 1.0               # 3% при входе
+          exit_tp: 0.6             # 1.8% при выходе по TP (меньше, т.к. ликвидность лучше)
+          exit_sl: 1.3             # 3.9% при выходе по SL (больше, т.к. паника)
+          exit_timeout: 0.25       # 0.75% при timeout (меньше, т.к. плановый выход)
+          exit_manual: 0.5         # 1.5% при ручном выходе
 ```
 
-**Логика:**
+**Profit Reset логика:**
 - При достижении порога: `equity >= cycle_start_equity * profit_reset_multiple`
-
-**Примечание:** Старые ключи `runner_reset_enabled` и `runner_reset_multiple` поддерживаются для обратной совместимости, но помечены как deprecated. Используйте `profit_reset_*` вместо них.
 - Закрываются все открытые позиции
 - Обновляется `cycle_start_equity = new equity`
 - Начинается новый цикл
+
+**Примечание:** Старые ключи `runner_reset_enabled` и `runner_reset_multiple` поддерживаются для обратной совместимости, но помечены как deprecated. Используйте `profit_reset_*` вместо них.
+
+**Capacity Reset логика (v1.6):**
+- Триггеры capacity reset:
+  1. `open_positions / max_open_positions >= capacity_open_ratio_threshold` (портфель заполнен)
+  2. `blocked_ratio >= max_blocked_ratio` (много отклоненных сигналов в окне)
+  3. `avg_hold_days >= max_avg_hold_days` (низкий turnover, позиции держатся долго)
+- Закрываются все открытые позиции через market close
+- Marker позиция исключается из `positions_to_force_close` и закрывается отдельно
+- Все закрытые позиции получают `closed_by_reset=True`, `reset_reason="capacity"`
 
 ---
 

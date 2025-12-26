@@ -17,6 +17,8 @@
 ### Текущий статус
 ✅ **Phase 4 завершена** — реализован портфельный слой с учетом комиссий и ограничений  
 ✅ **Phase 5 завершена** — реализован research pipeline (Stage A/B) для Runner стратегий  
+✅ **Phase 5.5 завершена** — добавлен capacity reset (v1.6) для предотвращения "capacity choke"  
+✅ **Phase 5.6 завершена** — добавлены execution profiles с reason-based slippage multipliers  
 ✅ **Trade Features** — добавлены фичи сделки (market cap proxy, volume/volatility windows)  
 ✅ **Runner-only Pipeline** — проект официально объявлен Runner-only (декабрь 2025)
 
