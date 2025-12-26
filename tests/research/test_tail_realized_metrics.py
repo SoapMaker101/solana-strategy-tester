@@ -208,3 +208,6 @@ def test_realized_tail_pnl_multiple_positions():
         assert abs(metrics["hit_rate_x4"] - 2.0/3.0) < 1e-6, \
             f"hit_rate_x4 должен быть {2.0/3.0}, получен {metrics['hit_rate_x4']}"
 
+
+
+

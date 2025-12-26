@@ -188,3 +188,6 @@ def test_stage_a_fallback_tail_pnl_share_no_tail_positions():
         assert abs(metrics["tail_pnl_share"] - 0.0) < 1e-6, \
             f"tail_pnl_share должен быть 0.0 (нет tail позиций), получен {metrics['tail_pnl_share']}"
 
+
+
+

@@ -3,8 +3,6 @@ from __future__ import annotations  # Позволяет использоват�
 from datetime import timedelta, datetime
 from typing import Any, Dict, List, Sequence, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
-import logging
 
 # Импорты компонентов системы
 from ..infrastructure.signal_loader import SignalLoader  # Интерфейс загрузки торговых сигналов
@@ -14,22 +12,6 @@ from ..domain.models import StrategyInput, StrategyOutput, Signal, Candle  # О�
 from ..domain.portfolio import PortfolioConfig, PortfolioEngine, FeeModel, PortfolioResult  # Портфельный слой
 from ..domain.execution_model import ExecutionProfileConfig  # Execution profiles
 from ..utils.warn_dedup import WarnDedup  # Потокобезопасный класс для дедупликации предупреждений
-
-logger = logging.getLogger(__name__)
-
-# Модульный флаг для warn once о deprecated runner_reset_* ключах
-_warned_runner_reset_deprecated = False
-_warned_runner_reset_both_specified = False
-
-def _warn_runner_reset_deprecated_once(msg: str) -> None:
-    """Выводит предупреждение о deprecated ключах только один раз за прогон."""
-    global _warned_runner_reset_deprecated, _warned_runner_reset_both_specified
-    if "DEPRECATED" in msg and not _warned_runner_reset_deprecated:
-        logger.warning(msg)
-        _warned_runner_reset_deprecated = True
-    elif "Both profit_reset_*" in msg and not _warned_runner_reset_both_specified:
-        logger.warning(msg)
-        _warned_runner_reset_both_specified = True
 
 class BacktestRunner:
     """
@@ -70,12 +52,6 @@ class BacktestRunner:
         self.warn_dedup = WarnDedup()
         self.global_config["_warn_dedup"] = self.warn_dedup
         
-        # Счетчики для статистики обработки сигналов (потокобезопасные)
-        self._counters_lock = threading.Lock()
-        self.signals_processed = 0
-        self.signals_skipped_no_candles = 0
-        self.signals_skipped_corrupt_csv = 0
-        
         # Портфельные результаты (по стратегиям)
         self.portfolio_results: Dict[str, PortfolioResult] = {}
 
@@ -105,34 +81,20 @@ class BacktestRunner:
         end_time = ts + timedelta(minutes=self.after_minutes)
 
         # Загружаем свечи из ценового лоадера
-        try:
-            candles: List[Candle] = self.price_loader.load_prices(
-                contract_address=contract,
-                start_time=start_time,
-                end_time=end_time,
-            )
-        except Exception as e:
-            # Если load_prices поднял исключение (не должно происходить после наших изменений, но на всякий случай)
-            print(f"[ERROR] Error loading candles for signal {sig.id}: {e}")
-            with self._counters_lock:
-                self.signals_skipped_corrupt_csv += 1
-            print(f"[signal] skipped: no candles/failed to parse (signal_id={sig.id}, contract={contract})")
-            return []
+        candles: List[Candle] = self.price_loader.load_prices(
+            contract_address=contract,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
-        # Обрабатываем случай пустых свечей
-        if not candles:
-            with self._counters_lock:
-                self.signals_skipped_no_candles += 1
-            print(f"[signal] skipped: no candles/failed to parse (signal_id={sig.id}, contract={contract})")
-            return []
-        
         # Логируем диагностику по свечам
-        with self._counters_lock:
-            self.signals_processed += 1
-        print(f"[time] Candle range requested: {start_time} to {end_time}")
-        print(f"[candles] Candles available: {len(candles)}")
-        if candles[0].timestamp > ts:
-            print(f"[WARNING] WARNING: Signal time {ts} is earlier than first candle {candles[0].timestamp}")
+        if candles:
+            print(f"[time] Candle range requested: {start_time} to {end_time}")
+            print(f"[candles] Candles available: {len(candles)}")
+            if candles[0].timestamp > ts:
+                print(f"[WARNING] WARNING: Signal time {ts} is earlier than first candle {candles[0].timestamp}")
+        else:
+            print(f"[WARNING] No candles found for signal at {ts}")
 
         # Формируем единый объект с входными данными
         data = StrategyInput(
@@ -239,17 +201,6 @@ class BacktestRunner:
                     print(f"rate_limit_failures: {summary.get('rate_limit_failures', 0)}")
                 print("="*60)
         
-        # Выводим summary по обработке сигналов
-        total_signals = len(signals)
-        print("\n" + "="*60)
-        print("=== Signal Processing Summary ===")
-        print("="*60)
-        print(f"signals_processed: {self.signals_processed}")
-        print(f"signals_skipped_no_candles: {self.signals_skipped_no_candles}")
-        print(f"signals_skipped_corrupt_csv: {self.signals_skipped_corrupt_csv}")
-        print(f"total_signals: {total_signals}")
-        print("="*60)
-        
         # Выводим summary по дедупликации предупреждений
         from ..domain.rr_utils import get_warn_summary
         warn_summary = get_warn_summary(top_n=10)
@@ -317,60 +268,6 @@ class BacktestRunner:
         # Execution profile (по умолчанию realistic)
         execution_profile = portfolio_cfg.get("execution_profile", "realistic")
         
-        # Парсим capacity reset конфигурацию (поддерживаем вложенную структуру)
-        capacity_reset_cfg = portfolio_cfg.get("capacity_reset", {})
-        if capacity_reset_cfg:
-            # Новая вложенная структура
-            capacity_reset_enabled = capacity_reset_cfg.get("enabled", True)
-            capacity_window_type = capacity_reset_cfg.get("window_type", "time")
-            capacity_window_size = capacity_reset_cfg.get("window_size", 7)
-            capacity_max_blocked_ratio = float(capacity_reset_cfg.get("max_blocked_ratio", 0.4))
-            capacity_max_avg_hold_days = float(capacity_reset_cfg.get("max_avg_hold_days", 10.0))
-            
-            # Парсим window_size: может быть int, str "7d", или число
-            if isinstance(capacity_window_size, str) and capacity_window_size.endswith("d"):
-                capacity_window_size = int(capacity_window_size[:-1])
-            else:
-                capacity_window_size = int(capacity_window_size)
-        else:
-            # Обратная совместимость: плоская структура
-            capacity_reset_enabled = portfolio_cfg.get("capacity_reset_enabled", True)
-            capacity_window_type = portfolio_cfg.get("capacity_window_mode", "time")
-            capacity_window_size = portfolio_cfg.get("capacity_window_days", 7)
-            # Для обратной совместимости используем старые параметры
-            blocked_threshold = portfolio_cfg.get("capacity_blocked_signals_threshold", 200)
-            max_positions = int(portfolio_cfg.get("max_open_positions", 10))
-            # Приблизительно вычисляем max_blocked_ratio из threshold
-            capacity_max_blocked_ratio = blocked_threshold / max(100, max_positions * 10) if blocked_threshold else 0.4
-            capacity_max_avg_hold_days = float(portfolio_cfg.get("capacity_min_turnover_threshold", 2))
-        
-        # Загрузка profit reset параметров с поддержкой обратной совместимости
-        # Приоритет: profit_reset_* > runner_reset_* (deprecated)
-        profit_reset_enabled = portfolio_cfg.get("profit_reset_enabled")
-        profit_reset_multiple = portfolio_cfg.get("profit_reset_multiple")
-        runner_reset_enabled = portfolio_cfg.get("runner_reset_enabled")
-        runner_reset_multiple = portfolio_cfg.get("runner_reset_multiple")
-        
-        # Определяем финальные значения с fallback на deprecated поля
-        final_profit_reset_enabled = profit_reset_enabled if profit_reset_enabled is not None else runner_reset_enabled
-        final_profit_reset_multiple = profit_reset_multiple if profit_reset_multiple is not None else runner_reset_multiple
-        
-        # Выводим предупреждение, если используются старые поля (только один раз за прогон)
-        if runner_reset_enabled is not None or runner_reset_multiple is not None:
-            if profit_reset_enabled is None and profit_reset_multiple is None:
-                # Используются только старые поля
-                _warn_runner_reset_deprecated_once(
-                    "DEPRECATED: runner_reset_enabled and runner_reset_multiple are renamed to "
-                    "profit_reset_enabled and profit_reset_multiple. "
-                    "Please update your YAML config. Old keys will be removed in a future version."
-                )
-            elif profit_reset_enabled is not None or profit_reset_multiple is not None:
-                # Оба варианта заданы - новые имеют приоритет
-                _warn_runner_reset_deprecated_once(
-                    "Both profit_reset_* and runner_reset_* are specified in config. "
-                    "Using profit_reset_* values (runner_reset_* ignored)."
-                )
-        
         return PortfolioConfig(
             initial_balance_sol=float(portfolio_cfg.get("initial_balance_sol", 10.0)),
             allocation_mode=portfolio_cfg.get("allocation_mode", "dynamic"),
@@ -381,15 +278,8 @@ class BacktestRunner:
             execution_profile=execution_profile,
             backtest_start=backtest_start,
             backtest_end=backtest_end,
-            profit_reset_enabled=final_profit_reset_enabled if final_profit_reset_enabled is not None else False,
-            profit_reset_multiple=float(final_profit_reset_multiple) if final_profit_reset_multiple is not None else 2.0,
-            runner_reset_enabled=runner_reset_enabled if runner_reset_enabled is not None else False,
-            runner_reset_multiple=float(runner_reset_multiple) if runner_reset_multiple is not None else 2.0,
-            capacity_reset_enabled=capacity_reset_enabled,
-            capacity_window_type=capacity_window_type,
-            capacity_window_size=capacity_window_size,
-            capacity_max_blocked_ratio=capacity_max_blocked_ratio,
-            capacity_max_avg_hold_days=capacity_max_avg_hold_days,
+            runner_reset_enabled=portfolio_cfg.get("runner_reset_enabled", False),
+            runner_reset_multiple=float(portfolio_cfg.get("runner_reset_multiple", 2.0)),
         )
 
     def run_portfolio(self) -> Dict[str, PortfolioResult]:

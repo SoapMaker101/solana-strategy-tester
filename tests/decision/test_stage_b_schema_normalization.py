@@ -219,3 +219,6 @@ def test_normalize_fills_nan_windows_positive():
     assert not pd.isna(normalized["windows_positive"].iloc[0]), "windows_positive не должен быть NaN"
     assert normalized["windows_positive"].iloc[0] == 2, "windows_positive должен быть round(0.7 * 3) = 2"
 
+
+
+

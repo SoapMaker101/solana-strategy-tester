@@ -124,3 +124,6 @@ def test_hit_rate_x4_with_exact_threshold():
         assert abs(metrics["hit_rate_x4"] - expected_hit_rate_x4) < 1e-6, \
             f"hit_rate_x4 должен быть {expected_hit_rate_x4}, получен {metrics['hit_rate_x4']}"
 
+
+
+
