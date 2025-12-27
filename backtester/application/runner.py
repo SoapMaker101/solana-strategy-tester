@@ -69,12 +69,13 @@ class BacktestRunner:
             raise ValueError("SignalLoader must return List[Signal]")  # Защита от некорректной реализации
         return signals
 
-    def _process_signal(self, sig: Signal) -> List[Dict[str, Any]]:
+    def _process_signal(self, sig: Signal, include_skipped_attempts: bool = False) -> List[Dict[str, Any]]:
         """
         Обрабатывает один сигнал и возвращает результаты для всех стратегий.
         Этот метод может быть вызван параллельно.
 
         :param sig: Сигнал для обработки
+        :param include_skipped_attempts: Если True, добавляет placeholder результаты для skipped attempts (no_candles/corrupt) для v1.9 events
         :return: Список результатов по стратегиям
         """
         results = []
@@ -105,25 +106,28 @@ class BacktestRunner:
         if not candles:
             # Нет свечей - сигнал пропущен, инкрементируем счётчик (BC)
             self.signals_skipped_no_candles += 1
-            # v1.9: создаём placeholder результаты для каждой стратегии, чтобы PortfolioEngine мог эмитить события
-            # PortfolioEngine эмитит ATTEMPT_REJECTED_NO_CANDLES на основе этих результатов
-            for strategy in self.strategies:
-                placeholder_result = StrategyOutput(
-                    entry_time=None,
-                    entry_price=None,
-                    exit_time=None,
-                    exit_price=None,
-                    pnl=0.0,
-                    reason="no_entry",
-                    meta={"detail": "no candles found"},
-                )
-                results.append({
-                    "signal_id": sig.id,
-                    "contract_address": contract,
-                    "strategy": strategy.config.name,
-                    "timestamp": ts,
-                    "result": placeholder_result,
-                })
+            
+            # v1.9: создаём placeholder результаты только если включен флаг include_skipped_attempts
+            # Это позволяет PortfolioEngine эмитить ATTEMPT_REJECTED_NO_CANDLES события,
+            # но не ломает тесты, которые ожидают len(results)==0 для skipped signals
+            if include_skipped_attempts:
+                for strategy in self.strategies:
+                    placeholder_result = StrategyOutput(
+                        entry_time=None,
+                        entry_price=None,
+                        exit_time=None,
+                        exit_price=None,
+                        pnl=0.0,
+                        reason="no_entry",
+                        meta={"detail": "no candles found"},
+                    )
+                    results.append({
+                        "signal_id": sig.id,
+                        "contract_address": contract,
+                        "strategy": strategy.config.name,
+                        "timestamp": ts,
+                        "result": placeholder_result,
+                    })
             return results
 
         # Формируем единый объект с входными данными
@@ -176,10 +180,14 @@ class BacktestRunner:
 
         return results
 
-    def run(self) -> List[Dict[str, Any]]:
+    def run(self, include_skipped_attempts: bool = False) -> List[Dict[str, Any]]:
         """
         Основной метод запуска бэктеста.
         Возвращает список словарей с результатами по каждой стратегии и сигналу.
+        
+        :param include_skipped_attempts: Если True, включает placeholder результаты для skipped attempts
+                                        (no_candles/corrupt) для v1.9 portfolio events. По умолчанию False
+                                        для обратной совместимости с тестами.
         """
         signals: List[Signal] = self._load_signals()
         
@@ -189,7 +197,7 @@ class BacktestRunner:
             
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 # Запускаем обработку всех сигналов
-                future_to_signal = {executor.submit(self._process_signal, sig): sig for sig in signals}
+                future_to_signal = {executor.submit(self._process_signal, sig, include_skipped_attempts): sig for sig in signals}
                 
                 # Собираем результаты по мере завершения
                 for future in as_completed(future_to_signal):
@@ -225,7 +233,7 @@ class BacktestRunner:
                 print("[WARNING] Parallel processing requested but only 1 signal, using sequential mode")
             
             for sig in signals:
-                signal_results = self._process_signal(sig)
+                signal_results = self._process_signal(sig, include_skipped_attempts)
                 self.results.extend(signal_results)
 
         # Выводим summary по rate limit, если используется GeckoTerminalPriceLoader

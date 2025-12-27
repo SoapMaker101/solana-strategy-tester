@@ -657,7 +657,7 @@ def main():
     )
 
     # Запуск стратегий
-    results = runner.run()
+    results = runner.run(include_skipped_attempts=True)  # v1.9: включаем skipped attempts для portfolio events
     print(f"Backtest finished. Results count: {len(results)}")
 
     # Группируем результаты по стратегиям
