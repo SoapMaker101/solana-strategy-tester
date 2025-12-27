@@ -606,8 +606,8 @@ class PortfolioEngine:
             if hold_days < self.config.prune_min_hold_days:
                 continue
             
-            # Проверка 2: mcap_usd <= prune_max_mcap_usd (если есть в meta)
-            # Используем entry_mcap_proxy из meta (если есть), иначе пропускаем
+            # Проверка 2: mcap_usd <= prune_max_mcap_usd (только если известно)
+            # Если mcap_usd неизвестно (None) - не применяем фильтр (v1.9: robust к None)
             mcap_usd = None
             if pos.meta:
                 # Пробуем разные варианты ключей
@@ -618,16 +618,14 @@ class PortfolioEngine:
                     if entry_mcap_proxy is not None:
                         mcap_usd = entry_mcap_proxy
             
-            if mcap_usd is None:
-                # Если mcap_usd нет в meta, позиция НЕ кандидат (требование из промпта)
+            # Применяем mcap-фильтр только если значение известно
+            if mcap_usd is not None and mcap_usd > self.config.prune_max_mcap_usd:
                 continue
             
-            if mcap_usd > self.config.prune_max_mcap_usd:
-                continue
-            
-            # Проверка 3: current_pnl_pct <= prune_max_current_pnl_pct
+            # Проверка 3: current_pnl_pct <= prune_max_current_pnl_pct (только если известно)
+            # _compute_current_pnl_pct всегда возвращает float, но проверяем для robustness
             current_pnl_pct = self._compute_current_pnl_pct(pos, current_time)
-            if current_pnl_pct > self.config.prune_max_current_pnl_pct:
+            if current_pnl_pct is not None and current_pnl_pct > self.config.prune_max_current_pnl_pct:
                 continue
             
             # Проверка 4: protect tail - не закрываем позиции с max_xn >= protect_min_max_xn (hardening v1.7.1)
@@ -734,8 +732,17 @@ class PortfolioEngine:
         if blocked_ratio < self.config.capacity_max_blocked_ratio:
             return False
         
-        # avg_hold_days считается по открытым позициям (как раньше)
-        avg_hold_days = capacity_tracking.get("avg_hold_time_open_positions", 0.0)
+        # avg_hold_days считается напрямую из открытых позиций (v1.9 канон, без capacity_tracking)
+        if state.open_positions:
+            total_hold_seconds = sum(
+                (current_time - p.entry_time).total_seconds() 
+                for p in state.open_positions 
+                if p.entry_time is not None
+            )
+            avg_hold_days = total_hold_seconds / len(state.open_positions) / (24 * 3600)
+        else:
+            avg_hold_days = 0.0
+        
         if avg_hold_days < self.config.capacity_max_avg_hold_days:
             return False
         
@@ -784,6 +791,30 @@ class PortfolioEngine:
         
         # Берем top-K кандидатов
         positions_to_prune = [item[0] for item in candidate_scores[:prune_count]]
+        
+        # Trigger эмитится только если реально есть позиции для закрытия (v1.9 инвариант)
+        if len(positions_to_prune) == 0:
+            return False
+        
+        # Эмитим событие CAPACITY_PRUNE_TRIGGERED (v1.9) ПЕРЕД закрытием позиций
+        if portfolio_events is not None:
+            portfolio_events.append(
+                PortfolioEvent.create_capacity_prune_triggered(
+                    timestamp=current_time,
+                    candidates_count=len(candidates),
+                    closed_count=len(positions_to_prune),
+                    blocked_ratio=blocked_ratio,
+                    meta={
+                        "open_ratio": open_ratio,
+                        "blocked_window": rejected_capacity_count,
+                        "attempted": attempted,
+                        "accepted_open_count": accepted_open_count,
+                        "rejected_capacity_count": rejected_capacity_count,
+                        "avg_hold_days": avg_hold_days,
+                        "signal_index": signal_index,
+                    },
+                )
+            )
         
         # Закрываем выбранные позиции через market close
         for pos in positions_to_prune:
@@ -878,29 +909,11 @@ class PortfolioEngine:
         logger.info(
             f"[CAPACITY_PRUNE] Triggered at {current_time.isoformat()}: "
             f"candidates={len(candidates)}, pruned={len(positions_to_prune)}, "
-            f"open_ratio={open_ratio:.2f}, blocked_window={blocked_window}, "
+            f"open_ratio={open_ratio:.2f}, blocked_window={rejected_capacity_count}, "
             f"avg_hold_days={avg_hold_days:.2f}, cooldown_until_signal={state.capacity_prune_cooldown_until_signal_index}"
         )
         
-        # Эмитим событие CAPACITY_PRUNE_TRIGGERED (v1.9)
-        if portfolio_events is not None:
-            portfolio_events.append(
-                PortfolioEvent.create_capacity_prune_triggered(
-                    timestamp=current_time,
-                    candidates_count=len(candidates),
-                    closed_count=len(positions_to_prune),
-                    blocked_ratio=blocked_ratio,
-                    meta={
-                        "open_ratio": open_ratio,
-                        "blocked_window": blocked_window,
-                        "attempted": attempted,
-                        "accepted_open_count": accepted_open_count,
-                        "rejected_capacity_count": rejected_capacity_count,
-                        "avg_hold_days": avg_hold_days,
-                        "signal_index": signal_index,
-                    },
-                )
-            )
+        # Событие CAPACITY_PRUNE_TRIGGERED уже эмитилось перед закрытием позиций (см. выше)
         
         return True
     

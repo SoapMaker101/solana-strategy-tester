@@ -6,9 +6,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from .strategy import StrategyOutput
+if TYPE_CHECKING:
+    from .models import StrategyOutput
 
 
 class PortfolioEventType(Enum):

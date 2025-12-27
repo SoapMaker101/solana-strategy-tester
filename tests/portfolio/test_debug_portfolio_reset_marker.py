@@ -133,13 +133,9 @@ def test_debug_portfolio_reset_marker():
     
     # Проверяем, какие позиции закрыты по reset
     reset_positions = [p for p in result.positions if p.meta.get("closed_by_reset", False)]
-    print(f"\nReset positions count: {len(reset_positions)}")
-    print(f"Reset positions signal_ids: {[p.signal_id for p in reset_positions]}")
     
     # Проверяем, какая позиция является marker (triggered_portfolio_reset)
     marker_positions = [p for p in result.positions if p.meta.get("triggered_portfolio_reset", False)]
-    print(f"\nMarker positions (triggered_portfolio_reset=True) count: {len(marker_positions)}")
-    print(f"Marker positions signal_ids: {[p.signal_id for p in marker_positions]}")
     
     if marker_positions:
         for marker_pos in marker_positions:

@@ -260,19 +260,27 @@ def test_capacity_prune_closes_half_of_candidates():
 
 def test_capacity_prune_does_not_update_cycle_start_equity():
     """
-    Тест: capacity prune НЕ обновляет cycle_start_equity и equity_peak_in_cycle.
+    Тест: capacity prune НЕ обновляет cycle_start_equity и equity_peak_in_cycle (v1.9 events).
     
     Сценарий:
     - capacity_reset_mode = "prune"
     - Сохраняем начальные значения cycle_start_equity и equity_peak_in_cycle
-    - Вызываем prune
-    - Ожидаем: значения не поменялись
+    - Вызываем prune через валидные capacity pressure attempts
+    - Ожидаем: значения не поменялись, нет reset-triggered событий
     
-    Проверяем:
+    Проверяем (v1.9 канон):
+    - ATTEMPT_ACCEPTED_OPEN == 2 (заполнили портфель)
+    - ATTEMPT_REJECTED_CAPACITY >= 1 (создали pressure)
+    - CAPACITY_PRUNE_TRIGGERED >= 1 (prune сработал)
+    - CLOSED_BY_CAPACITY_PRUNE >= 1 (позиции закрыты prune)
+    - PROFIT_RESET_TRIGGERED == 0 (нет profit reset)
+    - CAPACITY_CLOSE_ALL_TRIGGERED == 0 (нет close-all)
     - cycle_start_equity не изменился
     - equity_peak_in_cycle не изменился
-    - portfolio_reset_count не увеличился
+    - portfolio_reset_count == 0
     """
+    from backtester.domain.portfolio_events import PortfolioEventType
+    
     # Маленький портфель для создания capacity pressure
     config = PortfolioConfig(
         initial_balance_sol=100.0,
@@ -288,43 +296,91 @@ def test_capacity_prune_does_not_update_cycle_start_equity():
         capacity_window_size=10,
         capacity_max_blocked_ratio=0.2,  # Жёстче: 20% отклоненных достаточно
         capacity_max_avg_hold_days=1.0,
-        prune_fraction=0.5,
-        prune_min_hold_days=1.0,
-        prune_max_mcap_usd=20000.0,
-        prune_max_current_pnl_pct=-0.30,
+        prune_fraction=1.0,  # чтобы точно закрыть хотя бы одну
+        prune_min_hold_days=0.0,  # не блокируемся на hold_days
+        prune_max_mcap_usd=1e12,  # не блокируемся на mcap
+        prune_max_current_pnl_pct=1.0,  # не блокируемся на pnl (принимаем любые позиции)
+        prune_min_candidates=1,  # минимум 1 кандидат (не 3 по умолчанию)
     )
     
     engine = PortfolioEngine(config)
     
+    # Шаг 1: Зафиксировать базовые значения ДО симуляции
+    # cycle_start_equity и equity_peak_in_cycle инициализируются как initial_balance_sol
+    initial_cycle_start = config.initial_balance_sol
+    initial_peak = config.initial_balance_sol
+    
     base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     
     trades = []
-    # Заполняем портфель 2 позициями-кандидатами
+    # Шаг 2: Заполняем портфель 2 позициями-кандидатами (создают capacity pressure)
     fill_portfolio(trades, base_time, n=2)
     
-    # Добавляем блокированные попытки для capacity pressure
-    add_capacity_blocked_attempts(trades, base_time, count=10)
+    # Переносим момент создания blocked attempts на более позднее время,
+    # чтобы открытые позиции имели hold_days >= 1.0 и avg_hold_days превысил порог
+    pressure_time = base_time + timedelta(days=2)
+    
+    # Добавляем блокированные попытки для capacity pressure (валидные attempts)
+    # Используем pressure_time, чтобы позиции уже продержались 2+ дня
+    add_capacity_blocked_attempts(trades, pressure_time, count=10)
+    
+    # Добавляем ещё одну blocked попытку для стабильности триггера
+    # (иногда проверки триггера происходят "на очередной попытке")
+    add_capacity_blocked_attempts(trades, pressure_time + timedelta(minutes=1), count=1)
     
     # Сортируем trades по timestamp
     trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
-    # ===== ПРОВЕРКИ =====
+    # ===== ПРОВЕРКИ (v1.9 канон) =====
     
-    # 1. Проверяем, что prune сработал
-    assert result.stats.portfolio_capacity_prune_count >= 1, \
-        "Capacity prune должен был сработать"
+    from tests.helpers.events import count_event
     
-    # 2. Проверяем, что portfolio_reset_count НЕ увеличился
+    # 1. Проверяем prerequisite events (pressure создан валидно)
+    accepted_open_count = count_event(result.stats, PortfolioEventType.ATTEMPT_ACCEPTED_OPEN)
+    assert accepted_open_count == 2, \
+        f"Должно быть 2 открытых позиции (заполнили портфель), получено: {accepted_open_count}"
+    
+    rejected_capacity_count = count_event(result.stats, PortfolioEventType.ATTEMPT_REJECTED_CAPACITY)
+    assert rejected_capacity_count >= 1, \
+        f"Должна быть хотя бы 1 отклоненная попытка по capacity (для pressure), получено: {rejected_capacity_count}"
+    
+    # 2. Проверяем, что prune сработал (через события)
+    prune_triggered_count = count_event(result.stats, PortfolioEventType.CAPACITY_PRUNE_TRIGGERED)
+    assert prune_triggered_count >= 1, \
+        f"CAPACITY_PRUNE_TRIGGERED должен быть >= 1, получено: {prune_triggered_count}"
+    
+    closed_by_prune_count = count_event(result.stats, PortfolioEventType.CLOSED_BY_CAPACITY_PRUNE)
+    assert closed_by_prune_count >= 1, \
+        f"CLOSED_BY_CAPACITY_PRUNE должен быть >= 1, получено: {closed_by_prune_count}"
+    
+    # 3. Проверяем, что НЕТ reset-triggered событий (prune не считается reset)
+    profit_reset_count = count_event(result.stats, PortfolioEventType.PROFIT_RESET_TRIGGERED)
+    assert profit_reset_count == 0, \
+        f"PROFIT_RESET_TRIGGERED не должно быть (prune не reset), получено: {profit_reset_count}"
+    
+    capacity_close_all_count = count_event(result.stats, PortfolioEventType.CAPACITY_CLOSE_ALL_TRIGGERED)
+    assert capacity_close_all_count == 0, \
+        f"CAPACITY_CLOSE_ALL_TRIGGERED не должно быть (используем prune, не close-all), получено: {capacity_close_all_count}"
+    
+    # 4. Проверяем, что portfolio_reset_count НЕ увеличился
     assert result.stats.portfolio_reset_count == 0, \
         f"portfolio_reset_count не должен увеличиваться от prune, получено: {result.stats.portfolio_reset_count}"
     
-    # 3. Проверяем, что cycle_start_equity остался начальным (или не изменился из-за prune)
-    # cycle_start_equity должен быть равен initial_balance_sol (если не было profit reset)
-    assert result.stats.cycle_start_equity == config.initial_balance_sol or \
-           result.stats.cycle_start_equity > 0, \
-        f"cycle_start_equity должен остаться разумным значением, получено: {result.stats.cycle_start_equity}"
+    # 5. Проверяем, что cycle_start_equity не изменился
+    assert result.stats.cycle_start_equity == initial_cycle_start, \
+        f"cycle_start_equity не должен измениться от prune. Начальное: {initial_cycle_start}, получено: {result.stats.cycle_start_equity}"
+    
+    # 6. Проверяем, что equity_peak_in_cycle не изменился (или изменился только из-за роста позиций, но не из-за reset)
+    # Примечание: equity_peak_in_cycle может немного измениться из-за роста позиций, но не должен сброситься
+    assert result.stats.equity_peak_in_cycle >= initial_peak, \
+        f"equity_peak_in_cycle не должен уменьшиться от prune. Начальное: {initial_peak}, получено: {result.stats.equity_peak_in_cycle}"
+    
+    # 7. BC проверка: portfolio_capacity_prune_count должен совпадать с количеством закрытий
+    assert result.stats.portfolio_capacity_prune_count == closed_by_prune_count, \
+        f"BC счетчик portfolio_capacity_prune_count должен совпадать с количеством CLOSED_BY_CAPACITY_PRUNE событий. " \
+        f"Счетчик: {result.stats.portfolio_capacity_prune_count}, события: {closed_by_prune_count}"
 
 
 def test_profit_reset_still_closes_all():
@@ -1077,36 +1133,36 @@ def test_prune_protects_positions_with_max_xn():
     
     base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     
-        trades = []
-        # Открываем ровно 2 позиции:
-        # 1. Обычный кандидат (будет закрыт prune)
-        entry_time = base_time - timedelta(days=2)
-        exit_time = base_time + timedelta(days=30)
-        trade = make_entry_trade(
-            signal_id="signal_1",
-            contract_address="TOKEN1",
-            entry_time=entry_time,
-            exit_time=exit_time,
-            last_seen_price=0.7,  # Для current_pnl_pct fallback
-        )
-        trades.append(trade)
-        
-        # 2. Protected кандидат (max_xn=2.5, защищена от prune)
-        protected_trade = make_entry_trade(
-            signal_id="protected_signal",
-            contract_address="PROTECTED",
-            entry_time=entry_time,
-            exit_time=exit_time,
-            last_seen_price=0.7,  # Для current_pnl_pct fallback
-            max_xn=2.5,  # Hardening: защита от prune
-        )
-        trades.append(protected_trade)
+    trades = []
+    # Открываем ровно 2 позиции:
+    # 1. Обычный кандидат (будет закрыт prune)
+    entry_time = base_time - timedelta(days=2)
+    exit_time = base_time + timedelta(days=30)
+    trade = make_entry_trade(
+        signal_id="signal_1",
+        contract_address="TOKEN1",
+        entry_time=entry_time,
+        exit_time=exit_time,
+        last_seen_price=0.7,  # Для current_pnl_pct fallback
+    )
+    trades.append(trade)
+    
+    # 2. Protected кандидат (max_xn=2.5, защищена от prune)
+    protected_trade = make_entry_trade(
+        signal_id="protected_signal",
+        contract_address="PROTECTED",
+        entry_time=entry_time,
+        exit_time=exit_time,
+        last_seen_price=0.7,  # Для current_pnl_pct fallback
+        max_xn=2.5,  # Hardening: защита от prune
+    )
+    trades.append(protected_trade)
 
-        # Добавляем блокированные попытки для capacity pressure (валидные, с meta флагом)
-        add_capacity_blocked_attempts(trades, base_time, count=10)
-        
-        # Сортируем trades по timestamp
-        trades = sorted(trades, key=lambda x: x["timestamp"])
+    # Добавляем блокированные попытки для capacity pressure (валидные, с meta флагом)
+    add_capacity_blocked_attempts(trades, base_time, count=10)
+    
+    # Сортируем trades по timestamp
+    trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
