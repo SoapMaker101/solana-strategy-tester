@@ -1944,22 +1944,27 @@ class PortfolioEngine:
         events: List[TradeEvent] = []
         for trade in trades:
             trade_output: StrategyOutput = trade["result"]
-            entry_time: datetime = trade_output.entry_time  # type: ignore
-            exit_time: datetime = trade_output.exit_time    # type: ignore
+            trade_entry_time: Optional[datetime] = trade_output.entry_time
+            trade_exit_time: Optional[datetime] = trade_output.exit_time
             
-            # Создаем ENTRY событие
+            # v1.9: для no_candles/corrupt создаём ENTRY событие с timestamp сигнала (для эмиссии событий)
+            # event_time для TradeEvent: используем entry_time если есть, иначе timestamp сигнала
+            event_timestamp = trade_entry_time if trade_entry_time is not None else trade.get("timestamp", datetime.now(timezone.utc))
+            
+            # Создаем ENTRY событие (даже если entry_time is None - для эмиссии ATTEMPT_REJECTED_*)
             events.append(TradeEvent(
                 event_type=EventType.ENTRY,
-                event_time=entry_time,
+                event_time=event_timestamp,  # Используем timestamp сигнала для no_candles/corrupt
                 trade_data=trade
             ))
             
-            # Создаем EXIT событие
-            events.append(TradeEvent(
-                event_type=EventType.EXIT,
-                event_time=exit_time,
-                trade_data=trade
-            ))
+            # Создаем EXIT событие только если есть exit_time
+            if trade_exit_time is not None:
+                events.append(TradeEvent(
+                    event_type=EventType.EXIT,
+                    event_time=trade_exit_time,
+                    trade_data=trade
+                ))
         
         # Сортируем события по времени (EXIT перед ENTRY на одном timestamp)
         events.sort()
@@ -2036,20 +2041,81 @@ class PortfolioEngine:
             for event in entry_events:
                 trade_data = event.trade_data
                 entry_output: StrategyOutput = trade_data["result"]
-                entry_time: datetime = entry_output.entry_time  # type: ignore
+                entry_time: Optional[datetime] = entry_output.entry_time  # Может быть None для no_candles/corrupt
                 signal_id = trade_data["signal_id"]
                 contract_address = trade_data["contract_address"]
                 strategy_name = trade_data.get("strategy", "unknown")
                 
+                # Определяем timestamp для события (fallback на event_time если entry_time отсутствует)
+                event_timestamp = entry_time if entry_time is not None else event.event_time
+                
+                # Проверяем причину отсутствия entry_time (no_candles/corrupt)
+                meta_detail = entry_output.meta.get("detail", "") if entry_output.meta else ""
+                is_no_candles = entry_time is None and (
+                    entry_output.reason == "no_entry" and (
+                        "no candles" in meta_detail.lower() or
+                        "empty" in meta_detail.lower() or
+                        not meta_detail  # Если detail пустой и нет entry_time
+                    )
+                )
+                is_corrupt = entry_time is None and (
+                    entry_output.reason == "no_entry" and (
+                        "corrupt" in meta_detail.lower() or
+                        "invalid" in meta_detail.lower() or
+                        "anomalous" in meta_detail.lower()
+                    )
+                )
+                
                 # Эмитим ATTEMPT_RECEIVED событие (v1.9)
                 attempt_received = PortfolioEvent.create_attempt_received(
-                    timestamp=entry_time,
+                    timestamp=event_timestamp,
                     strategy=strategy_name,
                     signal_id=signal_id,
                     contract_address=contract_address,
                     result=entry_output,
                 )
                 portfolio_events.append(attempt_received)
+                
+                # Эмитим события для no_candles/corrupt (v1.9) - до проверки reset
+                if is_no_candles:
+                    portfolio_events.append(PortfolioEvent(
+                        timestamp=event_timestamp,
+                        strategy=strategy_name,
+                        signal_id=signal_id,
+                        contract_address=contract_address,
+                        event_type=PortfolioEventType.ATTEMPT_REJECTED_NO_CANDLES,
+                        result=entry_output,
+                        reason="no_candles",
+                        meta=entry_output.meta or {},
+                    ))
+                    continue  # Не обрабатываем дальше
+                
+                if is_corrupt:
+                    portfolio_events.append(PortfolioEvent(
+                        timestamp=event_timestamp,
+                        strategy=strategy_name,
+                        signal_id=signal_id,
+                        contract_address=contract_address,
+                        event_type=PortfolioEventType.ATTEMPT_REJECTED_CORRUPT_CANDLES,
+                        result=entry_output,
+                        reason="corrupt_candles",
+                        meta=entry_output.meta or {},
+                    ))
+                    continue  # Не обрабатываем дальше
+                
+                # Если entry_time отсутствует но это не no_candles/corrupt - эмитим INVALID_INPUT
+                if entry_time is None:
+                    portfolio_events.append(PortfolioEvent(
+                        timestamp=event_timestamp,
+                        strategy=strategy_name,
+                        signal_id=signal_id,
+                        contract_address=contract_address,
+                        event_type=PortfolioEventType.ATTEMPT_REJECTED_INVALID_INPUT,
+                        result=entry_output,
+                        reason="missing_entry_time",
+                        meta=entry_output.meta or {},
+                    ))
+                    continue  # Не обрабатываем дальше
                 
                 # Проверка: игнорируем входы до следующего сигнала после reset
                 if self.config.runner_reset_enabled and state.reset_until is not None and entry_time <= state.reset_until:

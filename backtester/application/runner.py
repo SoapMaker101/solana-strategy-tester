@@ -105,6 +105,25 @@ class BacktestRunner:
         if not candles:
             # Нет свечей - сигнал пропущен, инкрементируем счётчик (BC)
             self.signals_skipped_no_candles += 1
+            # v1.9: создаём placeholder результаты для каждой стратегии, чтобы PortfolioEngine мог эмитить события
+            # PortfolioEngine эмитит ATTEMPT_REJECTED_NO_CANDLES на основе этих результатов
+            for strategy in self.strategies:
+                placeholder_result = StrategyOutput(
+                    entry_time=None,
+                    entry_price=None,
+                    exit_time=None,
+                    exit_price=None,
+                    pnl=0.0,
+                    reason="no_entry",
+                    meta={"detail": "no candles found"},
+                )
+                results.append({
+                    "signal_id": sig.id,
+                    "contract_address": contract,
+                    "strategy": strategy.config.name,
+                    "timestamp": ts,
+                    "result": placeholder_result,
+                })
             return results
 
         # Формируем единый объект с входными данными
