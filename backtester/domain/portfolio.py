@@ -9,10 +9,17 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Literal, Optional, Union
 from enum import Enum
 
-from .position import Position
+from .position import Position as PositionModel
+
+# Type alias for annotations - pyright/basedpyright compatibility fix
+# PositionModel is used for constructor calls to ensure correct type resolution
+Position = PositionModel  # type: ignore[assignment]
 from .models import StrategyOutput
 from .execution_model import ExecutionProfileConfig, ExecutionModel
-from .portfolio_events import PortfolioEvent, PortfolioEventType
+from .portfolio_events import PortfolioEvent as PortfolioEventModel, PortfolioEventType
+
+# Type alias for annotations - pyright/basedpyright compatibility fix
+PortfolioEvent = PortfolioEventModel  # type: ignore[assignment]
 from .portfolio_reset import (
     PortfolioState,
     PortfolioResetContext,
@@ -417,7 +424,7 @@ class PortfolioEngine:
             if additional_meta:
                 event_meta.update(additional_meta)
             
-            portfolio_events.append(PortfolioEvent(
+            portfolio_events.append(PortfolioEventModel(
                 timestamp=current_time,
                 strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
                 signal_id=pos.signal_id,
@@ -1219,7 +1226,7 @@ class PortfolioEngine:
                         ResetReason.CAPACITY_PRESSURE: "capacity",
                     }.get(reason, reason.value)
                     
-                    portfolio_events.append(PortfolioEvent(
+                    portfolio_events.append(PortfolioEventModel(
                         timestamp=reset_time,
                         strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
                         signal_id=pos.signal_id,
@@ -1572,7 +1579,7 @@ class PortfolioEngine:
                 pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
                 fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
                 
-                portfolio_events.append(PortfolioEvent(
+                portfolio_events.append(PortfolioEventModel(
                     timestamp=current_time,
                     strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
                     signal_id=pos.signal_id,
@@ -1772,7 +1779,7 @@ class PortfolioEngine:
         if raw_entry_price <= 0 or raw_exit_price <= 0:
             # Эмитим событие ATTEMPT_REJECTED_INVALID_INPUT (v1.9)
             portfolio_events.append(
-                PortfolioEvent(
+                PortfolioEventModel(
                     timestamp=current_time,
                     strategy=strategy_name,
                     signal_id=trade_data["signal_id"],
@@ -1838,9 +1845,9 @@ class PortfolioEngine:
                 pos_meta["mcap_usd"] = entry_mcap_proxy
                 pos_meta["mcap_usd_at_entry"] = entry_mcap_proxy
         
-        # Position.entry_price и Position.exit_price содержат RAW цены (для reset проверки)
+        # PositionModel.entry_price и PositionModel.exit_price содержат RAW цены (для reset проверки)
         # Исполненные цены (с slippage) хранятся в meta["exec_entry_price"] и meta["exec_exit_price"]
-        pos = Position(
+        pos = PositionModel(
             signal_id=trade_data["signal_id"],
             contract_address=trade_data["contract_address"],
             entry_time=current_time,
@@ -2078,7 +2085,7 @@ class PortfolioEngine:
                 
                 # Эмитим события для no_candles/corrupt (v1.9) - до проверки reset
                 if is_no_candles:
-                    portfolio_events.append(PortfolioEvent(
+                    portfolio_events.append(PortfolioEventModel(
                         timestamp=event_timestamp,
                         strategy=strategy_name,
                         signal_id=signal_id,
@@ -2091,7 +2098,7 @@ class PortfolioEngine:
                     continue  # Не обрабатываем дальше
                 
                 if is_corrupt:
-                    portfolio_events.append(PortfolioEvent(
+                    portfolio_events.append(PortfolioEventModel(
                         timestamp=event_timestamp,
                         strategy=strategy_name,
                         signal_id=signal_id,
@@ -2105,7 +2112,7 @@ class PortfolioEngine:
                 
                 # Если entry_time отсутствует но это не no_candles/corrupt - эмитим INVALID_INPUT
                 if entry_time is None:
-                    portfolio_events.append(PortfolioEvent(
+                    portfolio_events.append(PortfolioEventModel(
                         timestamp=event_timestamp,
                         strategy=strategy_name,
                         signal_id=signal_id,
@@ -2121,7 +2128,7 @@ class PortfolioEngine:
                 if self.config.runner_reset_enabled and state.reset_until is not None and entry_time <= state.reset_until:
                     skipped_by_reset += 1
                     # Эмитим событие ATTEMPT_REJECTED_STRATEGY_NO_ENTRY (или специальный тип для reset)
-                    portfolio_events.append(PortfolioEvent(
+                    portfolio_events.append(PortfolioEventModel(
                         timestamp=entry_time,
                         strategy=strategy_name,
                         signal_id=signal_id,
