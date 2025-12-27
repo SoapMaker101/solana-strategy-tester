@@ -1,5 +1,122 @@
 # Changelog
 
+## [Feature: Portfolio Events v1.9] - 2025-01-XX
+
+### Portfolio Events: Canonical event-driven architecture
+
+#### 🎯 Цель изменений
+
+Ввести каноническую семантику Portfolio Events как "источник истины" для всех решений портфеля. Четко разделить ATTEMPT (попытка входа) и EXECUTED (реальная позиция), устранить двусмысленность "trade == attempt".
+
+#### ✨ Основные изменения
+
+##### 1. **PortfolioEvent и PortfolioEventType (v1.9)**
+
+**Файл:** `backtester/domain/portfolio_events.py` (новый)
+
+**Создано:**
+- `PortfolioEvent` dataclass — каноническая модель события портфеля
+- `PortfolioEventType` Enum — типы событий (ATTEMPT_*, EXECUTED_*, *_TRIGGERED)
+- Helper-методы `PortfolioEvent.create_*()` для создания событий
+
+**Типы событий:**
+- **ATTEMPT_***: попытки входа (стратегия хотела войти)
+  - `ATTEMPT_RECEIVED`, `ATTEMPT_ACCEPTED_OPEN`, `ATTEMPT_REJECTED_CAPACITY`, `ATTEMPT_REJECTED_RISK`
+  - `ATTEMPT_REJECTED_STRATEGY_NO_ENTRY`, `ATTEMPT_REJECTED_NO_CANDLES`, `ATTEMPT_REJECTED_CORRUPT_CANDLES`, `ATTEMPT_REJECTED_INVALID_INPUT`
+- **EXECUTED_***: реальные исполнения (позиции)
+  - `EXECUTED_CLOSE`, `CLOSED_BY_CAPACITY_PRUNE`, `CLOSED_BY_PROFIT_RESET`, `CLOSED_BY_CAPACITY_CLOSE_ALL`
+- ***_TRIGGERED**: события триггеров
+  - `CAPACITY_PRUNE_TRIGGERED`, `CAPACITY_CLOSE_ALL_TRIGGERED`, `PROFIT_RESET_TRIGGERED`
+
+##### 2. **Эмиссия событий в PortfolioEngine**
+
+**Файл:** `backtester/domain/portfolio.py`
+
+**Изменения:**
+- `PortfolioStats.portfolio_events: List[PortfolioEvent]` — список всех событий
+- Эмиссия событий при каждом действии портфеля:
+  - При попытках входа: `ATTEMPT_RECEIVED`, `ATTEMPT_ACCEPTED_OPEN`, `ATTEMPT_REJECTED_*`
+  - При закрытиях: `EXECUTED_CLOSE`, `CLOSED_BY_CAPACITY_PRUNE`, `CLOSED_BY_PROFIT_RESET`
+  - При триггерах: `CAPACITY_PRUNE_TRIGGERED`, `PROFIT_RESET_TRIGGERED`, `CAPACITY_CLOSE_ALL_TRIGGERED`
+
+##### 3. **Capacity Window на событиях (v1.9 канон)**
+
+**Файл:** `backtester/domain/portfolio.py`
+
+**Переписано:**
+- `_build_capacity_window_from_events()` — строит окно из событий
+- Для `capacity_window_type="signals"`:
+  ```
+  attempted = accepted_open_count + rejected_capacity_count
+  blocked_ratio = rejected_capacity_count / attempted
+  ```
+- Capacity pressure рассчитывается из событий, не из legacy `capacity_tracking`
+- `avg_hold_days` считается напрямую из открытых позиций
+
+##### 4. **Backward Compatibility: пересчёт legacy счетчиков**
+
+**Файл:** `backtester/domain/portfolio.py`
+
+**В конце `simulate()`:**
+- `portfolio_capacity_prune_count` — пересчитывается из `CLOSED_BY_CAPACITY_PRUNE` событий
+- `portfolio_reset_capacity_count` — пересчитывается из `CAPACITY_CLOSE_ALL_TRIGGERED` событий
+- `portfolio_reset_profit_count` — пересчитывается из `PROFIT_RESET_TRIGGERED` событий
+- `last_capacity_prune_time`, `last_portfolio_reset_time` — извлекаются из событий
+
+##### 5. **BacktestRunner counters (v1.9 семантика)**
+
+**Файл:** `backtester/application/runner.py`
+
+**Исправлено:**
+- `signals_processed` — инкрементируется только если стратегия была вызвана (есть свечи)
+- `signals_skipped_no_candles` — инкрементируется при отсутствии свечей
+- `signals_skipped_corrupt_candles` — инкрементируется при битых свечах
+
+##### 6. **Экспорт portfolio_events.csv**
+
+**Файл:** `backtester/infrastructure/reporter.py`
+
+**Добавлено:**
+- `save_portfolio_events_table()` — экспорт событий в CSV
+- Колонки: `timestamp`, `event_type`, `strategy`, `signal_id`, `contract_address`, `position_id`, `meta_json`
+- Fail-safe: продолжает работу даже при ошибке записи CSV
+
+**Файл:** `main.py`
+
+- Автоматический экспорт `portfolio_events.csv` вместе с `portfolio_positions.csv`
+
+#### 🔧 Технические детали
+
+**Инварианты v1.9:**
+
+1. **Events = source of truth**: Все решения портфеля (capacity pressure, prune/reset) базируются на событиях
+2. **ATTEMPT vs EXECUTED**: Четкое разделение попыток и реальных исполнений
+3. **Stage A/B use executed only**: `portfolio_positions.csv` содержит только исполненные позиции
+4. **BC recompute**: Старые счетчики пересчитываются из событий в конце симуляции
+5. **XLSX optional**: CSV обязателен, XLSX опционален (пропускается если engine недоступен)
+
+#### 📝 Измененные файлы
+
+**Новые:**
+- `backtester/domain/portfolio_events.py` — модель событий
+- `tests/helpers/events.py` — helper функции для работы с событиями в тестах
+- `tests/infrastructure/test_reporter_exports_events_csv.py` — тест экспорта событий
+
+**Измененные:**
+- `backtester/domain/portfolio.py` — эмиссия событий, capacity window на событиях, BC пересчёт
+- `backtester/application/runner.py` — исправлены счетчики
+- `backtester/infrastructure/reporter.py` — экспорт portfolio_events.csv
+- `main.py` — вызов экспорта событий
+
+#### 🧪 Тесты
+
+**Обновлены:**
+- Тесты capacity/prune/reset используют события для проверок
+- `tests/portfolio/test_portfolio_capacity_prune.py` — обновлены на события
+- `tests/application/test_runner_empty_candles.py` — исправлены счетчики
+
+---
+
 ## [Feature: Capacity PRUNE (v1.7)] - 2025-12-27
 
 ### Реализация Capacity PRUNE: частичное закрытие позиций вместо полного reset

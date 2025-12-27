@@ -30,6 +30,7 @@ The goal: batch-test different Runner configurations on historical candles and f
    - portfolio-level reset (profit reset: close all positions when equity threshold reached)
    - capacity reset (v1.6): prevents "capacity choke" by closing all positions when portfolio is full and turnover is low
    - capacity prune (v1.7): partial position closure instead of full reset, closes ~50% of "bad" positions to free up slots
+   - portfolio events (v1.9): canonical event-driven architecture with clear ATTEMPT vs EXECUTED semantics
 5. **Research Pipeline** — two-stage analysis:
    - **Stage A**: Window-based stability analysis → `strategy_stability.csv`
    - **Stage B**: Strategy selection by criteria → `strategy_selection.csv`
@@ -205,6 +206,57 @@ class Candle:
 1. `levels_hit` from `Position.meta` (Runner truth) — parse keys as floats, take max
 2. `raw_exit_price / raw_entry_price` (if raw prices available)
 3. `exec_exit_price / exec_entry_price` (fallback)
+
+### portfolio_events.csv (v1.9: Event-driven architecture)
+
+**Semantics v1.9: ATTEMPT vs EXECUTED**
+
+Portfolio events provide canonical event-driven semantics that clearly separate attempts (signals received) from executed trades (actual positions):
+
+| Event Type | Category | Description |
+|------------|----------|-------------|
+| `ATTEMPT_ACCEPTED_OPEN` | ATTEMPT | Strategy wanted to enter, portfolio accepted and opened position |
+| `ATTEMPT_REJECTED_CAPACITY` | ATTEMPT | Strategy wanted to enter, portfolio rejected (max_open_positions reached) |
+| `ATTEMPT_REJECTED_RISK` | ATTEMPT | Strategy wanted to enter, portfolio rejected (risk rules: max_exposure, etc.) |
+| `ATTEMPT_REJECTED_STRATEGY_NO_ENTRY` | ATTEMPT | Strategy decided not to enter (no_entry) |
+| `ATTEMPT_REJECTED_NO_CANDLES` | ATTEMPT | No candles available for entry |
+| `EXECUTED_CLOSE` | EXECUTED | Position closed normally (tp/sl/timeout) |
+| `CLOSED_BY_CAPACITY_PRUNE` | EXECUTED | Position closed by capacity prune |
+| `CLOSED_BY_PROFIT_RESET` | EXECUTED | Position closed by profit reset |
+| `CAPACITY_PRUNE_TRIGGERED` | TRIGGER | Capacity prune was triggered |
+| `PROFIT_RESET_TRIGGERED` | TRIGGER | Profit reset was triggered |
+
+**Capacity Window Formula (signals-based):**
+
+For `capacity_window_type="signals"`, capacity pressure is calculated from events:
+```
+attempted = accepted_open_count + rejected_capacity_count
+blocked_ratio = rejected_capacity_count / attempted
+```
+
+Capacity pressure triggers if:
+- `open_ratio >= capacity_open_ratio_threshold` (portfolio filled)
+- `blocked_ratio >= capacity_max_blocked_ratio` (too many rejections)
+- `avg_hold_days >= capacity_max_avg_hold_days` (positions held too long)
+
+**Key Principles:**
+- **Events = source of truth**: All portfolio decisions (capacity pressure, prune/reset triggers) are derived from events
+- **Stage A/B use executed only**: Research pipeline (`portfolio_positions.csv`) contains only executed positions, not attempts
+- **Backward compatibility**: Legacy counters (`portfolio_reset_count`, `portfolio_capacity_prune_count`) are recomputed from events at the end of simulation
+
+**CSV columns:**
+- `timestamp` — event time (ISO)
+- `event_type` — type of event
+- `strategy` — strategy name
+- `signal_id` — signal identifier
+- `contract_address` — contract address
+- `position_id` — position identifier (if applicable)
+- `meta_json` — JSON string with additional metadata
+
+**Export:**
+- Generated automatically: `output/reports/portfolio_events.csv`
+- **XLSX optional**: CSV is mandatory, XLSX export is optional (skipped if engine unavailable)
+- Fail-safe: Export continues even if events CSV fails to write
 
 ---
 
