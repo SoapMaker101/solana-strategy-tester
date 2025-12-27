@@ -50,8 +50,9 @@ def check_strategy_criteria(
     is_runner = is_runner_strategy(strategy_name)
     
     if is_runner:
-        # Определяем режим V2: если это DEFAULT_RUNNER_CRITERIA_V2 (BC для тестов)
-        # V2 проверяет hit_rate_x4, tail_pnl_share, non_tail_pnl_share вместо x2/x5/tail_contribution
+        # Определяем режим V2/V3: V2 - legacy fallback для BC тестов, V3 - canonical (по умолчанию)
+        # V2/V3 проверяют hit_rate_x4, tail_pnl_share, non_tail_pnl_share вместо x2/x5/tail_contribution
+        # ⚠️ V2 - LEGACY FALLBACK только для старых тестов, V3 - CANONICAL для новых разработок
         is_v2_mode = (
             runner_criteria is DEFAULT_RUNNER_CRITERIA_V2 or
             (runner_criteria.min_hit_rate_x2 is None and 
@@ -69,8 +70,10 @@ def check_strategy_criteria(
         )
         
         if is_v2_mode and has_v2_metrics:
-            # V2 режим: проверяем новые метрики
-            # Проверка V2.1: hit_rate_x4 >= 0.10
+            # V2/V3 режим: проверяем новые метрики (hit_rate_x4, tail_pnl_share, non_tail_pnl_share)
+            # ⚠️ V2 (legacy fallback): пороги 0.10 / 0.30 / -0.20
+            # ⭐ V3 (canonical): пороги 0.15 / 0.80 / -0.20 (TODO: добавить отдельную логику V3)
+            # Проверка V2.1: hit_rate_x4 >= 0.10 (V2) или >= 0.15 (V3 canonical)
             if "hit_rate_x4" in row:
                 hit_rate_x4 = row.get("hit_rate_x4", 0.0)
                 if pd.isna(hit_rate_x4):

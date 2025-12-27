@@ -10,6 +10,8 @@ from .trade_features import (
 )
 
 # Стратегия RR (Risk/Reward) — базовая реализация трейда с TP и SL
+# ⚠️ LEGACY: С декабря 2025 стратегия RR признана неэффективной и исключена из пайплайна.
+# Остается только для обратной совместимости. Новые разработки должны использовать RUNNER стратегии.
 class RRStrategy(Strategy):
     def __init__(self, config) -> None:
         super().__init__(config)

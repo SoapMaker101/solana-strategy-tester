@@ -17,6 +17,8 @@ from .trade_features import (
 )
 
 # RRDStrategy — стратегия с отложенным входом по drawdown
+# ⚠️ LEGACY: С декабря 2025 стратегия RRD признана неэффективной и исключена из пайплайна.
+# Остается только для обратной совместимости. Новые разработки должны использовать RUNNER стратегии.
 class RRDStrategy(Strategy):
     def __init__(self, config):
         super().__init__(config)

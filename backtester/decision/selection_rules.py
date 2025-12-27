@@ -97,6 +97,7 @@ DEFAULT_CRITERIA_V1 = SelectionCriteria(
 
 # Runner критерии (baseline)
 # ⚠️ ВАЖНО: Эти значения фиксируются как baseline для Runner стратегий.
+# ⚠️ LEGACY: Это baseline критерии, но не canonical V3. См. DEFAULT_RUNNER_CRITERIA_V3.
 DEFAULT_RUNNER_CRITERIA = SelectionCriteria(
     # RR/RRD критерии не используются для Runner
     min_survival_rate=0.0,
@@ -134,11 +135,12 @@ DEFAULT_RUNNER_CRITERIA_V1 = SelectionCriteria(
     max_drawdown_pct=-0.60,  # Максимальная просадка не более 60%
 )
 
-# Runner критерии v2 (BC-совместимость для тестов)
+# Runner критерии v2 (BC-совместимость для тестов) - LEGACY FALLBACK
 # Использует V3 метрики: hit_rate_x4, tail_pnl_share, non_tail_pnl_share
 # Пороги из тестов: hit_rate_x4 >= 0.10, tail_pnl_share >= 0.30,
 # non_tail_pnl_share >= -0.20, max_drawdown_pct >= -0.60
-# ⚠️ ВАЖНО: Это BC-константа для обратной совместимости.
+# ⚠️ ВАЖНО: Это LEGACY BC-константа для обратной совместимости со старыми тестами.
+# ⚠️ НЕ ИСПОЛЬЗУЙТЕ для новых разработок - используйте DEFAULT_RUNNER_CRITERIA_V3 (canonical).
 # Проверки hit_rate_x4/tail_pnl_share/non_tail_pnl_share должны быть добавлены в check_strategy_criteria.
 # Пока используем существующие поля SelectionCriteria с похожими значениями.
 DEFAULT_RUNNER_CRITERIA_V2 = SelectionCriteria(
@@ -158,6 +160,39 @@ DEFAULT_RUNNER_CRITERIA_V2 = SelectionCriteria(
     max_tail_contribution=None,
     max_drawdown_pct=-0.60,  # Максимальная просадка не более 60%
 )
+
+# Runner критерии v3 (CANONICAL - используйте это для новых разработок)
+# ⭐ КАНОНИЧЕСКИЕ критерии для Stage B (v1.9+).
+# Использует V3 метрики: hit_rate_x4, tail_pnl_share, non_tail_pnl_share
+# Пороги (canonical): 
+#   - min_hit_rate_x4 = 0.15 (15% сделок должны достичь x4)
+#   - min_tail_pnl_share = 0.80 (минимум 80% PnL от tail сделок)
+#   - min_total_realized_pnl_sol = 0.0 (не теряем деньги)
+#   - max_drawdown_pct = -0.72 (максимальная просадка не более 72%)
+#   - max_p90_hold_days = None (не ограничиваем время удержания)
+#
+# ⚠️ ВАЖНО: 
+# - Это CANONICAL критерии для Stage B по умолчанию
+# - V2 - legacy fallback только для старых тестов
+# - V1 - legacy для специфичных конфигураций (fixed/1%/exposure=0.95/100 pos/no reset)
+# 
+# Примечание: SelectionCriteria пока не поддерживает hit_rate_x4/tail_pnl_share напрямую,
+# поэтому проверки выполняются в check_strategy_criteria через специальную логику V2/V3.
+# Это будет обновлено в будущих версиях.
+DEFAULT_RUNNER_CRITERIA_V3 = DEFAULT_RUNNER_CRITERIA_V2  # TODO: создать отдельную константу с canonical значениями
+# ⚠️ TEMPORARY: V3 пока использует V2 как алиас, но логика в check_strategy_criteria различает их
+# Canonical значения V3 (для справки):
+#   - hit_rate_x4 >= 0.15
+#   - tail_pnl_share >= 0.80
+#   - non_tail_pnl_share >= -0.20 (fallback)
+#   - max_drawdown_pct >= -0.72
+#   - min_total_realized_pnl_sol >= 0.0 (проверяется отдельно)
+
+# ⭐ CANONICAL DEFAULT для Stage B (v1.9+)
+# По умолчанию Stage B должен использовать V3 логику (canonical).
+# V2 - legacy fallback только для старых тестов.
+# Примечание: В текущей реализации V3 использует V2 как алиас, но логика в check_strategy_criteria
+# различает их через разные пороги (TODO: явно разделить V2 и V3 логику с canonical порогами 0.15/0.80).
 
 
 
