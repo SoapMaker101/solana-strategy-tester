@@ -52,6 +52,11 @@ class BacktestRunner:
         self.warn_dedup = WarnDedup()
         self.global_config["_warn_dedup"] = self.warn_dedup
         
+        # Счетчики пропущенных сигналов (BC для тестов)
+        self.signals_skipped_no_candles: int = 0
+        self.signals_skipped_corrupt_candles: int = 0
+        self.signals_processed: int = 0  # BC: количество реально обработанных сигналов
+        
         # Портфельные результаты (по стратегиям)
         self.portfolio_results: Dict[str, PortfolioResult] = {}
 
@@ -96,6 +101,11 @@ class BacktestRunner:
         else:
             print(f"[WARNING] No candles found for signal at {ts}")
 
+        # Проверяем, были ли свечи валидными для обработки
+        if not candles:
+            # Нет свечей - сигнал пропущен, не обрабатываем
+            return results
+
         # Формируем единый объект с входными данными
         data = StrategyInput(
             signal=sig,
@@ -118,6 +128,20 @@ class BacktestRunner:
                     reason="error",
                     meta={"exception": str(e)},
                 )
+            
+            # BC: инкрементируем счетчики пропущенных сигналов (только один раз)
+            # Делаем это один раз после получения результата от стратегии
+            if out.entry_time is None and out.reason == "no_entry":
+                meta_detail = out.meta.get("detail", "") if out.meta else ""
+                if "corrupt" in meta_detail.lower() or "invalid" in meta_detail.lower():
+                    self.signals_skipped_corrupt_candles += 1
+                elif "no candles" in meta_detail.lower() or not candles:
+                    self.signals_skipped_no_candles += 1
+            else:
+                # Сигнал реально обработан стратегией (есть свечи и стратегия отработала)
+                # Инкрементируем только один раз на сигнал (не на каждую стратегию)
+                if len(results) == 0:  # Первая стратегия для этого сигнала
+                    self.signals_processed += 1
 
             # Добавляем результат в список
             results.append(

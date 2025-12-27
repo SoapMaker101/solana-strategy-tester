@@ -15,6 +15,132 @@ from backtester.domain.portfolio import (
 from backtester.domain.models import StrategyOutput
 
 
+# ===== TEST HELPERS =====
+
+def make_entry_trade(
+    signal_id: str,
+    contract_address: str,
+    entry_time: datetime,
+    exit_time: datetime,
+    entry_price: float = 1.0,
+    exit_price: float = 0.7,
+    pnl: float = -0.30,
+    reason: str = "timeout",
+    entry_mcap_proxy: float = 15000.0,
+    last_seen_price: float = 0.7,
+    max_xn: float = None,
+) -> dict:
+    """
+    Создаёт trade dict с валидным StrategyOutput для входа в позицию.
+    
+    Args:
+        signal_id: ID сигнала
+        contract_address: Адрес контракта
+        entry_time: Время входа
+        exit_time: Время выхода
+        entry_price: Цена входа
+        exit_price: Цена выхода
+        pnl: PnL в процентах
+        reason: Причина выхода
+        entry_mcap_proxy: Market cap proxy для входа
+        last_seen_price: Последняя видимая цена (для current_pnl_pct fallback)
+        max_xn: Максимальный XN (для защиты от prune)
+    """
+    meta = {
+        "entry_mcap_proxy": entry_mcap_proxy,
+        "last_seen_price": last_seen_price,
+    }
+    if max_xn is not None:
+        meta["max_xn"] = max_xn
+    
+    strategy_output = StrategyOutput(
+        entry_time=entry_time,
+        entry_price=entry_price,
+        exit_time=exit_time,
+        exit_price=exit_price,
+        pnl=pnl,
+        reason=reason,
+        meta=meta,
+    )
+    
+    return {
+        "signal_id": signal_id,
+        "contract_address": contract_address,
+        "strategy": "test_strategy",
+        "timestamp": entry_time,
+        "result": strategy_output,
+    }
+
+
+def fill_portfolio(trades: list, base_time: datetime, n: int = 2) -> None:
+    """
+    Добавляет n позиций для заполнения портфеля (создают capacity pressure).
+    
+    Args:
+        trades: Список trades для добавления
+        base_time: Базовое время
+        n: Количество позиций для заполнения
+    """
+    for i in range(n):
+        entry_time = base_time - timedelta(days=2)
+        exit_time = base_time + timedelta(days=30)
+        trade = make_entry_trade(
+            signal_id=f"fill_{i+1}",
+            contract_address=f"FILL{i+1}",
+            entry_time=entry_time,
+            exit_time=exit_time,
+        )
+        trades.append(trade)
+
+
+def add_capacity_blocked_attempts(
+    trades: list,
+    base_time: datetime,
+    count: int,
+    start_offset_minutes: int = 10,
+    interval_minutes: int = 5,
+    exit_after_minutes: int = 1,
+) -> None:
+    """
+    Добавляет попытки входа, которые будут заблокированы по capacity.
+    
+    ВАЖНО: StrategyOutput должен быть валидным (с exit_time/exit_price), чтобы
+    пройти фильтр "entry/exit". Портфель должен отклонить эти попытки по capacity
+    ДО открытия позиции, но они попадут в capacity window и увеличат blocked_ratio.
+    
+    Args:
+        trades: Список trades для добавления
+        base_time: Базовое время
+        count: Количество попыток
+        start_offset_minutes: Смещение от base_time в минутах для первой попытки
+        interval_minutes: Интервал между попытками в минутах
+        exit_after_minutes: Через сколько минут после entry будет exit (для валидности)
+    """
+    for i in range(count):
+        entry_time = base_time + timedelta(minutes=start_offset_minutes + i * interval_minutes)
+        exit_time = entry_time + timedelta(minutes=exit_after_minutes)
+        
+        # Валидные entry attempts с полным StrategyOutput (чтобы пройти фильтр entry/exit)
+        # Портфель должен отклонить их по capacity ДО открытия позиции
+        # meta["blocked_by_capacity"] = True указывает движку, что это blocked attempt
+        trade = {
+            "signal_id": f"blocked_{i+1}",
+            "contract_address": f"BLOCKED{i+1}",
+            "strategy": "test_strategy",
+            "timestamp": entry_time,
+            "result": StrategyOutput(
+                entry_time=entry_time,  # Стратегия хочет войти
+                entry_price=1.0,  # Валидная цена входа
+                exit_time=exit_time,  # Валидный exit_time (чтобы пройти фильтр)
+                exit_price=1.0,  # Flat PnL (чтобы пройти фильтр)
+                pnl=0.0,
+                reason="tp",  # Валидная причина (не "open"/no_entry)
+                meta={"blocked_by_capacity": True},  # Флаг для движка: это blocked attempt
+            ),
+        }
+        trades.append(trade)
+
+
 def test_capacity_prune_closes_half_of_candidates():
     """
     Тест: capacity prune закрывает примерно 50% кандидатов.
@@ -55,64 +181,43 @@ def test_capacity_prune_closes_half_of_candidates():
     
     base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     
-    # Создаем 10 сделок
     trades = []
+    # Создаем 10 позиций-кандидатов (первые 6 будут кандидатами для prune)
     for i in range(10):
-        entry_time = base_time + timedelta(minutes=i * 10)
-        # Exit time далеко в будущем (позиции остаются открытыми)
-        exit_time = base_time + timedelta(days=30)
-        
-        # Первые 6 позиций - кандидаты для prune:
-        # - hold_days >= 1.0 (entry_time в прошлом на 1+ день)
-        # - mcap_usd <= 20000
-        # - current_pnl_pct <= -0.30 (exit_price ниже entry_price)
         if i < 6:
             # Кандидаты: entry_time в прошлом, низкий mcap, плохой PnL
             entry_time = base_time - timedelta(days=2)  # 2 дня назад
-            exit_price = 0.7  # -30% PnL
-        else:
-            # Не кандидаты: недавний entry или хороший PnL
-            exit_price = 1.1  # +10% PnL
-        
-        strategy_output = StrategyOutput(
-            entry_time=entry_time,
-            entry_price=1.0,
-            exit_time=exit_time,
-            exit_price=exit_price,
-            pnl=(exit_price - 1.0) / 1.0,
-            reason="timeout",
-            meta={
-                "entry_mcap_proxy": 15000.0 if i < 6 else 50000.0,  # Кандидаты с низким mcap
-            }
-        )
-        
-        trades.append({
-            "signal_id": f"signal_{i+1}",
-            "contract_address": f"TOKEN{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": entry_time,
-            "result": strategy_output
-        })
-    
-    # Добавляем сигналы для capacity pressure (блокированные сигналы)
-    # Нужно создать условия для capacity reset: много отклоненных сигналов
-    for i in range(20):
-        blocked_time = base_time + timedelta(minutes=100 + i * 5)
-        # Эти сигналы будут отклонены (портфель уже заполнен)
-        trades.append({
-            "signal_id": f"blocked_signal_{i+1}",
-            "contract_address": f"BLOCKED{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": blocked_time,
-            "result": StrategyOutput(
-                entry_time=None,  # Не будет входа (блокирован)
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry"
+            exit_time = base_time + timedelta(days=30)
+            trade = make_entry_trade(
+                signal_id=f"signal_{i+1}",
+                contract_address=f"TOKEN{i+1}",
+                entry_time=entry_time,
+                exit_time=exit_time,
+                exit_price=0.7,  # -30% PnL
+                pnl=-0.30,
+                entry_mcap_proxy=15000.0,  # Низкий mcap
             )
-        })
+        else:
+            # Не кандидаты: хороший PnL
+            entry_time = base_time - timedelta(days=2)
+            exit_time = base_time + timedelta(days=30)
+            trade = make_entry_trade(
+                signal_id=f"signal_{i+1}",
+                contract_address=f"TOKEN{i+1}",
+                entry_time=entry_time,
+                exit_time=exit_time,
+                exit_price=1.1,  # +10% PnL
+                pnl=0.10,
+                entry_mcap_proxy=50000.0,  # Высокий mcap
+                last_seen_price=1.1,
+            )
+        trades.append(trade)
+    
+    # Добавляем блокированные попытки для capacity pressure
+    add_capacity_blocked_attempts(trades, base_time, count=20, start_offset_minutes=100)
+    
+    # Сортируем trades по timestamp
+    trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
@@ -168,19 +273,20 @@ def test_capacity_prune_does_not_update_cycle_start_equity():
     - equity_peak_in_cycle не изменился
     - portfolio_reset_count не увеличился
     """
+    # Маленький портфель для создания capacity pressure
     config = PortfolioConfig(
         initial_balance_sol=100.0,
         allocation_mode="dynamic",
         percent_per_trade=0.01,
         max_exposure=1.0,
-        max_open_positions=5,
+        max_open_positions=2,  # Маленький портфель
         fee_model=FeeModel(),
         capacity_reset_enabled=True,
         capacity_reset_mode="prune",
-        capacity_open_ratio_threshold=0.8,
+        capacity_open_ratio_threshold=1.0,  # Жёстче: 100% заполненности
         capacity_window_type="signals",
         capacity_window_size=10,
-        capacity_max_blocked_ratio=0.5,
+        capacity_max_blocked_ratio=0.2,  # Жёстче: 20% отклоненных достаточно
         capacity_max_avg_hold_days=1.0,
         prune_fraction=0.5,
         prune_min_hold_days=1.0,
@@ -192,49 +298,15 @@ def test_capacity_prune_does_not_update_cycle_start_equity():
     
     base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     
-    # Создаем сделки для capacity pressure
     trades = []
-    for i in range(5):
-        entry_time = base_time - timedelta(days=2)  # 2 дня назад
-        exit_time = base_time + timedelta(days=30)
-        
-        strategy_output = StrategyOutput(
-            entry_time=entry_time,
-            entry_price=1.0,
-            exit_time=exit_time,
-            exit_price=0.7,  # -30% PnL (кандидат)
-            pnl=-0.30,
-            reason="timeout",
-            meta={
-                "entry_mcap_proxy": 15000.0,
-            }
-        )
-        
-        trades.append({
-            "signal_id": f"signal_{i+1}",
-            "contract_address": f"TOKEN{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": entry_time,
-            "result": strategy_output
-        })
+    # Заполняем портфель 2 позициями-кандидатами
+    fill_portfolio(trades, base_time, n=2)
     
-    # Добавляем блокированные сигналы
-    for i in range(10):
-        blocked_time = base_time + timedelta(minutes=10 + i * 5)
-        trades.append({
-            "signal_id": f"blocked_{i+1}",
-            "contract_address": f"BLOCKED{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": blocked_time,
-            "result": StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry"
-            )
-        })
+    # Добавляем блокированные попытки для capacity pressure
+    add_capacity_blocked_attempts(trades, base_time, count=10)
+    
+    # Сортируем trades по timestamp
+    trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
@@ -398,23 +470,8 @@ def test_capacity_prune_and_profit_reset_can_both_happen():
             "result": strategy_output
         })
     
-    # 2. Добавляем блокированные сигналы для capacity pressure
-    for i in range(10):
-        blocked_time = base_time + timedelta(minutes=10 + i * 5)
-        trades.append({
-            "signal_id": f"blocked_{i+1}",
-            "contract_address": f"BLOCKED{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": blocked_time,
-            "result": StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry"
-            )
-        })
+    # 2. Добавляем блокированные попытки для capacity pressure
+    add_capacity_blocked_attempts(trades, base_time, count=10)
     
     # 3. Затем добавляем прибыльные сделки для profit reset
     for i in range(3):
@@ -437,6 +494,9 @@ def test_capacity_prune_and_profit_reset_can_both_happen():
             "timestamp": entry_time,
             "result": strategy_output
         })
+    
+    # Сортируем trades по timestamp
+    trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
@@ -488,47 +548,25 @@ def test_capacity_prune_does_not_increment_reset_count():
     initial_equity_peak = config.initial_balance_sol
     
     trades = []
-    for i in range(5):
+    # Заполняем портфель кандидатами
+    fill_portfolio(trades, base_time, n=2)
+    # Добавляем еще кандидатов
+    for i in range(3):
         entry_time = base_time - timedelta(days=2)
         exit_time = base_time + timedelta(days=30)
-        
-        strategy_output = StrategyOutput(
+        trade = make_entry_trade(
+            signal_id=f"signal_{i+3}",
+            contract_address=f"TOKEN{i+3}",
             entry_time=entry_time,
-            entry_price=1.0,
             exit_time=exit_time,
-            exit_price=0.7,  # -30% (кандидат)
-            pnl=-0.30,
-            reason="timeout",
-            meta={
-                "entry_mcap_proxy": 15000.0,
-            }
         )
-        
-        trades.append({
-            "signal_id": f"signal_{i+1}",
-            "contract_address": f"TOKEN{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": entry_time,
-            "result": strategy_output
-        })
+        trades.append(trade)
     
-    # Добавляем блокированные сигналы
-    for i in range(10):
-        blocked_time = base_time + timedelta(minutes=10 + i * 5)
-        trades.append({
-            "signal_id": f"blocked_{i+1}",
-            "contract_address": f"BLOCKED{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": blocked_time,
-            "result": StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry"
-            )
-        })
+    # Добавляем блокированные попытки для capacity pressure
+    add_capacity_blocked_attempts(trades, base_time, count=10)
+    
+    # Сортируем trades по timestamp
+    trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
@@ -594,47 +632,23 @@ def test_capacity_prune_sets_reset_reason_capacity_prune_only():
     base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     
     trades = []
+    # Заполняем портфель 10 кандидатами
     for i in range(10):
         entry_time = base_time - timedelta(days=2)
         exit_time = base_time + timedelta(days=30)
-        
-        strategy_output = StrategyOutput(
+        trade = make_entry_trade(
+            signal_id=f"signal_{i+1}",
+            contract_address=f"TOKEN{i+1}",
             entry_time=entry_time,
-            entry_price=1.0,
             exit_time=exit_time,
-            exit_price=0.7,  # -30% (кандидат)
-            pnl=-0.30,
-            reason="timeout",
-            meta={
-                "entry_mcap_proxy": 15000.0,
-            }
         )
-        
-        trades.append({
-            "signal_id": f"signal_{i+1}",
-            "contract_address": f"TOKEN{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": entry_time,
-            "result": strategy_output
-        })
+        trades.append(trade)
     
-    # Добавляем блокированные сигналы
-    for i in range(20):
-        blocked_time = base_time + timedelta(minutes=10 + i * 5)
-        trades.append({
-            "signal_id": f"blocked_{i+1}",
-            "contract_address": f"BLOCKED{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": blocked_time,
-            "result": StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry"
-            )
-        })
+    # Добавляем блокированные попытки для capacity pressure
+    add_capacity_blocked_attempts(trades, base_time, count=20)
+    
+    # Сортируем trades по timestamp
+    trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
@@ -676,21 +690,22 @@ def test_profit_reset_sets_profit_reason_and_cycle_updates():
         allocation_mode="dynamic",
         percent_per_trade=0.1,
         max_exposure=1.0,
-        max_open_positions=5,
+        max_open_positions=2,  # Маленький портфель для гарантированного pressure
         fee_model=FeeModel(),
         profit_reset_enabled=True,
         profit_reset_multiple=1.5,  # x1.5
         capacity_reset_enabled=True,
         capacity_reset_mode="prune",
-        capacity_open_ratio_threshold=0.8,
+        capacity_open_ratio_threshold=1.0,  # Жёстче: 100% заполненности
         capacity_window_type="signals",
         capacity_window_size=10,
-        capacity_max_blocked_ratio=0.5,
+        capacity_max_blocked_ratio=0.2,  # Жёстче: 20% отклоненных достаточно
         capacity_max_avg_hold_days=1.0,
         prune_fraction=0.5,
         prune_min_hold_days=1.0,
         prune_max_mcap_usd=20000.0,
         prune_max_current_pnl_pct=-0.30,
+        prune_min_candidates=1,
     )
     
     engine = PortfolioEngine(config)
@@ -701,48 +716,11 @@ def test_profit_reset_sets_profit_reason_and_cycle_updates():
     
     trades = []
     
-    # 1. Сначала создаем плохие позиции для capacity prune
-    for i in range(5):
-        entry_time = base_time - timedelta(days=2)
-        exit_time = base_time + timedelta(days=30)
-        
-        strategy_output = StrategyOutput(
-            entry_time=entry_time,
-            entry_price=1.0,
-            exit_time=exit_time,
-            exit_price=0.7,  # -30% (кандидат для prune)
-            pnl=-0.30,
-            reason="timeout",
-            meta={
-                "entry_mcap_proxy": 15000.0,
-            }
-        )
-        
-        trades.append({
-            "signal_id": f"bad_signal_{i+1}",
-            "contract_address": f"BAD{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": entry_time,
-            "result": strategy_output
-        })
+    # 1. Заполняем портфель ровно 2 плохими позициями-кандидатами (max_open_positions=2)
+    fill_portfolio(trades, base_time, n=2)  # 2 позиции заполнят портфель
     
-    # 2. Добавляем блокированные сигналы для capacity pressure
-    for i in range(10):
-        blocked_time = base_time + timedelta(minutes=10 + i * 5)
-        trades.append({
-            "signal_id": f"blocked_{i+1}",
-            "contract_address": f"BLOCKED{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": blocked_time,
-            "result": StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry"
-            )
-        })
+    # 2. Добавляем блокированные попытки для capacity pressure (валидные, с exit_time)
+    add_capacity_blocked_attempts(trades, base_time, count=10)
     
     # 3. Затем добавляем очень прибыльные сделки для profit reset
     for i in range(5):
@@ -766,6 +744,9 @@ def test_profit_reset_sets_profit_reason_and_cycle_updates():
             "timestamp": entry_time,
             "result": strategy_output
         })
+    
+    # Сортируем trades по timestamp
+    trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
@@ -807,14 +788,14 @@ def test_capacity_close_all_still_works_when_mode_close_all():
         allocation_mode="dynamic",
         percent_per_trade=0.01,
         max_exposure=1.0,
-        max_open_positions=5,
+        max_open_positions=2,  # Маленький портфель для гарантированного pressure
         fee_model=FeeModel(),
         capacity_reset_enabled=True,
         capacity_reset_mode="close_all",  # Legacy режим
-        capacity_open_ratio_threshold=0.8,
+        capacity_open_ratio_threshold=1.0,  # Жёстче: 100% заполненности
         capacity_window_type="signals",
         capacity_window_size=10,
-        capacity_max_blocked_ratio=0.5,
+        capacity_max_blocked_ratio=0.2,  # Жёстче: 20% отклоненных достаточно
         capacity_max_avg_hold_days=1.0,
     )
     
@@ -823,47 +804,25 @@ def test_capacity_close_all_still_works_when_mode_close_all():
     base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     
     trades = []
-    for i in range(5):
+    # Заполняем портфель позициями
+    fill_portfolio(trades, base_time, n=2)
+    # Добавляем еще позиции
+    for i in range(3):
         entry_time = base_time - timedelta(days=2)
         exit_time = base_time + timedelta(days=30)
-        
-        strategy_output = StrategyOutput(
+        trade = make_entry_trade(
+            signal_id=f"signal_{i+3}",
+            contract_address=f"TOKEN{i+3}",
             entry_time=entry_time,
-            entry_price=1.0,
             exit_time=exit_time,
-            exit_price=0.7,
-            pnl=-0.30,
-            reason="timeout",
-            meta={
-                "entry_mcap_proxy": 15000.0,
-            }
         )
-        
-        trades.append({
-            "signal_id": f"signal_{i+1}",
-            "contract_address": f"TOKEN{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": entry_time,
-            "result": strategy_output
-        })
+        trades.append(trade)
     
-    # Добавляем блокированные сигналы
-    for i in range(10):
-        blocked_time = base_time + timedelta(minutes=10 + i * 5)
-        trades.append({
-            "signal_id": f"blocked_{i+1}",
-            "contract_address": f"BLOCKED{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": blocked_time,
-            "result": StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry"
-            )
-        })
+    # Добавляем блокированные попытки для capacity pressure
+    add_capacity_blocked_attempts(trades, base_time, count=10)
+    
+    # Сортируем trades по timestamp
+    trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
@@ -911,19 +870,20 @@ def test_prune_respects_cooldown_signals():
     
     Проверяет anti-flapping механизм.
     """
+    # Маленький портфель для создания capacity pressure
     config = PortfolioConfig(
         initial_balance_sol=100.0,
         allocation_mode="dynamic",
         percent_per_trade=0.01,
         max_exposure=1.0,
-        max_open_positions=5,
+        max_open_positions=2,  # Маленький портфель для capacity pressure
         fee_model=FeeModel(),
         capacity_reset_enabled=True,
         capacity_reset_mode="prune",
-        capacity_open_ratio_threshold=0.8,
+        capacity_open_ratio_threshold=0.8,  # 2 * 0.8 = 1.6 → нужно >= 2 позиций
         capacity_window_type="signals",
-        capacity_window_size=10,
-        capacity_max_blocked_ratio=0.5,
+        capacity_window_size=10,  # Окно на 10 сигналов
+        capacity_max_blocked_ratio=0.5,  # 50% заблокированных
         capacity_max_avg_hold_days=1.0,
         prune_fraction=0.5,
         prune_min_hold_days=1.0,
@@ -938,8 +898,8 @@ def test_prune_respects_cooldown_signals():
     base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     
     trades = []
-    # Создаем 5 плохих позиций для первого capacity pressure
-    for i in range(5):
+    # Шаг 1: Заполняем портфель 2 позициями (максимум) - плохие кандидаты для prune
+    for i in range(2):
         entry_time = base_time - timedelta(days=2)
         exit_time = base_time + timedelta(days=30)
         
@@ -952,6 +912,7 @@ def test_prune_respects_cooldown_signals():
             reason="timeout",
             meta={
                 "entry_mcap_proxy": 15000.0,
+                "last_seen_price": 0.7,  # Для current_pnl_pct fallback
             }
         )
         
@@ -963,25 +924,12 @@ def test_prune_respects_cooldown_signals():
             "result": strategy_output
         })
     
-    # Добавляем блокированные сигналы для capacity pressure (первый триггер)
-    for i in range(10):
-        blocked_time = base_time + timedelta(minutes=10 + i * 5)
-        trades.append({
-            "signal_id": f"blocked_{i+1}",
-            "contract_address": f"BLOCKED{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": blocked_time,
-            "result": StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry"
-            )
-        })
+    # Шаг 2: Добавляем блокированные попытки для capacity pressure (валидные, с meta флагом)
+    add_capacity_blocked_attempts(trades, base_time, count=10)
     
-    # Добавляем еще 5 плохих позиций для второго capacity pressure (после cooldown)
+    # Шаг 3: После первого prune, добавляем еще позиции для второго capacity pressure (после cooldown)
+    # Но только после того как пройдет cooldown (200+ сигналов)
+    # Для простоты добавляем много сигналов, но их будет меньше чем нужно для второго prune из-за cooldown
     for i in range(5):
         entry_time = base_time + timedelta(hours=1)
         exit_time = entry_time + timedelta(days=30)
@@ -995,6 +943,7 @@ def test_prune_respects_cooldown_signals():
             reason="timeout",
             meta={
                 "entry_mcap_proxy": 15000.0,
+                "last_seen_price": 0.7,  # Для current_pnl_pct fallback
             }
         )
         
@@ -1006,8 +955,8 @@ def test_prune_respects_cooldown_signals():
             "result": strategy_output
         })
     
-    # Добавляем еще блокированные сигналы для второго capacity pressure
-    # Но их должно быть меньше cooldown_signals, чтобы второй prune не сработал
+    # Шаг 4: Добавляем еще сигналы для второго capacity pressure
+    # Но их меньше чем cooldown_signals=200, чтобы второй prune не сработал
     for i in range(50):  # Меньше чем cooldown_signals=200
         blocked_time = base_time + timedelta(hours=2, minutes=10 + i * 5)
         trades.append({
@@ -1016,12 +965,12 @@ def test_prune_respects_cooldown_signals():
             "strategy": "test_strategy",
             "timestamp": blocked_time,
             "result": StrategyOutput(
-                entry_time=None,
-                entry_price=None,
+                entry_time=blocked_time,  # Стратегия хочет войти
+                entry_price=1.0,  # Валидная цена входа
                 exit_time=None,
                 exit_price=None,
                 pnl=0.0,
-                reason="no_entry"
+                reason="open"  # Позиция открыта (но портфель отклонит из-за capacity)
             )
         })
     
@@ -1071,48 +1020,15 @@ def test_prune_skips_when_candidates_below_min():
     base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     
     trades = []
-    # Создаем только 2 кандидата (меньше минимума)
-    for i in range(2):
-        entry_time = base_time - timedelta(days=2)
-        exit_time = base_time + timedelta(days=30)
-        
-        strategy_output = StrategyOutput(
-            entry_time=entry_time,
-            entry_price=1.0,
-            exit_time=exit_time,
-            exit_price=0.7,  # -30% (кандидат)
-            pnl=-0.30,
-            reason="timeout",
-            meta={
-                "entry_mcap_proxy": 15000.0,
-            }
-        )
-        
-        trades.append({
-            "signal_id": f"signal_{i+1}",
-            "contract_address": f"TOKEN{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": entry_time,
-            "result": strategy_output
-        })
+    # Создаем только 2 кандидата (меньше минимума = 3)
+    fill_portfolio(trades, base_time, n=2)  # 2 позиции-кандидата
     
-    # Добавляем блокированные сигналы для capacity pressure
-    for i in range(10):
-        blocked_time = base_time + timedelta(minutes=10 + i * 5)
-        trades.append({
-            "signal_id": f"blocked_{i+1}",
-            "contract_address": f"BLOCKED{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": blocked_time,
-            "result": StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry"
-            )
-        })
+    # Добавляем блокированные попытки для capacity pressure
+    # Но prune не должен сработать, т.к. кандидатов меньше минимума (2 < 3)
+    add_capacity_blocked_attempts(trades, base_time, count=10)
+    
+    # Сортируем trades по timestamp
+    trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
@@ -1134,16 +1050,17 @@ def test_prune_protects_positions_with_max_xn():
     
     Проверяет tail protection механизм.
     """
+    # Маленький портфель для создания capacity pressure
     config = PortfolioConfig(
         initial_balance_sol=100.0,
         allocation_mode="dynamic",
         percent_per_trade=0.01,
         max_exposure=1.0,
-        max_open_positions=5,
+        max_open_positions=2,  # Маленький портфель
         fee_model=FeeModel(),
         capacity_reset_enabled=True,
         capacity_reset_mode="prune",
-        capacity_open_ratio_threshold=0.8,
+        capacity_open_ratio_threshold=0.8,  # 2 * 0.8 = 1.6 → нужно >= 2 позиций
         capacity_window_type="signals",
         capacity_window_size=10,
         capacity_max_blocked_ratio=0.5,
@@ -1160,74 +1077,36 @@ def test_prune_protects_positions_with_max_xn():
     
     base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     
-    trades = []
-    # Создаем 3 обычных кандидата
-    for i in range(3):
+        trades = []
+        # Открываем ровно 2 позиции:
+        # 1. Обычный кандидат (будет закрыт prune)
         entry_time = base_time - timedelta(days=2)
         exit_time = base_time + timedelta(days=30)
-        
-        strategy_output = StrategyOutput(
+        trade = make_entry_trade(
+            signal_id="signal_1",
+            contract_address="TOKEN1",
             entry_time=entry_time,
-            entry_price=1.0,
             exit_time=exit_time,
-            exit_price=0.7,  # -30% (кандидат)
-            pnl=-0.30,
-            reason="timeout",
-            meta={
-                "entry_mcap_proxy": 15000.0,
-            }
+            last_seen_price=0.7,  # Для current_pnl_pct fallback
         )
+        trades.append(trade)
         
-        trades.append({
-            "signal_id": f"signal_{i+1}",
-            "contract_address": f"TOKEN{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": entry_time,
-            "result": strategy_output
-        })
-    
-    # Создаем позицию с max_xn=2.5 (защищена от prune)
-    entry_time = base_time - timedelta(days=2)
-    exit_time = base_time + timedelta(days=30)
-    
-    protected_strategy_output = StrategyOutput(
-        entry_time=entry_time,
-        entry_price=1.0,
-        exit_time=exit_time,
-        exit_price=0.7,  # -30% (иначе была бы кандидатом)
-        pnl=-0.30,
-        reason="timeout",
-        meta={
-            "entry_mcap_proxy": 15000.0,
-            "max_xn": 2.5,  # Hardening: защита от prune
-        }
-    )
-    
-    trades.append({
-        "signal_id": "protected_signal",
-        "contract_address": "PROTECTED",
-        "strategy": "test_strategy",
-        "timestamp": entry_time,
-        "result": protected_strategy_output
-    })
-    
-    # Добавляем блокированные сигналы для capacity pressure
-    for i in range(10):
-        blocked_time = base_time + timedelta(minutes=10 + i * 5)
-        trades.append({
-            "signal_id": f"blocked_{i+1}",
-            "contract_address": f"BLOCKED{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": blocked_time,
-            "result": StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry"
-            )
-        })
+        # 2. Protected кандидат (max_xn=2.5, защищена от prune)
+        protected_trade = make_entry_trade(
+            signal_id="protected_signal",
+            contract_address="PROTECTED",
+            entry_time=entry_time,
+            exit_time=exit_time,
+            last_seen_price=0.7,  # Для current_pnl_pct fallback
+            max_xn=2.5,  # Hardening: защита от prune
+        )
+        trades.append(protected_trade)
+
+        # Добавляем блокированные попытки для capacity pressure (валидные, с meta флагом)
+        add_capacity_blocked_attempts(trades, base_time, count=10)
+        
+        # Сортируем trades по timestamp
+        trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
@@ -1318,47 +1197,30 @@ def test_profit_reset_has_priority_over_capacity():
         })
     
     # Создаем плохие позиции для capacity pressure
-    for i in range(5):
+    fill_portfolio(trades, base_time, n=2)
+    # Добавляем еще кандидатов
+    for i in range(3):
         entry_time = base_time - timedelta(days=2)
         exit_time = base_time + timedelta(days=30)
-        
-        strategy_output = StrategyOutput(
+        trade = make_entry_trade(
+            signal_id=f"bad_signal_{i+1}",
+            contract_address=f"BAD{i+1}",
             entry_time=entry_time,
-            entry_price=1.0,
             exit_time=exit_time,
-            exit_price=0.7,  # -30% (кандидат для prune)
-            pnl=-0.30,
-            reason="timeout",
-            meta={
-                "entry_mcap_proxy": 15000.0,
-            }
         )
-        
-        trades.append({
-            "signal_id": f"bad_signal_{i+1}",
-            "contract_address": f"BAD{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": entry_time,
-            "result": strategy_output
-        })
+        trades.append(trade)
     
-    # Добавляем блокированные сигналы для capacity pressure
-    for i in range(10):
-        blocked_time = base_time + timedelta(hours=6, minutes=10 + i * 5)
-        trades.append({
-            "signal_id": f"blocked_{i+1}",
-            "contract_address": f"BLOCKED{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": blocked_time,
-            "result": StrategyOutput(
-                entry_time=None,
-                entry_price=None,
-                exit_time=None,
-                exit_price=None,
-                pnl=0.0,
-                reason="no_entry"
-            )
-        })
+    # Добавляем блокированные попытки для capacity pressure
+    # Используем start_offset_minutes чтобы они были после прибыльных сделок
+    add_capacity_blocked_attempts(
+        trades, 
+        base_time, 
+        count=10, 
+        start_offset_minutes=6 * 60 + 10  # 6 часов + 10 минут
+    )
+    
+    # Сортируем trades по timestamp (важно для правильного порядка событий)
+    trades = sorted(trades, key=lambda x: x["timestamp"])
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     

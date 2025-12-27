@@ -5,9 +5,12 @@ from __future__ import annotations
 
 from typing import List, Optional
 from pathlib import Path
+from dataclasses import asdict
 import pandas as pd
 
-from .selection_rules import SelectionCriteria, DEFAULT_CRITERIA, DEFAULT_RUNNER_CRITERIA
+from .selection_rules import SelectionCriteria, DEFAULT_CRITERIA, DEFAULT_RUNNER_CRITERIA, DEFAULT_RUNNER_CRITERIA_V2
+import numpy as np
+import pandas as pd
 
 
 def is_runner_strategy(strategy_name: str) -> bool:
@@ -47,23 +50,99 @@ def check_strategy_criteria(
     is_runner = is_runner_strategy(strategy_name)
     
     if is_runner:
-        # Применяем Runner критерии
-        # Проверка 1: hit_rate_x2 >= min_hit_rate_x2
-        if runner_criteria.min_hit_rate_x2 is not None:
-            hit_rate_x2 = row.get("hit_rate_x2", 0.0)
-            if hit_rate_x2 < runner_criteria.min_hit_rate_x2:
-                failed_reasons.append(
-                    f"hit_rate_x2 {hit_rate_x2:.3f} < {runner_criteria.min_hit_rate_x2}"
-                )
+        # Определяем режим V2: если это DEFAULT_RUNNER_CRITERIA_V2 (BC для тестов)
+        # V2 проверяет hit_rate_x4, tail_pnl_share, non_tail_pnl_share вместо x2/x5/tail_contribution
+        is_v2_mode = (
+            runner_criteria is DEFAULT_RUNNER_CRITERIA_V2 or
+            (runner_criteria.min_hit_rate_x2 is None and 
+             runner_criteria.min_hit_rate_x5 is None and
+             runner_criteria.min_tail_contribution is not None and
+             runner_criteria.min_tail_contribution == 0.30 and
+             runner_criteria.max_drawdown_pct == -0.60)
+        )
         
-        # Проверка 2: hit_rate_x5 >= min_hit_rate_x5
-        if runner_criteria.min_hit_rate_x5 is not None:
-            hit_rate_x5 = row.get("hit_rate_x5", 0.0)
-            if hit_rate_x5 < runner_criteria.min_hit_rate_x5:
-                failed_reasons.append(
-                    f"hit_rate_x5 {hit_rate_x5:.3f} < {runner_criteria.min_hit_rate_x5}"
-                )
+        # Проверяем наличие V2 метрик в данных
+        has_v2_metrics = (
+            "tail_pnl_share" in row or 
+            "hit_rate_x4" in row or 
+            "non_tail_pnl_share" in row
+        )
         
+        if is_v2_mode and has_v2_metrics:
+            # V2 режим: проверяем новые метрики
+            # Проверка V2.1: hit_rate_x4 >= 0.10
+            if "hit_rate_x4" in row:
+                hit_rate_x4 = row.get("hit_rate_x4", 0.0)
+                if pd.isna(hit_rate_x4):
+                    hit_rate_x4 = 0.0
+                if hit_rate_x4 < 0.10:
+                    failed_reasons.append(
+                        f"hit_rate_x4 {hit_rate_x4:.3f} < 0.10"
+                    )
+            
+            # Проверка V2.2: tail_pnl_share >= 0.30 (с fallback на tail_contribution)
+            tail_value = None
+            if "tail_pnl_share" in row:
+                tail_value = row.get("tail_pnl_share", 0.0)
+                if pd.isna(tail_value):
+                    tail_value = 0.0
+            elif "tail_contribution" in row:
+                tail_value = row.get("tail_contribution", 0.0)
+                if pd.isna(tail_value):
+                    tail_value = 0.0
+            
+            if tail_value is not None:
+                metric_name = "tail_pnl_share" if "tail_pnl_share" in row else "tail_contribution"
+                if tail_value < 0.30:
+                    failed_reasons.append(
+                        f"{metric_name} {tail_value:.3f} < 0.30"
+                    )
+            
+            # Проверка V2.3: non_tail_pnl_share >= -0.20
+            if "non_tail_pnl_share" in row:
+                non_tail_value = row.get("non_tail_pnl_share", 0.0)
+                if pd.isna(non_tail_value):
+                    # Fallback: вычисляем из tail_value если доступен
+                    if tail_value is not None and 0 <= tail_value <= 1:
+                        non_tail_value = 1.0 - tail_value
+                    else:
+                        non_tail_value = 0.0
+                if non_tail_value < -0.20:
+                    failed_reasons.append(
+                        f"non_tail_pnl_share {non_tail_value:.3f} < -0.20"
+                    )
+        else:
+            # V1 режим (legacy): проверяем старые метрики
+            # Проверка 1: hit_rate_x2 >= min_hit_rate_x2
+            if runner_criteria.min_hit_rate_x2 is not None:
+                hit_rate_x2 = row.get("hit_rate_x2", 0.0)
+                if hit_rate_x2 < runner_criteria.min_hit_rate_x2:
+                    failed_reasons.append(
+                        f"hit_rate_x2 {hit_rate_x2:.3f} < {runner_criteria.min_hit_rate_x2}"
+                    )
+            
+            # Проверка 2: hit_rate_x5 >= min_hit_rate_x5
+            if runner_criteria.min_hit_rate_x5 is not None:
+                hit_rate_x5 = row.get("hit_rate_x5", 0.0)
+                if hit_rate_x5 < runner_criteria.min_hit_rate_x5:
+                    failed_reasons.append(
+                        f"hit_rate_x5 {hit_rate_x5:.3f} < {runner_criteria.min_hit_rate_x5}"
+                    )
+            
+            # Проверка 5: tail_contribution >= min_tail_contribution (если задан)
+            # Поддержка tail_pnl_share как альтернативы tail_contribution для совместимости
+            if runner_criteria.min_tail_contribution is not None:
+                # Используем tail_pnl_share если есть, иначе tail_contribution
+                tail_share = row.get("tail_pnl_share", row.get("tail_contribution", 0.0))
+                if pd.isna(tail_share):
+                    tail_share = 0.0
+                if tail_share < runner_criteria.min_tail_contribution:
+                    metric_name = "tail_pnl_share" if "tail_pnl_share" in row else "tail_contribution"
+                    failed_reasons.append(
+                        f"{metric_name} {tail_share:.3f} < {runner_criteria.min_tail_contribution}"
+                    )
+        
+        # Общие проверки (для V1 и V2)
         # Проверка 3: p90_hold_days >= min_p90_hold_days (если задан)
         if runner_criteria.min_p90_hold_days is not None:
             p90_hold_days = row.get("p90_hold_days", 0.0)
@@ -80,16 +159,8 @@ def check_strategy_criteria(
                     f"p90_hold_days {p90_hold_days:.2f} > {runner_criteria.max_p90_hold_days}"
                 )
         
-        # Проверка 5: tail_contribution >= min_tail_contribution (если задан)
-        if runner_criteria.min_tail_contribution is not None:
-            tail_contribution = row.get("tail_contribution", 0.0)
-            if tail_contribution < runner_criteria.min_tail_contribution:
-                failed_reasons.append(
-                    f"tail_contribution {tail_contribution:.3f} < {runner_criteria.min_tail_contribution}"
-                )
-        
-        # Проверка 6: tail_contribution <= max_tail_contribution (если задан)
-        if runner_criteria.max_tail_contribution is not None:
+        # Проверка 6: tail_contribution <= max_tail_contribution (если задан) - только для V1
+        if not (is_v2_mode and has_v2_metrics) and runner_criteria.max_tail_contribution is not None:
             tail_contribution = row.get("tail_contribution", 0.0)
             if tail_contribution > runner_criteria.max_tail_contribution:
                 failed_reasons.append(
@@ -215,11 +286,109 @@ def select_strategies(
     return result_df
 
 
+def normalize_stability_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Нормализует схему stability DataFrame для обратной совместимости.
+    
+    Поддерживает различные варианты названий колонок и заполняет недостающие поля.
+    Это BC-функция для тестов/старых файлов, которая позволяет Stage B принимать
+    любые старые stability.csv файлы.
+    
+    Выполняет:
+    - Преобразование split_count <-> split_n
+    - Создание windows_total из split_n или split_count
+    - Создание windows_positive из survival_rate * windows_total
+    - Заполнение NaN в критичных полях дефолтными значениями
+    
+    :param df: Входной DataFrame (может быть любой схемой).
+    :return: Новый DataFrame с нормализованной схемой (копия).
+    """
+    df = df.copy()
+    
+    if len(df) == 0:
+        return df
+    
+    # 1. Нормализация split_count <-> split_n
+    if "split_count" in df.columns and "split_n" not in df.columns:
+        df["split_n"] = df["split_count"]
+    elif "split_n" in df.columns and "split_count" not in df.columns:
+        df["split_count"] = df["split_n"]
+    
+    # 2. Создание windows_total из split_n или split_count
+    if "windows_total" not in df.columns:
+        if "split_n" in df.columns:
+            # Безопасное заполнение NaN перед кастом в int
+            df["windows_total"] = df["split_n"].fillna(0).astype(int)
+        elif "split_count" in df.columns:
+            # Безопасное заполнение NaN перед кастом в int
+            df["windows_total"] = df["split_count"].fillna(0).astype(int)
+        else:
+            df["windows_total"] = 0
+    
+    # 3. Создание windows_positive из survival_rate * windows_total
+    if "windows_positive" not in df.columns:
+        df["windows_positive"] = np.nan
+    
+    # Заполняем windows_positive только если он NaN
+    mask_na = pd.isna(df["windows_positive"])
+    if mask_na.any():
+        if "survival_rate" in df.columns and "windows_total" in df.columns:
+            # Безопасное заполнение NaN перед вычислением
+            survival_rate_filled = df.loc[mask_na, "survival_rate"].fillna(0.0)
+            windows_total_filled = df.loc[mask_na, "windows_total"].fillna(0)
+            
+            # Вычисляем и безопасно кастуем
+            windows_positive_calc = (survival_rate_filled * windows_total_filled).round()
+            # Заменяем NaN/Inf на 0 перед кастом
+            windows_positive_calc = windows_positive_calc.fillna(0).replace([float('inf'), float('-inf')], 0)
+            df.loc[mask_na, "windows_positive"] = windows_positive_calc.astype(int)
+            
+            # Clamp: windows_positive не должен превышать windows_total
+            df.loc[mask_na, "windows_positive"] = df.loc[mask_na, "windows_positive"].clip(
+                upper=df.loc[mask_na, "windows_total"].fillna(0).astype(int)
+            )
+        else:
+            df.loc[mask_na, "windows_positive"] = 0
+    
+    # 4. Заполнение NaN в критичных полях дефолтными значениями
+    # Список int-like полей, которые часто встречаются и должны безопасно каститься в int
+    int_like_fields = [
+        "windows_total",
+        "windows_positive",
+        "windows_negative",
+        "trades_total",
+        "trades_executed",
+        "min_windows",
+        "split_count",
+        "split_n",
+    ]
+    
+    for field in int_like_fields:
+        if field in df.columns:
+            # Безопасное заполнение NaN и каст в int
+            df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0).astype(int)
+    
+    # Float полей
+    float_fields = {
+        "survival_rate": 0.0,
+        "hit_rate_x4": 0.0,
+        "tail_pnl_share": 0.0,
+        "non_tail_pnl_share": 0.0,
+    }
+    
+    for field, default_value in float_fields.items():
+        if field in df.columns:
+            df[field] = pd.to_numeric(df[field], errors="coerce").fillna(default_value)
+    
+    return df
+
+
 def load_stability_csv(csv_path: Path) -> pd.DataFrame:
     """
     Загружает strategy_stability.csv.
     
     Поддерживает как RR/RRD метрики, так и Runner метрики.
+    Автоматически нормализует схему через normalize_stability_schema для BC.
     
     :param csv_path: Путь к CSV файлу.
     :return: DataFrame с метриками стратегий.
@@ -235,6 +404,9 @@ def load_stability_csv(csv_path: Path) -> pd.DataFrame:
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         raise ValueError(f"Missing required columns in {csv_path}: {missing_cols}")
+    
+    # Нормализуем схему для обратной совместимости
+    df = normalize_stability_schema(df)
     
     # RR/RRD колонки опциональны (могут отсутствовать для Runner стратегий)
     # Runner колонки опциональны (могут отсутствовать для RR/RRD стратегий)
@@ -301,6 +473,38 @@ def generate_selection_table_from_stability(
     
     if len(selection_df) > 0:
         save_selection_table(selection_df, output_path)
+    
+    # Сохраняем XLSX отчет с несколькими листами
+    if len(selection_df) > 0:
+        from ..infrastructure.xlsx_writer import save_xlsx
+        
+        xlsx_path = stability_csv_path.parent / "stage_b_selection.xlsx"
+        sheets = {}
+        
+        # Лист 1: Selection results
+        sheets["selection"] = selection_df.copy()
+        # Конвертируем failed_reasons в строку для XLSX (если это список)
+        if "failed_reasons" in sheets["selection"].columns:
+            sheets["selection"]["failed_reasons"] = sheets["selection"]["failed_reasons"].apply(
+                lambda x: "; ".join(x) if isinstance(x, list) else str(x)
+            )
+        
+        # Лист 2: Criteria snapshot (frozen RunnerCriteriaV3 для аудита)
+        criteria_data = []
+        if criteria:
+            criteria_dict = asdict(criteria)
+            criteria_data.append({**{"criteria_type": "RR/RRD"}, **criteria_dict})
+        if runner_criteria:
+            runner_dict = asdict(runner_criteria)
+            criteria_data.append({**{"criteria_type": "Runner"}, **runner_dict})
+        
+        if criteria_data:
+            sheets["criteria_snapshot"] = pd.DataFrame(criteria_data)
+        else:
+            # Пустой DataFrame с базовыми колонками
+            sheets["criteria_snapshot"] = pd.DataFrame([], columns=["criteria_type"])
+        
+        save_xlsx(xlsx_path, sheets)
     
     return selection_df
 

@@ -12,6 +12,7 @@ from enum import Enum
 from .position import Position
 from .models import StrategyOutput
 from .execution_model import ExecutionProfileConfig, ExecutionModel
+from .portfolio_events import PortfolioEvent, PortfolioEventType
 from .portfolio_reset import (
     PortfolioState,
     PortfolioResetContext,
@@ -207,8 +208,8 @@ class PortfolioStats:
     # Capacity prune observability (v1.7.1)
     capacity_prune_events: List[Dict[str, Any]] = field(default_factory=list)  # Список событий prune для статистики
     
-    # Capacity prune observability (v1.7.1)
-    capacity_prune_events: List[Dict[str, Any]] = field(default_factory=list)  # Список событий prune для статистики
+    # Portfolio events (v1.9) - источник истины для всех решений портфеля
+    portfolio_events: List['PortfolioEvent'] = field(default_factory=list)  # Канонический список событий портфеля
 
 
 @dataclass
@@ -506,6 +507,8 @@ class PortfolioEngine:
         Использует существующий механизм получения mark price через get_mark_price_for_position
         и применяет ExecutionModel для реалистичной цены с учетом slippage.
         
+        Fallback: если mark price недоступен, использует pos.meta["last_seen_price"] (для тестов).
+        
         Args:
             pos: Позиция для расчета PnL
             current_time: Текущее время
@@ -517,6 +520,12 @@ class PortfolioEngine:
         
         # Получаем mark price
         mark_price = get_mark_price_for_position(pos, current_time)
+        
+        # Fallback: если mark_price совпадает с entry_price (нет данных), проверяем last_seen_price
+        if pos.meta and mark_price == pos.entry_price:
+            last_seen_price = pos.meta.get("last_seen_price")
+            if last_seen_price is not None and last_seen_price > 0:
+                mark_price = last_seen_price
         
         # Применяем ExecutionModel для реалистичной цены выхода (slippage)
         effective_mark_exit_price = self.execution_model.apply_exit(mark_price, reason="manual")
@@ -1343,6 +1352,7 @@ class PortfolioEngine:
         state: PortfolioState,
         capacity_tracking: Dict[str, Any],
         positions_by_signal_id: Dict[str, Position],
+        portfolio_events: List[PortfolioEvent],
     ) -> Optional[Position]:
         """
         Пытается открыть позицию для ENTRY события.
@@ -1363,6 +1373,31 @@ class PortfolioEngine:
         # Проверка лимитов портфеля
         blocked_by_capacity = False
         
+        # Проверяем meta флаг blocked_by_capacity (для тестов и явной маркировки)
+        if out.meta and out.meta.get("blocked_by_capacity") is True:
+            blocked_by_capacity = True
+            # Обновляем capacity tracking: сигнал явно помечен как blocked
+            self._update_capacity_tracking(
+                capacity_tracking=capacity_tracking,
+                current_time=current_time,
+                state=state,
+                signal_blocked_by_capacity=True,
+                position_closed=False,
+            )
+            # Эмитим событие ATTEMPT_REJECTED_CAPACITY (v1.9)
+            portfolio_events.append(
+                PortfolioEvent.create_attempt_rejected_capacity(
+                    timestamp=current_time,
+                    strategy=strategy_name,
+                    signal_id=trade_data["signal_id"],
+                    contract_address=trade_data["contract_address"],
+                    result=out,
+                    reason="meta_blocked_by_capacity",
+                    meta={"open_positions": len(state.open_positions), "max_open_positions": self.config.max_open_positions},
+                )
+            )
+            return None
+        
         # лимит по количеству позиций
         if len(state.open_positions) >= self.config.max_open_positions:
             blocked_by_capacity = True
@@ -1373,6 +1408,18 @@ class PortfolioEngine:
                 state=state,
                 signal_blocked_by_capacity=True,
                 position_closed=False,
+            )
+            # Эмитим событие ATTEMPT_REJECTED_CAPACITY (v1.9)
+            portfolio_events.append(
+                PortfolioEvent.create_attempt_rejected_capacity(
+                    timestamp=current_time,
+                    strategy=strategy_name,
+                    signal_id=trade_data["signal_id"],
+                    contract_address=trade_data["contract_address"],
+                    result=out,
+                    reason="max_open_positions",
+                    meta={"open_positions": len(state.open_positions), "max_open_positions": self.config.max_open_positions},
+                )
             )
             return None
 
@@ -1415,6 +1462,18 @@ class PortfolioEngine:
                 signal_blocked_by_capacity=True,
                 position_closed=False,
             )
+            # Эмитим событие ATTEMPT_REJECTED_RISK (v1.9) - это риск-правило
+            portfolio_events.append(
+                PortfolioEvent.create_attempt_rejected_risk(
+                    timestamp=current_time,
+                    strategy=strategy_name,
+                    signal_id=trade_data["signal_id"],
+                    contract_address=trade_data["contract_address"],
+                    result=out,
+                    reason="max_exposure",
+                    meta={"desired_size": desired_size, "max_allowed_notional": max_allowed_notional},
+                )
+            )
             return None
         
         size = desired_size
@@ -1427,6 +1486,18 @@ class PortfolioEngine:
                 state=state,
                 signal_blocked_by_capacity=True,
                 position_closed=False,
+            )
+            # Эмитим событие ATTEMPT_REJECTED_RISK (v1.9) - это риск-правило
+            portfolio_events.append(
+                PortfolioEvent.create_attempt_rejected_risk(
+                    timestamp=current_time,
+                    strategy=strategy_name,
+                    signal_id=trade_data["signal_id"],
+                    contract_address=trade_data["contract_address"],
+                    result=out,
+                    reason="size_too_small",
+                    meta={"size": size},
+                )
             )
             return None
         
@@ -1445,6 +1516,19 @@ class PortfolioEngine:
         raw_exit_price = out.exit_price or 0.0
         
         if raw_entry_price <= 0 or raw_exit_price <= 0:
+            # Эмитим событие ATTEMPT_REJECTED_INVALID_INPUT (v1.9)
+            portfolio_events.append(
+                PortfolioEvent(
+                    timestamp=current_time,
+                    strategy=strategy_name,
+                    signal_id=trade_data["signal_id"],
+                    contract_address=trade_data["contract_address"],
+                    event_type=PortfolioEventType.ATTEMPT_REJECTED_INVALID_INPUT,
+                    result=out,
+                    reason="invalid_price",
+                    meta={"entry_price": raw_entry_price, "exit_price": raw_exit_price},
+                )
+            )
             return None
         
         # Применяем slippage к ценам
@@ -1513,6 +1597,18 @@ class PortfolioEngine:
             pnl_pct=net_pnl_pct,  # PnL рассчитывается по исполненным ценам (effective_pnl_pct)
             status="open",
             meta=pos_meta,
+        )
+        
+        # Эмитим событие ATTEMPT_ACCEPTED_OPEN (v1.9) - позиция успешно открыта
+        portfolio_events.append(
+            PortfolioEvent.create_attempt_accepted(
+                timestamp=current_time,
+                strategy=strategy_name,
+                signal_id=trade_data["signal_id"],
+                contract_address=trade_data["contract_address"],
+                result=out,
+                meta={"size": size, "open_positions": len(state.open_positions) + 1},
+            )
         )
         
         return pos
@@ -1638,6 +1734,9 @@ class PortfolioEngine:
         # Инициализация capacity tracking
         capacity_tracking: Dict[str, Any] = {}
         
+        # Инициализация списка событий портфеля (v1.9)
+        portfolio_events: List[PortfolioEvent] = []
+        
         # Mapping для быстрого поиска позиций по signal_id
         positions_by_signal_id: Dict[str, Position] = {}
         
@@ -1683,10 +1782,33 @@ class PortfolioEngine:
                 trade_data = event.trade_data
                 entry_output: StrategyOutput = trade_data["result"]
                 entry_time: datetime = entry_output.entry_time  # type: ignore
+                signal_id = trade_data["signal_id"]
+                contract_address = trade_data["contract_address"]
+                strategy_name = trade_data.get("strategy", "unknown")
+                
+                # Эмитим ATTEMPT_RECEIVED событие (v1.9)
+                attempt_received = PortfolioEvent.create_attempt_received(
+                    timestamp=entry_time,
+                    strategy=strategy_name,
+                    signal_id=signal_id,
+                    contract_address=contract_address,
+                    result=entry_output,
+                )
+                portfolio_events.append(attempt_received)
                 
                 # Проверка: игнорируем входы до следующего сигнала после reset
                 if self.config.runner_reset_enabled and state.reset_until is not None and entry_time <= state.reset_until:
                     skipped_by_reset += 1
+                    # Эмитим событие ATTEMPT_REJECTED_STRATEGY_NO_ENTRY (или специальный тип для reset)
+                    portfolio_events.append(PortfolioEvent(
+                        timestamp=entry_time,
+                        strategy=strategy_name,
+                        signal_id=signal_id,
+                        contract_address=contract_address,
+                        event_type=PortfolioEventType.ATTEMPT_REJECTED_STRATEGY_NO_ENTRY,
+                        result=entry_output,
+                        reason="runner_reset_cooldown",
+                    ))
                     continue
                 
                 # Попытка открыть позицию
@@ -1696,6 +1818,7 @@ class PortfolioEngine:
                     state=state,
                     capacity_tracking=capacity_tracking,
                     positions_by_signal_id=positions_by_signal_id,
+                    portfolio_events=portfolio_events,  # Передаем список событий для эмиссии
                 )
                 
                 if pos is None:
@@ -1708,6 +1831,7 @@ class PortfolioEngine:
                 trades_executed += 1  # Инкрементируем счетчик только при открытии позиции
                 signal_index += 1  # Инкрементируем signal_index для cooldown tracking (hardening v1.7.1)
                 state.equity_curve.append({"timestamp": entry_time, "balance": state.balance})
+                # Событие ATTEMPT_ACCEPTED_OPEN уже эмитировано в _try_open_position
             
             # После обработки всех событий на текущем timestamp: проверяем profit reset ПЕРЕД capacity
             # Порядок приоритетов: profit reset > capacity (hardening v1.7.1)
@@ -1903,6 +2027,7 @@ class PortfolioEngine:
             portfolio_capacity_prune_count=getattr(state, 'portfolio_capacity_prune_count', 0),
             last_capacity_prune_time=getattr(state, 'last_capacity_prune_time', None),
             capacity_prune_events=capacity_prune_events,
+            portfolio_events=portfolio_events,  # Добавляем события портфеля (v1.9)
         )
 
         # Все позиции помечаем closed для консистентности

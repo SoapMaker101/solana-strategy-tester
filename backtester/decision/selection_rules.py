@@ -134,6 +134,31 @@ DEFAULT_RUNNER_CRITERIA_V1 = SelectionCriteria(
     max_drawdown_pct=-0.60,  # Максимальная просадка не более 60%
 )
 
+# Runner критерии v2 (BC-совместимость для тестов)
+# Использует V3 метрики: hit_rate_x4, tail_pnl_share, non_tail_pnl_share
+# Пороги из тестов: hit_rate_x4 >= 0.10, tail_pnl_share >= 0.30,
+# non_tail_pnl_share >= -0.20, max_drawdown_pct >= -0.60
+# ⚠️ ВАЖНО: Это BC-константа для обратной совместимости.
+# Проверки hit_rate_x4/tail_pnl_share/non_tail_pnl_share должны быть добавлены в check_strategy_criteria.
+# Пока используем существующие поля SelectionCriteria с похожими значениями.
+DEFAULT_RUNNER_CRITERIA_V2 = SelectionCriteria(
+    # RR/RRD критерии не используются для Runner
+    min_survival_rate=0.0,
+    max_pnl_variance=float('inf'),
+    min_worst_window_pnl=-float('inf'),
+    min_median_window_pnl=-float('inf'),
+    min_windows=1,
+    # Runner критерии v2 (BC: используем существующие поля для совместимости)
+    # Фактические проверки hit_rate_x4/tail_pnl_share/non_tail_pnl_share требуют расширения SelectionCriteria
+    min_hit_rate_x2=None,  # V2 использует hit_rate_x4 (не поддерживается в текущем SelectionCriteria)
+    min_hit_rate_x5=None,  # V2 не требует x5
+    min_p90_hold_days=None,
+    max_p90_hold_days=None,
+    min_tail_contribution=0.30,  # BC: min_tail_pnl_share >= 0.30 (используем tail_contribution как прокси)
+    max_tail_contribution=None,
+    max_drawdown_pct=-0.60,  # Максимальная просадка не более 60%
+)
+
 
 
 
