@@ -334,6 +334,7 @@ class PortfolioEngine:
         current_time: datetime,
         reset_reason: str,
         additional_meta: Optional[Dict[str, Any]] = None,
+        portfolio_events: Optional[List[PortfolioEvent]] = None,
     ) -> Dict[str, float]:
         """
         Единый метод для принудительного закрытия позиции (forced close).
@@ -394,6 +395,37 @@ class PortfolioEngine:
         if pos.meta:
             pos.meta.update(meta_updates)
             pos.meta["network_fee_sol"] = pos.meta.get("network_fee_sol", 0.0) + network_fee_exit
+        
+        # Эмитим событие закрытия (v1.9)
+        if portfolio_events is not None:
+            event_type_map = {
+                "capacity_prune": PortfolioEventType.CLOSED_BY_CAPACITY_PRUNE,
+                "profit": PortfolioEventType.CLOSED_BY_PROFIT_RESET,
+                "capacity": PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL,
+                "capacity_close_all": PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL,
+            }
+            event_type = event_type_map.get(reset_reason, PortfolioEventType.EXECUTED_CLOSE)
+            
+            event_meta = {
+                "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                "exit_time": current_time.isoformat(),
+                "pnl_pct": exit_pnl_pct,
+                "pnl_sol": exit_pnl_sol,
+                "fees_total_sol": fees_total,
+                "reset_reason": reset_reason,
+            }
+            if additional_meta:
+                event_meta.update(additional_meta)
+            
+            portfolio_events.append(PortfolioEvent(
+                timestamp=current_time,
+                strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                signal_id=pos.signal_id,
+                contract_address=pos.contract_address,
+                event_type=event_type,
+                reason=reset_reason,
+                meta=event_meta,
+            ))
         
         return {
             "exit_pnl_sol": exit_pnl_sol,
@@ -627,6 +659,7 @@ class PortfolioEngine:
         current_time: datetime,
         capacity_tracking: Dict[str, Any],
         signal_index: int,
+        portfolio_events: Optional[List[PortfolioEvent]] = None,
     ) -> bool:
         """
         Применяет capacity prune, если условия выполнены.
@@ -660,7 +693,7 @@ class PortfolioEngine:
                 if current_time < state.capacity_prune_cooldown_until_time:
                     return False  # Cooldown активен
         
-        # Проверяем условия capacity pressure (те же, что для capacity reset)
+        # Проверяем условия capacity pressure (v1.9: используем события вместо capacity_tracking)
         max_open = self.config.max_open_positions
         if max_open <= 0:
             return False
@@ -669,19 +702,46 @@ class PortfolioEngine:
         if open_ratio < self.config.capacity_open_ratio_threshold:
             return False
         
-        blocked_window = capacity_tracking.get("blocked_by_capacity_in_window", 0)
-        signals_in_window = capacity_tracking.get("signals_in_window", 0)
-        avg_hold_days = capacity_tracking.get("avg_hold_time_open_positions", 0.0)
-        
-        if signals_in_window > 0:
-            blocked_ratio = blocked_window / signals_in_window
-            if blocked_ratio < self.config.capacity_max_blocked_ratio:
-                return False
-        else:
+        # Переписываем capacity window на события (v1.9)
+        if portfolio_events is None or len(portfolio_events) == 0:
             return False
         
+        # Строим окно из событий для capacity_window_type="signals"
+        window_events = self._build_capacity_window_from_events(
+            portfolio_events=portfolio_events,
+            current_time=current_time,
+            window_size=self.config.capacity_window_size,
+            window_type=self.config.capacity_window_type,
+        )
+        
+        # Считаем метрики из событий (v1.9 канон)
+        accepted_open_count = sum(
+            1 for e in window_events 
+            if e.event_type == PortfolioEventType.ATTEMPT_ACCEPTED_OPEN
+        )
+        rejected_capacity_count = sum(
+            1 for e in window_events 
+            if e.event_type == PortfolioEventType.ATTEMPT_REJECTED_CAPACITY
+        )
+        
+        # attempted = accepted_open + rejected_capacity (v1.9 канон)
+        attempted = accepted_open_count + rejected_capacity_count
+        
+        if attempted == 0:
+            return False
+        
+        blocked_ratio = rejected_capacity_count / attempted
+        if blocked_ratio < self.config.capacity_max_blocked_ratio:
+            return False
+        
+        # avg_hold_days считается по открытым позициям (как раньше)
+        avg_hold_days = capacity_tracking.get("avg_hold_time_open_positions", 0.0)
         if avg_hold_days < self.config.capacity_max_avg_hold_days:
             return False
+        
+        # Сохраняем метрики для эмиссии события
+        blocked_window = rejected_capacity_count
+        signals_in_window = attempted
         
         # Все условия capacity pressure выполнены - выбираем кандидатов для prune
         candidates = self._select_capacity_prune_candidates(state, current_time)
@@ -765,7 +825,8 @@ class PortfolioEngine:
                     "capacity_prune_mcap_usd": mcap_usd,
                     "capacity_prune_hold_days": hold_days,
                     "capacity_prune_score": score,
-                }
+                },
+                portfolio_events=portfolio_events,  # Передаем события (v1.9)
             )
             
             # Возвращаем капитал (size + pnl - fees - network_fee)
@@ -797,13 +858,15 @@ class PortfolioEngine:
             state.capacity_prune_cooldown_until_time = current_time + timedelta(days=self.config.prune_cooldown_days)
         
         # Сохраняем статистику для observability (hardening v1.7.1)
+        # Примечание: blocked_window теперь считается из событий (v1.9)
         prune_event = {
             "trigger_time": current_time.isoformat(),
             "signal_index": signal_index,
             "candidates_count": len(candidates),
             "pruned_count": len(positions_to_prune),
             "open_ratio": open_ratio,
-            "blocked_window": blocked_window,
+            "blocked_window": rejected_capacity_count,  # Из событий
+            "attempted": attempted,  # Из событий
             "avg_hold_days": avg_hold_days,
             "pruned_hold_days": [item[2] for item in candidate_scores[:len(positions_to_prune)]],  # hold_days закрытых
             "pruned_current_pnl_pct": [item[4] for item in candidate_scores[:len(positions_to_prune)]],  # current_pnl_pct закрытых
@@ -819,7 +882,80 @@ class PortfolioEngine:
             f"avg_hold_days={avg_hold_days:.2f}, cooldown_until_signal={state.capacity_prune_cooldown_until_signal_index}"
         )
         
+        # Эмитим событие CAPACITY_PRUNE_TRIGGERED (v1.9)
+        if portfolio_events is not None:
+            portfolio_events.append(
+                PortfolioEvent.create_capacity_prune_triggered(
+                    timestamp=current_time,
+                    candidates_count=len(candidates),
+                    closed_count=len(positions_to_prune),
+                    blocked_ratio=blocked_ratio,
+                    meta={
+                        "open_ratio": open_ratio,
+                        "blocked_window": blocked_window,
+                        "attempted": attempted,
+                        "accepted_open_count": accepted_open_count,
+                        "rejected_capacity_count": rejected_capacity_count,
+                        "avg_hold_days": avg_hold_days,
+                        "signal_index": signal_index,
+                    },
+                )
+            )
+        
         return True
+    
+    def _build_capacity_window_from_events(
+        self,
+        portfolio_events: List[PortfolioEvent],
+        current_time: datetime,
+        window_size: Union[int, str],
+        window_type: Literal["time", "signals"],
+    ) -> List[PortfolioEvent]:
+        """
+        Строит окно событий для capacity pressure (v1.9).
+        
+        Для capacity_window_type="signals":
+        - Берем последние N событий типа ATTEMPT_ACCEPTED_OPEN или ATTEMPT_REJECTED_CAPACITY
+        - N = capacity_window_size
+        
+        Для capacity_window_type="time":
+        - Берем события за последние N дней до current_time
+        - N = capacity_window_size (в днях)
+        
+        Returns:
+            Список событий в окне (отсортированных по timestamp, старые первыми)
+        """
+        if window_type == "time":
+            # Окно по времени
+            if isinstance(window_size, str) and window_size.endswith("d"):
+                days = int(window_size[:-1])
+            else:
+                days = int(window_size)
+            window_start = current_time - timedelta(days=days)
+            
+            # Фильтруем события по времени и типу
+            window_events = [
+                e for e in portfolio_events
+                if e.timestamp >= window_start 
+                and e.event_type in (
+                    PortfolioEventType.ATTEMPT_ACCEPTED_OPEN,
+                    PortfolioEventType.ATTEMPT_REJECTED_CAPACITY,
+                )
+            ]
+        else:
+            # Окно по сигналам: берем последние N событий типа attempt
+            window_size_int = int(window_size)
+            attempt_events = [
+                e for e in portfolio_events
+                if e.event_type in (
+                    PortfolioEventType.ATTEMPT_ACCEPTED_OPEN,
+                    PortfolioEventType.ATTEMPT_REJECTED_CAPACITY,
+                )
+            ]
+            # Берем последние N событий
+            window_events = attempt_events[-window_size_int:] if len(attempt_events) > window_size_int else attempt_events
+        
+        return window_events
     
     def _update_capacity_tracking(
         self,
@@ -987,6 +1123,7 @@ class PortfolioEngine:
         reset_time: datetime,
         positions_to_force_close: List[Position],
         reason: ResetReason,
+        portfolio_events: Optional[List[PortfolioEvent]] = None,
     ) -> None:
         """
         Helper-метод для применения reset к PortfolioState.
@@ -999,6 +1136,7 @@ class PortfolioEngine:
             reset_time: Время reset
             positions_to_force_close: Позиции для принудительного закрытия
             reason: Причина reset
+            portfolio_events: Список событий для эмиссии (v1.9)
         """
         context = PortfolioResetContext(
             reason=reason,
@@ -1007,6 +1145,84 @@ class PortfolioEngine:
             positions_to_force_close=positions_to_force_close,
         )
         apply_portfolio_reset(context, state, self.execution_model)
+        
+        # Эмитим события reset (v1.9)
+        if portfolio_events is not None:
+            # Маппинг ResetReason -> event_type для TRIGGERED событий
+            trigger_event_type_map = {
+                ResetReason.EQUITY_THRESHOLD: PortfolioEventType.PROFIT_RESET_TRIGGERED,
+                ResetReason.CAPACITY_PRESSURE: PortfolioEventType.CAPACITY_CLOSE_ALL_TRIGGERED,
+                # CAPACITY_PRUNE не обрабатывается здесь (он в _maybe_apply_capacity_prune)
+                # RUNNER_XN не portfolio-level reset (он runner-level)
+            }
+            
+            trigger_event_type = trigger_event_type_map.get(reason)
+            if trigger_event_type:
+                # Эмитим TRIGGERED событие через helper-методы
+                trigger_meta = {
+                    "reset_time": reset_time.isoformat(),
+                }
+                if reason == ResetReason.EQUITY_THRESHOLD:
+                    # Для profit reset добавляем equity метрики
+                    trigger_meta["cycle_start_equity"] = state.cycle_start_equity  # type: ignore
+                    trigger_meta["equity_peak_in_cycle"] = state.equity_peak_in_cycle  # type: ignore
+                    trigger_meta["current_balance"] = state.balance  # type: ignore
+                    portfolio_events.append(
+                        PortfolioEvent.create_profit_reset_triggered(
+                            timestamp=reset_time,
+                            marker_signal_id=marker_position.signal_id,
+                            marker_contract_address=marker_position.contract_address,
+                            closed_positions_count=len(positions_to_force_close),
+                            meta=trigger_meta,
+                        )
+                    )
+                elif reason == ResetReason.CAPACITY_PRESSURE:
+                    # Для capacity close-all
+                    portfolio_events.append(
+                        PortfolioEvent.create_capacity_close_all_triggered(
+                            timestamp=reset_time,
+                            marker_signal_id=marker_position.signal_id,
+                            marker_contract_address=marker_position.contract_address,
+                            closed_positions_count=len(positions_to_force_close),
+                            meta=trigger_meta,
+                        )
+                    )
+            
+            # Эмитим события закрытий для каждой закрытой позиции
+            # Тип события зависит от reason
+            close_event_type_map = {
+                ResetReason.EQUITY_THRESHOLD: PortfolioEventType.CLOSED_BY_PROFIT_RESET,
+                ResetReason.CAPACITY_PRESSURE: PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL,
+                # CAPACITY_PRUNE обрабатывается в _forced_close_position
+                # RUNNER_XN - обычное закрытие или можно добавить отдельный тип
+            }
+            
+            close_event_type = close_event_type_map.get(reason)
+            if close_event_type:
+                # Закрытия уже выполнены в apply_portfolio_reset, эмитим события
+                for pos in positions_to_force_close:
+                    reset_reason_str = {
+                        ResetReason.EQUITY_THRESHOLD: "profit",
+                        ResetReason.CAPACITY_PRESSURE: "capacity",
+                    }.get(reason, reason.value)
+                    
+                    portfolio_events.append(PortfolioEvent(
+                        timestamp=reset_time,
+                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        event_type=close_event_type,
+                        reason=reset_reason_str,
+                        meta={
+                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                            "exit_time": reset_time.isoformat(),
+                            "pnl_pct": pos.pnl_pct,
+                            "pnl_sol": pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0,
+                            "fees_total_sol": pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0,
+                            "reset_reason": reset_reason_str,
+                            "closed_by_reset": True,
+                        },
+                    ))
 
     def _process_runner_partial_exits(
         self,
@@ -1220,6 +1436,7 @@ class PortfolioEngine:
         current_time: datetime,
         state: PortfolioState,
         positions_by_signal_id: Dict[str, Position],
+        portfolio_events: Optional[List[PortfolioEvent]] = None,
     ) -> None:
         """
         Обрабатывает закрытие позиции по EXIT событию.
@@ -1293,6 +1510,7 @@ class PortfolioEngine:
                     reset_time=reset_time_current,
                     positions_to_force_close=positions_to_force_close,
                     reason=ResetReason.RUNNER_XN,
+                    portfolio_events=portfolio_events,
                 )
                 
                 # Обновляем positions_by_signal_id после reset
@@ -1334,6 +1552,29 @@ class PortfolioEngine:
             state.open_positions = [p for p in state.open_positions if p.signal_id != pos.signal_id]
             if pos.signal_id in positions_by_signal_id:
                 del positions_by_signal_id[pos.signal_id]
+
+            # Эмитим событие EXECUTED_CLOSE (v1.9) - обычное закрытие
+            if portfolio_events is not None:
+                close_reason = pos.meta.get("close_reason", "unknown") if pos.meta else "unknown"
+                pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
+                fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
+                
+                portfolio_events.append(PortfolioEvent(
+                    timestamp=current_time,
+                    strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                    signal_id=pos.signal_id,
+                    contract_address=pos.contract_address,
+                    event_type=PortfolioEventType.EXECUTED_CLOSE,
+                    reason=close_reason,
+                    meta={
+                        "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                        "exit_time": current_time.isoformat(),
+                        "pnl_pct": pos.pnl_pct,
+                        "pnl_sol": pnl_sol,
+                        "fees_total_sol": fees_total,
+                        "close_reason": close_reason,
+                    },
+                ))
 
             state.peak_balance = max(state.peak_balance, state.balance)
             if pos.exit_time:
@@ -1774,6 +2015,7 @@ class PortfolioEngine:
                     current_time=current_time,
                     state=state,
                     positions_by_signal_id=positions_by_signal_id,
+                    portfolio_events=portfolio_events,
                 )
             
             # Затем обрабатываем все ENTRY события на текущем timestamp
@@ -1865,6 +2107,7 @@ class PortfolioEngine:
                             reset_time=current_time,
                             positions_to_force_close=other_positions_to_force_close,
                             reason=ResetReason.EQUITY_THRESHOLD,
+                            portfolio_events=portfolio_events,
                         )
                         self._dbg_meta(marker_position, "AFTER_profit_reset_at_timestamp")
                         profit_reset_triggered = True  # Profit reset сработал
@@ -1879,6 +2122,7 @@ class PortfolioEngine:
                         current_time=current_time,
                         capacity_tracking=capacity_tracking,
                         signal_index=signal_index,
+                        portfolio_events=portfolio_events,  # Передаем события (v1.9)
                     )
                     if prune_applied:
                         # Обновляем positions_by_signal_id после prune
@@ -1906,6 +2150,7 @@ class PortfolioEngine:
                             reset_time=capacity_reset_context.reset_time,
                             positions_to_force_close=capacity_reset_context.positions_to_force_close,
                             reason=ResetReason.CAPACITY_PRESSURE,
+                            portfolio_events=portfolio_events,
                         )
                         # Обновляем positions_by_signal_id после reset
                         for pos in capacity_reset_context.positions_to_force_close:
@@ -1943,6 +2188,7 @@ class PortfolioEngine:
                 current_time=final_exit_time,
                 state=state,
                 positions_by_signal_id=positions_by_signal_id,
+                portfolio_events=portfolio_events,
             )
             
             # Обновляем equity_peak_in_cycle после закрытия позиции
@@ -1980,6 +2226,7 @@ class PortfolioEngine:
                         reset_time=reset_time_portfolio,
                         positions_to_force_close=positions_to_force_close,
                         reason=ResetReason.EQUITY_THRESHOLD,
+                        portfolio_events=portfolio_events,
                     )
                     self._dbg_meta(marker_position, "AFTER_process_portfolio_level_reset_final_close")
 
@@ -2008,6 +2255,55 @@ class PortfolioEngine:
         
         # Сохраняем prune events для observability (hardening v1.7.1)
         capacity_prune_events = getattr(state, 'capacity_prune_events', [])
+        
+        # Пересчет BC счетчиков из событий (v1.9)
+        if portfolio_events:
+            # Capacity prune счетчики
+            prune_close_events = [
+                e for e in portfolio_events 
+                if e.event_type == PortfolioEventType.CLOSED_BY_CAPACITY_PRUNE
+            ]
+            if prune_close_events:
+                state.portfolio_capacity_prune_count = len(prune_close_events)
+                state.last_capacity_prune_time = max(e.timestamp for e in prune_close_events)
+            
+            # Capacity close-all счетчики
+            capacity_close_all_events = [
+                e for e in portfolio_events 
+                if e.event_type == PortfolioEventType.CAPACITY_CLOSE_ALL_TRIGGERED
+            ]
+            if capacity_close_all_events:
+                # Считаем количество закрытых позиций из событий закрытий
+                capacity_close_all_closed = [
+                    e for e in portfolio_events 
+                    if e.event_type == PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL
+                ]
+                state.portfolio_reset_capacity_count = len(capacity_close_all_events)
+                if capacity_close_all_closed:
+                    state.last_portfolio_reset_time = max(e.timestamp for e in capacity_close_all_closed)
+            
+            # Profit reset счетчики
+            profit_reset_events = [
+                e for e in portfolio_events 
+                if e.event_type == PortfolioEventType.PROFIT_RESET_TRIGGERED
+            ]
+            if profit_reset_events:
+                # Считаем количество закрытых позиций из событий закрытий
+                profit_reset_closed = [
+                    e for e in portfolio_events 
+                    if e.event_type == PortfolioEventType.CLOSED_BY_PROFIT_RESET
+                ]
+                state.portfolio_reset_profit_count = len(profit_reset_events)
+                # Обновляем общий portfolio_reset_count
+                state.portfolio_reset_count = (
+                    state.portfolio_reset_profit_count + 
+                    state.portfolio_reset_capacity_count
+                )
+                if profit_reset_closed:
+                    profit_reset_time = max(e.timestamp for e in profit_reset_closed)
+                    # Обновляем last_portfolio_reset_time если profit reset был позже
+                    if state.last_portfolio_reset_time is None or profit_reset_time > state.last_portfolio_reset_time:
+                        state.last_portfolio_reset_time = profit_reset_time
         
         stats = PortfolioStats(
             final_balance_sol=final_balance,

@@ -222,4 +222,53 @@ class PortfolioEvent:
             reason="capacity_pressure",
             meta=event_meta,
         )
+    
+    @classmethod
+    def create_profit_reset_triggered(
+        cls,
+        timestamp: datetime,
+        marker_signal_id: str,
+        marker_contract_address: str,
+        closed_positions_count: int,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> PortfolioEvent:
+        """Создает событие PROFIT_RESET_TRIGGERED."""
+        event_meta = meta or {}
+        event_meta.update({
+            "closed_positions_count": closed_positions_count,
+        })
+        return cls(
+            timestamp=timestamp,
+            strategy="portfolio",
+            signal_id=marker_signal_id,
+            contract_address=marker_contract_address,
+            event_type=PortfolioEventType.PROFIT_RESET_TRIGGERED,
+            reason="equity_threshold",
+            meta=event_meta,
+        )
+    
+    @classmethod
+    def create_capacity_close_all_triggered(
+        cls,
+        timestamp: datetime,
+        marker_signal_id: str,
+        marker_contract_address: str,
+        closed_positions_count: int,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> PortfolioEvent:
+        """Создает событие CAPACITY_CLOSE_ALL_TRIGGERED."""
+        event_meta = meta or {}
+        event_meta.update({
+            "closed_positions_count": closed_positions_count,
+        })
+        return cls(
+            timestamp=timestamp,
+            strategy="portfolio",
+            signal_id=marker_signal_id,
+            contract_address=marker_contract_address,
+            event_type=PortfolioEventType.CAPACITY_CLOSE_ALL_TRIGGERED,
+            reason="capacity_pressure",
+            meta=event_meta,
+        )
+
 

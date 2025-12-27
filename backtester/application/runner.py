@@ -129,19 +129,19 @@ class BacktestRunner:
                     meta={"exception": str(e)},
                 )
             
-            # BC: инкрементируем счетчики пропущенных сигналов (только один раз)
-            # Делаем это один раз после получения результата от стратегии
+            # BC: инкрементируем счетчики (v1.9 семантика)
+            # signals_processed: стратегия была вызвана и вернула результат (любой: entry или no_entry)
+            # Инкрементируем только один раз на сигнал (не на каждую стратегию)
+            if len(results) == 0:  # Первая стратегия для этого сигнала
+                self.signals_processed += 1
+            
+            # Счетчики пропущенных сигналов (детализация)
             if out.entry_time is None and out.reason == "no_entry":
                 meta_detail = out.meta.get("detail", "") if out.meta else ""
                 if "corrupt" in meta_detail.lower() or "invalid" in meta_detail.lower():
                     self.signals_skipped_corrupt_candles += 1
                 elif "no candles" in meta_detail.lower() or not candles:
                     self.signals_skipped_no_candles += 1
-            else:
-                # Сигнал реально обработан стратегией (есть свечи и стратегия отработала)
-                # Инкрементируем только один раз на сигнал (не на каждую стратегию)
-                if len(results) == 0:  # Первая стратегия для этого сигнала
-                    self.signals_processed += 1
 
             # Добавляем результат в список
             results.append(
