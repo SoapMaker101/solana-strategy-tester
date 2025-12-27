@@ -747,6 +747,7 @@ def main():
         # Используем все portfolio_results, не только strategies_to_report, чтобы Stage A видел все executed trades
         base_reporter.save_portfolio_positions_table(portfolio_results)
         base_reporter.save_portfolio_executions_table(portfolio_results)
+        base_reporter.save_portfolio_events_table(portfolio_results)  # v1.9: events export
         
         # Сохраняем сводный отчет по политике reset/prune (hardening v1.7.1)
         base_reporter.save_portfolio_policy_summary(portfolio_results)

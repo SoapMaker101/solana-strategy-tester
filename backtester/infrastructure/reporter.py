@@ -1054,6 +1054,85 @@ class Reporter:
         df.to_csv(positions_path, index=False)
         print(f"📊 Saved portfolio positions table to {positions_path} ({len(df)} executed positions)")
     
+    def save_portfolio_events_table(self, portfolio_results: Dict[str, Any]) -> None:
+        """
+        Сохраняет events-level таблицу для всех стратегий в CSV (v1.9).
+        
+        Это таблица событий портфеля (events-level), где каждая запись = PortfolioEvent.
+        Используется для отладки и анализа capacity pressure, prune, reset триггеров.
+        
+        Колонки:
+        - timestamp: время события (ISO)
+        - event_type: тип события (ATTEMPT_ACCEPTED_OPEN, CLOSED_BY_CAPACITY_PRUNE, etc.)
+        - strategy: название стратегии
+        - signal_id: идентификатор сигнала
+        - contract_address: адрес контракта
+        - position_id: идентификатор позиции (если есть)
+        - meta_json: JSON строка с дополнительными метаданными
+        
+        :param portfolio_results: Словарь {strategy_name: PortfolioResult}
+        """
+        import pandas as pd
+        from ..domain.portfolio import PortfolioResult
+        from ..domain.portfolio_events import PortfolioEvent
+        
+        events_rows = []
+        
+        for strategy_name, portfolio_result in portfolio_results.items():
+            if not isinstance(portfolio_result, PortfolioResult):
+                continue
+            
+            # Получаем события из stats
+            if not hasattr(portfolio_result.stats, 'portfolio_events') or not portfolio_result.stats.portfolio_events:
+                continue
+            
+            for event in portfolio_result.stats.portfolio_events:
+                if not isinstance(event, PortfolioEvent):
+                    continue
+                
+                # Извлекаем position_id из meta если есть
+                position_id = event.meta.get("position_id") if event.meta else None
+                
+                # Сериализуем meta в JSON
+                meta_json = json.dumps(event.meta, ensure_ascii=False) if event.meta else "{}"
+                
+                event_row = {
+                    "timestamp": event.timestamp.isoformat(),
+                    "event_type": event.event_type.value,
+                    "strategy": event.strategy,
+                    "signal_id": event.signal_id,
+                    "contract_address": event.contract_address,
+                    "position_id": position_id,
+                    "meta_json": meta_json,
+                }
+                
+                events_rows.append(event_row)
+        
+        # Создаем DataFrame
+        if events_rows:
+            df = pd.DataFrame(events_rows)
+            # Сортируем по timestamp для консистентности
+            df["timestamp_dt"] = pd.to_datetime(df["timestamp"], utc=True)
+            df = df.sort_values("timestamp_dt")
+            df = df.drop("timestamp_dt", axis=1)
+        else:
+            # Создаем пустой DataFrame с правильными колонками
+            df = pd.DataFrame([], columns=[  # type: ignore[arg-type]
+                "timestamp", "event_type", "strategy", "signal_id",
+                "contract_address", "position_id", "meta_json",
+            ])
+        
+        # Сохраняем
+        events_path = self.output_dir / "portfolio_events.csv"
+        try:
+            df.to_csv(events_path, index=False, encoding='utf-8')
+            print(f"📋 Saved portfolio events table to {events_path} ({len(df)} events)")
+        except Exception as e:
+            # Fail-safe: если не удалось сохранить, выводим warning и продолжаем
+            import warnings
+            warnings.warn(f"Failed to save portfolio_events.csv: {e}. Continuing without events export.")
+            print(f"[WARNING] Failed to save portfolio_events.csv: {e}. Continuing...")
+    
     def save_portfolio_trades_table(self, portfolio_results: Dict[str, Any]) -> None:
         """
         Обратная совместимость: вызывает save_portfolio_positions_table.
