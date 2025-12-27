@@ -291,3 +291,4 @@ def test_trades_table_handles_empty_results(reporter):
 
 
 
+
