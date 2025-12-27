@@ -273,6 +273,9 @@ class ConditionalReporter:
             json.dump(stats_data, f, indent=2, ensure_ascii=False)
         print(f"[report] Saved portfolio stats to {stats_path}")
         
+        # Сохраняем XLSX отчет
+        self.reporter.save_portfolio_results_xlsx(strategy_name, portfolio_result)
+        
         # График только если разрешено
         if not self.no_charts:
             self.reporter.plot_portfolio_equity_curve(strategy_name, portfolio_result)

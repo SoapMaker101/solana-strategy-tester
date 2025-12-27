@@ -621,6 +621,34 @@ def generate_stability_table_from_reports(
     if len(detailed_df) > 0:
         save_detailed_windows_table(detailed_df, detailed_output_path)
     
+    # Сохраняем XLSX отчет с несколькими листами
+    if len(stability_df) > 0 or len(detailed_df) > 0:
+        from ..infrastructure.xlsx_writer import save_xlsx
+        
+        xlsx_path = reports_dir / "stage_a_report.xlsx"
+        sheets = {}
+        
+        if len(stability_df) > 0:
+            sheets["window_metrics"] = stability_df
+        else:
+            # Пустой DataFrame с правильными колонками
+            sheets["window_metrics"] = pd.DataFrame([], columns=[
+                "strategy", "split_count", "survival_rate", "pnl_variance",
+                "worst_window_pnl", "best_window_pnl", "median_window_pnl",
+                "windows_positive", "windows_total", "trades_total"
+            ])
+        
+        if len(detailed_df) > 0:
+            sheets["strategy_summary"] = detailed_df
+        else:
+            # Пустой DataFrame с правильными колонками
+            sheets["strategy_summary"] = pd.DataFrame([], columns=[
+                "strategy", "split_count", "window_index", "window_start",
+                "window_end", "window_trades", "window_pnl"
+            ])
+        
+        save_xlsx(xlsx_path, sheets)
+    
     return stability_df
 
 
@@ -742,6 +770,34 @@ def generate_stability_table_from_portfolio_trades(
     detailed_df = build_detailed_windows_table(aggregated_strategies, split_counts=split_counts)
     if len(detailed_df) > 0:
         save_detailed_windows_table(detailed_df, detailed_output_path)
+    
+    # Сохраняем XLSX отчет с несколькими листами
+    if len(stability_df) > 0 or len(detailed_df) > 0:
+        from ..infrastructure.xlsx_writer import save_xlsx
+        
+        xlsx_path = reports_dir / "stage_a_report.xlsx"
+        sheets = {}
+        
+        if len(stability_df) > 0:
+            sheets["window_metrics"] = stability_df
+        else:
+            # Пустой DataFrame с правильными колонками
+            sheets["window_metrics"] = pd.DataFrame([], columns=[
+                "strategy", "split_count", "survival_rate", "pnl_variance",
+                "worst_window_pnl", "best_window_pnl", "median_window_pnl",
+                "windows_positive", "windows_total", "trades_total"
+            ])
+        
+        if len(detailed_df) > 0:
+            sheets["strategy_summary"] = detailed_df
+        else:
+            # Пустой DataFrame с правильными колонками
+            sheets["strategy_summary"] = pd.DataFrame([], columns=[
+                "strategy", "split_count", "window_index", "window_start",
+                "window_end", "window_trades", "window_pnl"
+            ])
+        
+        save_xlsx(xlsx_path, sheets)
     
     return stability_df
 

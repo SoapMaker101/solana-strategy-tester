@@ -10,6 +10,7 @@ from datetime import datetime
 from collections import Counter
 
 import numpy as np
+from .xlsx_writer import save_xlsx
 
 
 class Reporter:
@@ -677,6 +678,85 @@ class Reporter:
         
         # Строим график equity curve портфеля
         self.plot_portfolio_equity_curve(strategy_name, portfolio_result)
+
+    def save_portfolio_results_xlsx(self, strategy_name: str, portfolio_result) -> None:
+        """
+        Сохраняет портфельные результаты в XLSX формат с несколькими листами.
+        
+        Листы:
+        - positions: таблица позиций
+        - equity_curve: кривая equity
+        - stats: статистика портфеля
+        
+        :param strategy_name: Название стратегии.
+        :param portfolio_result: PortfolioResult объект.
+        """
+        from ..domain.portfolio import PortfolioResult
+        
+        if not isinstance(portfolio_result, PortfolioResult):
+            return
+        
+        import pandas as pd
+        
+        # Подготавливаем данные для листов
+        sheets = {}
+        
+        # Лист 1: Positions
+        positions_data = []
+        for pos in portfolio_result.positions:
+            positions_data.append({
+                "signal_id": pos.signal_id,
+                "contract_address": pos.contract_address,
+                "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                "entry_price": pos.entry_price,
+                "exit_time": pos.exit_time.isoformat() if pos.exit_time else None,
+                "exit_price": pos.exit_price,
+                "size_sol": pos.size,
+                "pnl_pct": pos.pnl_pct,
+                "pnl_sol": pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0,
+                "raw_pnl_pct": pos.meta.get("raw_pnl_pct", 0.0) if pos.meta else 0.0,
+                "fee_pct": pos.meta.get("fee_pct", 0.0) if pos.meta else 0.0,
+                "status": pos.status,
+            })
+        
+        if positions_data:
+            sheets["positions"] = pd.DataFrame(positions_data)
+        else:
+            # Пустой DataFrame с правильными колонками
+            sheets["positions"] = pd.DataFrame([], columns=[
+                "signal_id", "contract_address", "entry_time", "entry_price",
+                "exit_time", "exit_price", "size_sol", "pnl_pct", "pnl_sol",
+                "raw_pnl_pct", "fee_pct", "status"
+            ])
+        
+        # Лист 2: Equity Curve
+        valid_equity = [
+            point for point in portfolio_result.equity_curve
+            if point.get("timestamp") is not None
+        ]
+        if valid_equity:
+            sheets["equity_curve"] = pd.DataFrame(valid_equity)
+        else:
+            sheets["equity_curve"] = pd.DataFrame([], columns=["timestamp", "balance"])
+        
+        # Лист 3: Stats
+        stats_data = {
+            "final_balance_sol": [portfolio_result.stats.final_balance_sol],
+            "total_return_pct": [portfolio_result.stats.total_return_pct],
+            "max_drawdown_pct": [portfolio_result.stats.max_drawdown_pct],
+            "trades_executed": [portfolio_result.stats.trades_executed],
+            "trades_skipped_by_risk": [portfolio_result.stats.trades_skipped_by_risk],
+            "trades_skipped_by_reset": [getattr(portfolio_result.stats, 'trades_skipped_by_reset', 0)],
+            "runner_reset_count": [getattr(portfolio_result.stats, 'runner_reset_count', 0)],
+            "portfolio_reset_count": [getattr(portfolio_result.stats, 'portfolio_reset_count', 0)],
+            "portfolio_reset_profit_count": [getattr(portfolio_result.stats, 'portfolio_reset_profit_count', 0)],
+            "portfolio_reset_capacity_count": [getattr(portfolio_result.stats, 'portfolio_reset_capacity_count', 0)],
+        }
+        sheets["stats"] = pd.DataFrame(stats_data)
+        
+        # Сохраняем XLSX
+        xlsx_path = self.output_dir / f"{strategy_name}_portfolio_report.xlsx"
+        save_xlsx(xlsx_path, sheets)
 
     def plot_portfolio_equity_curve(self, strategy_name: str, portfolio_result) -> Optional[Path]:
         """

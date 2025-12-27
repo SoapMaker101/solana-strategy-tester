@@ -1,6 +1,6 @@
 # Changelog
 
-## [Feature: Capacity PRUNE (v1.7)] - 2025-01-XX
+## [Feature: Capacity PRUNE (v1.7)] - 2025-12-27
 
 ### Реализация Capacity PRUNE: частичное закрытие позиций вместо полного reset
 
