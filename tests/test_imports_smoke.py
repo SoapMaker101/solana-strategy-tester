@@ -18,3 +18,4 @@ def test_import_models():
     from backtester.domain.models import StrategyOutput  # noqa: F401
 
 
+
