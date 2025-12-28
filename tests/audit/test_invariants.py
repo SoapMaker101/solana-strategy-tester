@@ -12,6 +12,7 @@ from backtester.audit.invariants import (
     check_reason_consistency,
     check_magic_values,
     check_time_ordering,
+    normalize_reason,
 )
 
 
@@ -28,20 +29,35 @@ def test_pnl_formula_long_basic():
     assert not check_pnl_formula(entry_price=0.0, exit_price=110.0, pnl_pct=0.10)
 
 
-def test_tp_reason_requires_positive_pnl():
-    """Тест: reason=tp требует положительный PnL."""
+def test_tp_reason_requires_non_negative_pnl():
+    """Тест: reason=tp требует неотрицательный PnL (с допуском epsilon)."""
+    # Правильные случаи: положительный PnL
     assert check_reason_consistency(reason="tp", pnl_pct=0.10)
     assert check_reason_consistency(reason="tp_2x", pnl_pct=1.0)
+    assert check_reason_consistency(reason="ladder_tp", pnl_pct=3.8)  # 380%
+    
+    # Правильные случаи: ноль и очень маленький отрицательный с допуском
+    assert check_reason_consistency(reason="tp", pnl_pct=0.0)
+    assert check_reason_consistency(reason="tp", pnl_pct=-1e-7)  # В пределах epsilon
+    
+    # Неправильные случаи: значительный отрицательный PnL
     assert not check_reason_consistency(reason="tp", pnl_pct=-0.10)
     assert not check_reason_consistency(reason="tp_5x", pnl_pct=-0.05)
 
 
 def test_sl_reason_requires_negative_pnl():
-    """Тест: reason=sl требует отрицательный PnL."""
+    """Тест: reason=sl/stop_loss требует строго отрицательный PnL."""
+    # Правильные случаи: отрицательный PnL
     assert check_reason_consistency(reason="sl", pnl_pct=-0.10)
     assert check_reason_consistency(reason="stop_loss", pnl_pct=-0.05)
+    
+    # Неправильные случаи: положительный PnL
     assert not check_reason_consistency(reason="sl", pnl_pct=0.10)
     assert not check_reason_consistency(reason="stop_loss", pnl_pct=0.05)
+    
+    # Неправильные случаи: ноль не допустим для sl
+    assert not check_reason_consistency(reason="sl", pnl_pct=0.0)
+    assert not check_reason_consistency(reason="stop_loss", pnl_pct=0.0)
 
 
 def test_no_magic_pnl_fallback():
@@ -256,3 +272,16 @@ def test_invariant_checker_handles_missing_policy_columns():
     
     # Проверяем, что нет ошибок
     assert isinstance(anomalies, list)
+
+
+def test_normalize_reason():
+    """Тест: нормализация reason работает корректно."""
+    assert normalize_reason("sl") == "sl"
+    assert normalize_reason("stop_loss") == "sl"
+    assert normalize_reason("STOP_LOSS") == "sl"
+    assert normalize_reason("tp") == "tp"
+    assert normalize_reason("ladder_tp") == "tp"
+    assert normalize_reason("tp_2x") == "tp"
+    assert normalize_reason("timeout") == "timeout"  # Неизвестные остаются без изменений
+    assert normalize_reason("") == ""  # Пустая строка
+    assert normalize_reason(None) == None  # None остается None

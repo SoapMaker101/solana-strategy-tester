@@ -319,8 +319,11 @@ class InvariantChecker:
         if not reason or pd.isna(pnl_pct):
             return
         
-        # Проверка: reason=tp, но pnl < 0
-        if "tp" in str(reason).lower() and pnl_pct < -self.EPSILON:
+        # Нормализуем reason для консистентной проверки
+        normalized_reason = normalize_reason(str(reason))
+        
+        # Проверка: reason=tp, но pnl < 0 (строго отрицательный)
+        if normalized_reason == "tp" and pnl_pct < -self.EPSILON:
             self.anomalies.append(Anomaly(
                 position_id=row.get("position_id"),
                 strategy=row.get("strategy"),
@@ -334,11 +337,11 @@ class InvariantChecker:
                 reason=reason,
                 anomaly_type=AnomalyType.TP_REASON_BUT_NEGATIVE_PNL,
                 severity="P0",
-                details={"pnl_pct": pnl_pct, "reason": reason},
+                details={"pnl_pct": pnl_pct, "reason": reason, "normalized_reason": normalized_reason},
             ))
         
-        # Проверка: reason=sl, но pnl > 0
-        if "sl" in str(reason).lower() and pnl_pct > self.EPSILON:
+        # Проверка: reason=sl/stop_loss, но pnl >= 0 (неотрицательный)
+        if normalized_reason == "sl" and pnl_pct >= 0:
             self.anomalies.append(Anomaly(
                 position_id=row.get("position_id"),
                 strategy=row.get("strategy"),
@@ -352,7 +355,7 @@ class InvariantChecker:
                 reason=reason,
                 anomaly_type=AnomalyType.SL_REASON_BUT_POSITIVE_PNL,
                 severity="P0",
-                details={"pnl_pct": pnl_pct, "reason": reason},
+                details={"pnl_pct": pnl_pct, "reason": reason, "normalized_reason": normalized_reason},
             ))
     
     def _check_time_ordering(self, row: pd.Series) -> None:
@@ -416,27 +419,21 @@ class InvariantChecker:
     
     def _check_events_chain(self, positions_df: pd.DataFrame, events_df: pd.DataFrame) -> None:
         """Проверка цепочки событий для каждой позиции."""
-        # Группируем события по position_id или signal_id+strategy+contract
+        # Для каждой закрытой позиции проверяем наличие событий по position_id
         for _, pos_row in positions_df.iterrows():
+            if pos_row.get("status") != "closed":
+                continue
+            
             position_id = pos_row.get("position_id")
             signal_id = pos_row.get("signal_id")
             strategy = pos_row.get("strategy")
             contract = pos_row.get("contract_address")
             
-            # Ищем события для этой позиции
+            # Ищем события для этой позиции по position_id (требование: проверка по position_id)
             if position_id and pd.notna(position_id):
                 pos_events = events_df[self._series(events_df, "position_id", None) == position_id]
-            else:
-                # Fallback: ищем по signal_id+strategy+contract
-                pos_events = events_df[
-                    (self._series(events_df, "signal_id", None) == signal_id) &
-                    (self._series(events_df, "strategy", None) == strategy) &
-                    (self._series(events_df, "contract_address", None) == contract)
-                ]
-            
-            # Проверяем наличие ATTEMPT_RECEIVED и ATTEMPT_ACCEPTED_OPEN
-            if len(pos_events) == 0:
-                if pos_row.get("status") == "closed":
+                # Если events_df имеет zero rows для этого position_id -> MISSING_EVENTS_CHAIN
+                if len(pos_events) == 0:
                     self.anomalies.append(Anomaly(
                         position_id=position_id,
                         strategy=strategy,
@@ -450,7 +447,7 @@ class InvariantChecker:
                         reason=pos_row.get("reason"),
                         anomaly_type=AnomalyType.MISSING_EVENTS_CHAIN,
                         severity="P0",
-                        details={"events_count": 0},
+                        details={"events_count": 0, "position_id": position_id},
                     ))
     
     def _check_policy_consistency(self, positions_df: pd.DataFrame, events_df: pd.DataFrame) -> None:
@@ -609,7 +606,9 @@ class InvariantChecker:
             # Проверка маппинга reason ↔ event_type
             reason = pos_row.get("reason")
             if reason and status == "closed":
-                expected_event_types = self._get_expected_event_types_for_reason(reason)
+                # Нормализуем reason для консистентного маппинга
+                normalized_reason = normalize_reason(str(reason))
+                expected_event_types = self._get_expected_event_types_for_reason(normalized_reason)
                 if expected_event_types:
                     actual_event_types = [str(e.get("event_type", "")).lower() for e in close_events]
                     if not any(exp in act for exp in expected_event_types for act in actual_event_types):
@@ -628,26 +627,28 @@ class InvariantChecker:
                             severity="P1",
                             details={
                                 "reason": reason,
+                                "normalized_reason": normalized_reason,
                                 "expected_event_types": expected_event_types,
                                 "actual_event_types": actual_event_types,
                             },
                         ))
     
     def _get_expected_event_types_for_reason(self, reason: str) -> List[str]:
-        """Возвращает ожидаемые типы событий для причины закрытия."""
-        reason_lower = str(reason).lower()
+        """
+        Возвращает ожидаемые типы событий для причины закрытия.
+        
+        Использует нормализованную причину (normalize_reason должен быть применен заранее).
+        """
+        # reason уже должен быть нормализован
         mapping = {
-            "tp": ["executed_close", "close", "exit"],
-            "sl": ["executed_close", "close", "exit"],
-            "timeout": ["executed_close", "close", "exit"],
-            "prune": ["capacity_prune", "closed_by_capacity_prune", "prune"],
-            "reset": ["profit_reset", "closed_by_profit_reset", "reset"],
-            "close_all": ["close_all", "closed_by_capacity_close_all"],
+            "tp": ["executed_close", "close", "exit", "position_closed"],
+            "sl": ["executed_close", "close", "exit", "position_closed"],
+            "timeout": ["executed_close", "close", "exit", "position_closed"],
+            "prune": ["capacity_prune", "closed_by_capacity_prune", "prune", "position_closed"],
+            "reset": ["profit_reset", "closed_by_profit_reset", "reset", "position_closed"],
+            "close_all": ["close_all", "closed_by_capacity_close_all", "position_closed"],
         }
-        for key, event_types in mapping.items():
-            if key in reason_lower:
-                return event_types
-        return []
+        return mapping.get(reason, [])
     
     def _check_events_executions_consistency(
         self,
@@ -941,6 +942,35 @@ class InvariantChecker:
 
 
 # Convenience functions
+def normalize_reason(reason: str) -> str:
+    """
+    Нормализует reason для консистентной обработки.
+    
+    Правила нормализации:
+    - "stop_loss" -> "sl"
+    - "tp", "ladder_tp" -> "tp" (сохраняем как есть)
+    - Остальные остаются без изменений
+    
+    :param reason: Исходная причина закрытия
+    :return: Нормализованная причина
+    """
+    if not reason:
+        return reason
+    
+    reason_lower = str(reason).lower()
+    
+    # Нормализуем stop_loss в sl
+    if "stop_loss" in reason_lower or reason_lower == "sl":
+        return "sl"
+    
+    # tp и его варианты (ladder_tp, tp_2x и т.д.) остаются как есть
+    if "tp" in reason_lower:
+        return "tp"
+    
+    # Возвращаем исходное значение
+    return reason
+
+
 def check_pnl_formula(entry_price: float, exit_price: float, pnl_pct: float, epsilon: float = 1e-6) -> bool:
     """Проверка формулы PnL для long позиции."""
     if entry_price <= 0:
@@ -950,12 +980,29 @@ def check_pnl_formula(entry_price: float, exit_price: float, pnl_pct: float, eps
 
 
 def check_reason_consistency(reason: str, pnl_pct: float, epsilon: float = 1e-6) -> bool:
-    """Проверка консистентности reason с PnL."""
-    reason_lower = str(reason).lower()
-    if "tp" in reason_lower:
+    """
+    Проверка консистентности reason с PnL.
+    
+    Правила:
+    - tp (и его варианты): требует pnl_pct >= -epsilon (неотрицательный с допуском)
+    - sl/stop_loss: требует pnl_pct < 0 (строго отрицательный)
+    
+    :param reason: Причина закрытия позиции
+    :param pnl_pct: PnL в процентах (десятичная форма, например 0.1 = 10%)
+    :param epsilon: Погрешность для сравнения
+    :return: True если reason согласуется с PnL, False иначе
+    """
+    normalized = normalize_reason(reason)
+    
+    if normalized == "tp":
+        # tp требует неотрицательный PnL (с допуском epsilon)
         return pnl_pct >= -epsilon
-    if "sl" in reason_lower:
-        return pnl_pct <= epsilon
+    
+    if normalized == "sl":
+        # sl/stop_loss требует строго отрицательный PnL
+        return pnl_pct < 0
+    
+    # Для остальных причин считаем валидным (нет ограничений)
     return True
 
 
