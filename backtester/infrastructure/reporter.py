@@ -1015,6 +1015,7 @@ class Reporter:
                 pnl_pct_total = (float(realized_multiple) - 1.0) * 100.0
 
                 trade_row = {
+                    "position_id": pos.position_id,  # Уникальный идентификатор позиции (первая колонка)
                     "strategy": strategy_name,
                     "position_id": pos.position_id,
                     "signal_id": pos.signal_id,
@@ -1055,7 +1056,7 @@ class Reporter:
         else:
             # Создаем пустой DataFrame с правильными колонками
             df = pd.DataFrame([], columns=[  # type: ignore[arg-type]
-                "strategy", "position_id", "signal_id", "contract_address",
+                "position_id", "strategy", "signal_id", "contract_address",
                 "entry_time", "exit_time", "status",
                 "size", "pnl_sol", "pnl_pct_total", "realized_multiple", "reason",
                 "fees_total_sol", "exec_entry_price", "exec_exit_price",
@@ -1112,6 +1113,9 @@ class Reporter:
             for event in portfolio_result.stats.portfolio_events:
                 if not isinstance(event, PortfolioEvent):
                     continue
+                
+                # Используем position_id из поля события (не из meta)
+                position_id = event.position_id
                 
                 # Сериализуем meta в JSON
                 meta_json = json.dumps(event.meta, ensure_ascii=False) if event.meta else "{}"
