@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
+from uuid import uuid4
 
 
 class PositionStatus(Enum):
@@ -20,12 +21,14 @@ class Position:
     1. Position - это identity: один объект живет от entry до финального result
     2. meta всегда существует (никогда не None)
     3. meta никогда не теряется: используем только setdefault/update, никогда не присваиваем meta = ...
+    4. position_id - уникальный идентификатор позиции (uuid4 hex), генерируется автоматически
     """
     signal_id: Any                        # Идентификатор сигнала, по которому была открыта позиция
     contract_address: str                 # Адрес токена/контракта, к которому относится позиция
     entry_time: datetime                  # Время входа в позицию
     entry_price: float                    # Цена входа
     size: float                           # Размер позиции в SOL (номинал)
+    position_id: str = field(default_factory=lambda: uuid4().hex)  # Уникальный идентификатор позиции
 
     exit_time: Optional[datetime] = None         # Время выхода из позиции (если закрыта)
     exit_price: Optional[float] = None           # Цена выхода (если закрыта)

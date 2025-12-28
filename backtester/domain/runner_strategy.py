@@ -100,23 +100,37 @@ class RunnerStrategy(Strategy):
         # config уже проверен в on_signal, используем cast для типизации
         config = cast(RunnerConfig, self.config)
 
-        # Рассчитываем exit_price на основе realized_multiple
-        # exit_price = entry_price * realized_multiple
-        exit_price = entry_candle.close * ladder_result.realized_multiple
+        # Находим свечу на момент exit_time для получения рыночной цены закрытия
+        # exit_price должен быть market close, а НЕ синтетика entry * realized_multiple
+        exit_price = entry_candle.close  # Fallback на entry price если не найдена свеча
+        if ladder_result.exit_time:
+            # Ищем свечу с timestamp >= exit_time (первая свеча на момент или после закрытия)
+            for candle in candles:
+                if candle.timestamp >= ladder_result.exit_time:
+                    exit_price = candle.close  # Market close цена на момент закрытия
+                    break
+            else:
+                # Если не нашли свечу >= exit_time, берем последнюю доступную
+                if candles:
+                    exit_price = candles[-1].close
 
         # PnL уже рассчитан в ladder_result.realized_pnl_pct (в процентах)
         # Преобразуем в десятичную форму
         pnl = ladder_result.realized_pnl_pct / 100.0
 
         # Преобразуем reason из RunnerTradeResult в StrategyOutput.reason
-        reason_map: dict[str, Literal["tp", "sl", "timeout", "no_entry", "error"]] = {
+        # Для ladder используем "ladder_tp" вместо "tp"
+        reason_map: dict[str, Literal["ladder_tp", "tp", "sl", "timeout", "no_entry", "error"]] = {
             "time_stop": "timeout",
-            "all_levels_hit": "tp",  # Все уровни достигнуты = take profit
+            "all_levels_hit": "ladder_tp",  # Все уровни достигнуты = ladder take profit
             "no_data": "no_entry"
         }
         reason_str = reason_map.get(ladder_result.reason, "error")
+        # StrategyOutput.reason может не поддерживать "ladder_tp", используем "tp" как fallback
+        # Но в meta мы сохраним "ladder_tp" для явной идентификации
         reason: Literal["tp", "sl", "timeout", "no_entry", "error"] = cast(
-            Literal["tp", "sl", "timeout", "no_entry", "error"], reason_str
+            Literal["tp", "sl", "timeout", "no_entry", "error"], 
+            "tp" if reason_str == "ladder_tp" else reason_str
         )
 
         # Вычисляем trade features
@@ -145,6 +159,8 @@ class RunnerStrategy(Strategy):
             # Дополнительная информация
             "runner_ladder": True,
             "entry_idx": 0,
+            # Сохраняем канонический reason для ladder (ladder_tp вместо tp)
+            "ladder_reason": reason_str,  # "ladder_tp" или "timeout" или "no_entry"
         }
         
         # Добавляем trade features
@@ -155,8 +171,8 @@ class RunnerStrategy(Strategy):
             entry_time=ladder_result.entry_time,
             entry_price=ladder_result.entry_price,
             exit_time=ladder_result.exit_time,
-            exit_price=exit_price,
+            exit_price=exit_price,  # Market close цена, НЕ синтетика
             pnl=pnl,
-            reason=reason,
+            reason=reason,  # "tp" для обратной совместимости, но meta["ladder_reason"] содержит "ladder_tp"
             meta=meta
         )

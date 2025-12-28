@@ -125,6 +125,24 @@ class InvariantChecker:
         self.include_p1 = include_p1
         self.include_p2 = include_p2
     
+    @staticmethod
+    def _series(df: pd.DataFrame, col: str, default: Any) -> pd.Series:
+        """
+        Безопасное получение колонки из DataFrame.
+        
+        Если колонка существует, возвращает df[col].
+        Если колонки нет, возвращает Series с default значениями.
+        
+        :param df: DataFrame
+        :param col: Имя колонки
+        :param default: Значение по умолчанию
+        :return: pd.Series
+        """
+        if col in df.columns:
+            return df[col]
+        else:
+            return pd.Series([default] * len(df), index=df.index)
+    
     def check_all(
         self,
         positions_df: pd.DataFrame,
@@ -407,13 +425,13 @@ class InvariantChecker:
             
             # Ищем события для этой позиции
             if position_id and pd.notna(position_id):
-                pos_events = events_df[events_df.get("position_id") == position_id]
+                pos_events = events_df[self._series(events_df, "position_id", None) == position_id]
             else:
                 # Fallback: ищем по signal_id+strategy+contract
                 pos_events = events_df[
-                    (events_df.get("signal_id") == signal_id) &
-                    (events_df.get("strategy") == strategy) &
-                    (events_df.get("contract_address") == contract)
+                    (self._series(events_df, "signal_id", None) == signal_id) &
+                    (self._series(events_df, "strategy", None) == strategy) &
+                    (self._series(events_df, "contract_address", None) == contract)
                 ]
             
             # Проверяем наличие ATTEMPT_RECEIVED и ATTEMPT_ACCEPTED_OPEN
@@ -438,9 +456,13 @@ class InvariantChecker:
     def _check_policy_consistency(self, positions_df: pd.DataFrame, events_df: pd.DataFrame) -> None:
         """Проверка консистентности политик (reset, prune)."""
         # Проверяем позиции, закрытые по reset/prune
+        # Используем безопасное получение колонок
+        closed_by_reset_series = self._series(positions_df, "closed_by_reset", False)
+        reset_reason_series = self._series(positions_df, "reset_reason", None)
+        
         reset_positions = positions_df[
-            (positions_df.get("closed_by_reset") == True) |
-            (positions_df.get("reset_reason").notna())
+            (closed_by_reset_series == True) |
+            (reset_reason_series.notna())
         ]
         
         for _, pos_row in reset_positions.iterrows():
@@ -450,17 +472,18 @@ class InvariantChecker:
             contract = pos_row.get("contract_address")
             
             # Ищем события reset/prune
+            event_type_series = self._series(events_df, "event_type", "")
             if position_id and pd.notna(position_id):
                 reset_events = events_df[
-                    (events_df.get("position_id") == position_id) &
-                    (events_df.get("event_type").str.contains("RESET|PRUNE", case=False, na=False))
+                    (self._series(events_df, "position_id", None) == position_id) &
+                    (event_type_series.str.contains("RESET|PRUNE", case=False, na=False))
                 ]
             else:
                 reset_events = events_df[
-                    (events_df.get("signal_id") == signal_id) &
-                    (events_df.get("strategy") == strategy) &
-                    (events_df.get("contract_address") == contract) &
-                    (events_df.get("event_type").str.contains("RESET|PRUNE", case=False, na=False))
+                    (self._series(events_df, "signal_id", None) == signal_id) &
+                    (self._series(events_df, "strategy", None) == strategy) &
+                    (self._series(events_df, "contract_address", None) == contract) &
+                    (event_type_series.str.contains("RESET|PRUNE", case=False, na=False))
                 ]
             
             if len(reset_events) == 0:
@@ -849,8 +872,9 @@ class InvariantChecker:
     ) -> None:
         """P2.1: Проверка доказательства profit reset."""
         # Ищем события PROFIT_RESET_TRIGGERED
+        event_type_series = self._series(events_df, "event_type", "")
         profit_reset_events = events_df[
-            events_df.get("event_type").str.contains("PROFIT_RESET|profit_reset", case=False, na=False)
+            event_type_series.str.contains("PROFIT_RESET|profit_reset", case=False, na=False)
         ]
         
         for _, event_row in profit_reset_events.iterrows():

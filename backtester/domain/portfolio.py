@@ -468,6 +468,23 @@ class PortfolioEngine:
                         meta=event_meta,
                     )
                 )
+            
+            # Эмитим каноническое событие POSITION_CLOSED с position_id
+            portfolio_events.append(
+                PortfolioEvent.create_position_closed(
+                    timestamp=current_time,
+                    strategy=strategy_name,
+                    signal_id=pos.signal_id,
+                    contract_address=pos.contract_address,
+                    position_id=pos.position_id,
+                    reason=reset_reason,
+                    raw_price=raw_exit_price,
+                    exec_price=effective_exit_price,
+                    pnl_pct=exit_pnl_pct * 100.0,  # В процентах
+                    pnl_sol=exit_pnl_sol,
+                    meta=event_meta,
+                )
+            )
         
         return {
             "exit_pnl_sol": exit_pnl_sol,
@@ -1211,9 +1228,32 @@ class PortfolioEngine:
                 # RUNNER_XN не portfolio-level reset (он runner-level)
             }
             
+            # Эмитим общее событие PORTFOLIO_RESET_TRIGGERED
+            reset_reason_str = {
+                ResetReason.EQUITY_THRESHOLD: "profit_reset",
+                ResetReason.CAPACITY_PRESSURE: "capacity_reset",
+                ResetReason.RUNNER_XN: "runner_xn",
+                ResetReason.CAPACITY_PRUNE: "capacity_prune",
+                ResetReason.MANUAL: "manual",
+            }.get(reason, reason.value)
+            
+            portfolio_events.append(
+                PortfolioEvent.create_portfolio_reset_triggered(
+                    timestamp=reset_time,
+                    reason=reset_reason_str,
+                    closed_positions_count=len(positions_to_force_close),
+                    meta={
+                        "reset_time": reset_time.isoformat(),
+                        "marker_signal_id": marker_position.signal_id,
+                        "marker_contract_address": marker_position.contract_address,
+                        "marker_position_id": marker_position.position_id,
+                    },
+                )
+            )
+            
             trigger_event_type = trigger_event_type_map.get(reason)
             if trigger_event_type:
-                # Эмитим TRIGGERED событие через helper-методы
+                # Эмитим специфичное TRIGGERED событие через helper-методы (для обратной совместимости)
                 trigger_meta = {
                     "reset_time": reset_time.isoformat(),
                 }
@@ -1273,6 +1313,7 @@ class PortfolioEngine:
                         "closed_by_reset": True,
                     }
                     
+                    # Эмитим legacy событие для обратной совместимости
                     if close_event_type == PortfolioEventType.CLOSED_BY_PROFIT_RESET:
                         portfolio_events.append(
                             PortfolioEvent.create_closed_by_profit_reset(
@@ -1305,6 +1346,27 @@ class PortfolioEngine:
                                 meta=close_meta,
                             )
                         )
+                    
+                    # Эмитим каноническое событие POSITION_CLOSED с position_id
+                    raw_exit_price = pos.exit_price
+                    exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+                    pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
+                    
+                    portfolio_events.append(
+                        PortfolioEvent.create_position_closed(
+                            timestamp=reset_time,
+                            strategy=strategy_name,
+                            signal_id=pos.signal_id,
+                            contract_address=pos.contract_address,
+                            position_id=pos.position_id,
+                            reason=reset_reason_str,
+                            raw_price=raw_exit_price,
+                            exec_price=exec_exit_price,
+                            pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах
+                            pnl_sol=pnl_sol,
+                            meta=close_meta,
+                        )
+                    )
 
     def _process_runner_partial_exits(
         self,
@@ -1313,6 +1375,7 @@ class PortfolioEngine:
         balance: float,
         equity_curve: List[Dict[str, Any]],
         closed_positions: List[Position],
+        portfolio_events: Optional[List[PortfolioEvent]] = None,
     ) -> Dict[str, Any]:
         """
         Обрабатывает частичные выходы для Runner стратегии.
@@ -1444,6 +1507,31 @@ class PortfolioEngine:
             # Помечаем уровень как обработанный
             pos.meta[processed_key] = True
             
+            # Эмитим событие POSITION_PARTIAL_EXIT
+            if portfolio_events is not None:
+                strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
+                pnl_pct_contrib = exit_pnl_pct * 100.0  # В процентах для события
+                portfolio_events.append(
+                    PortfolioEvent.create_position_partial_exit(
+                        timestamp=hit_time,
+                        strategy=strategy_name,
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        position_id=pos.position_id,
+                        level=xn,
+                        fraction=fraction,
+                        raw_price=exit_price_raw,
+                        exec_price=effective_exit_price,
+                        pnl_pct_contrib=pnl_pct_contrib,
+                        pnl_sol_contrib=exit_pnl_sol,
+                        meta={
+                            "exit_size": exit_size,
+                            "fees_sol": fees_partial,
+                            "network_fee_sol": network_fee_exit,
+                        },
+                    )
+                )
+            
             # Обновляем equity curve
             equity_curve.append({"timestamp": hit_time, "balance": balance})
         
@@ -1547,6 +1635,7 @@ class PortfolioEngine:
                     balance=state.balance,
                     equity_curve=state.equity_curve,
                     closed_positions=state.closed_positions,
+                    portfolio_events=portfolio_events,
                 )
                 state.balance = partial_exits_processed["balance"]
                 state.peak_balance = max(state.peak_balance, state.balance)
@@ -1555,6 +1644,37 @@ class PortfolioEngine:
             # Проверяем, не добавлена ли уже в closed_positions
             if pos.size <= 1e-9:
                 pos.status = "closed"
+                
+                # Эмитим событие POSITION_CLOSED для runner ladder позиции
+                if portfolio_events is not None:
+                    close_reason = pos.meta.get("ladder_reason", "ladder_tp") if pos.meta else "ladder_tp"
+                    pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
+                    fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
+                    raw_exit_price = pos.exit_price
+                    exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+                    
+                    # Каноническое событие POSITION_CLOSED с position_id
+                    portfolio_events.append(
+                        PortfolioEvent.create_position_closed(
+                            timestamp=current_time,
+                            strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                            signal_id=pos.signal_id,
+                            contract_address=pos.contract_address,
+                            position_id=pos.position_id,
+                            reason=close_reason,
+                            raw_price=raw_exit_price,
+                            exec_price=exec_exit_price,
+                            pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах
+                            pnl_sol=pnl_sol,
+                            meta={
+                                "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                                "exit_time": current_time.isoformat(),
+                                "fees_total_sol": fees_total,
+                                "runner_ladder": True,
+                            },
+                        )
+                    )
+                
                 # Добавляем в closed_positions только если еще не добавлена
                 if pos not in state.closed_positions:
                     state.closed_positions.append(pos)
@@ -1637,10 +1757,13 @@ class PortfolioEngine:
 
             # Эмитим событие EXECUTED_CLOSE (v1.9) - обычное закрытие
             if portfolio_events is not None:
-                close_reason = pos.meta.get("close_reason", "unknown") if pos.meta else "unknown"
+                close_reason = pos.meta.get("close_reason", pos.meta.get("ladder_reason", "tp")) if pos.meta else "tp"
                 pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
                 fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
+                raw_exit_price = pos.exit_price
+                exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
                 
+                # Legacy событие для обратной совместимости
                 portfolio_events.append(
                     PortfolioEvent.create_executed_close(
                         timestamp=current_time,
@@ -1655,6 +1778,27 @@ class PortfolioEngine:
                             "pnl_sol": pnl_sol,
                             "fees_total_sol": fees_total,
                             "close_reason": close_reason,
+                        },
+                    )
+                )
+                
+                # Каноническое событие POSITION_CLOSED с position_id
+                portfolio_events.append(
+                    PortfolioEvent.create_position_closed(
+                        timestamp=current_time,
+                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        position_id=pos.position_id,
+                        reason=close_reason,
+                        raw_price=raw_exit_price,
+                        exec_price=exec_exit_price,
+                        pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах
+                        pnl_sol=pnl_sol,
+                        meta={
+                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                            "exit_time": current_time.isoformat(),
+                            "fees_total_sol": fees_total,
                         },
                     )
                 )
@@ -1931,6 +2075,18 @@ class PortfolioEngine:
                 contract_address=trade_data["contract_address"],
                 result=out,
                 meta={"size": size, "open_positions": len(state.open_positions) + 1},
+            )
+        )
+        
+        # Эмитим событие POSITION_OPENED с position_id
+        portfolio_events.append(
+            PortfolioEvent.create_position_opened(
+                timestamp=current_time,
+                strategy=strategy_name,
+                signal_id=trade_data["signal_id"],
+                contract_address=trade_data["contract_address"],
+                position_id=pos.position_id,
+                meta={"size": size, "entry_price": raw_entry_price, "exec_entry_price": effective_entry_price},
             )
         )
         

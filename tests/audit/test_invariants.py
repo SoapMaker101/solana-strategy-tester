@@ -185,3 +185,74 @@ def test_invariant_checker_detects_missing_events():
     assert len(anomalies) > 0
     assert any(a.anomaly_type == AnomalyType.MISSING_EVENTS_CHAIN for a in anomalies)
 
+
+def test_invariant_checker_handles_missing_columns():
+    """Тест: InvariantChecker не падает при отсутствующих колонках."""
+    checker = InvariantChecker()
+    
+    # DataFrame без колонок closed_by_reset и reset_reason
+    positions_df = pd.DataFrame([{
+        "position_id": "pos1",
+        "strategy": "Runner_Baseline",
+        "signal_id": "sig1",
+        "contract_address": "0x123",
+        "entry_time": datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        "exit_time": datetime(2025, 1, 1, 13, 0, 0, tzinfo=timezone.utc),
+        "status": "closed",
+        "exec_entry_price": 100.0,
+        "exec_exit_price": 110.0,
+        "pnl_pct": 0.10,
+        "reason": "tp",
+        # Нет closed_by_reset и reset_reason
+    }])
+    
+    # DataFrame событий без некоторых колонок
+    events_df = pd.DataFrame([{
+        "timestamp": datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        "event_type": "ATTEMPT_ACCEPTED_OPEN",
+        "strategy": "Runner_Baseline",
+        "signal_id": "sig1",
+        "contract_address": "0x123",
+        # Нет position_id
+    }])
+    
+    # Должно выполниться без ошибок
+    anomalies = checker.check_all(positions_df, events_df)
+    
+    # Проверяем, что нет ошибок (может быть 0 или более аномалий, но не должна быть ошибка)
+    assert isinstance(anomalies, list)
+
+
+def test_invariant_checker_handles_missing_policy_columns():
+    """Тест: InvariantChecker не падает при отсутствующих колонках reset_reason/closed_by_reset."""
+    checker = InvariantChecker()
+    
+    # DataFrame без колонок closed_by_reset и reset_reason (должно работать безопасно)
+    positions_df = pd.DataFrame([{
+        "position_id": "pos1",
+        "strategy": "Runner_Baseline",
+        "signal_id": "sig1",
+        "contract_address": "0x123",
+        "entry_time": datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        "exit_time": datetime(2025, 1, 1, 13, 0, 0, tzinfo=timezone.utc),
+        "status": "closed",
+        "exec_entry_price": 100.0,
+        "exec_exit_price": 110.0,
+        "pnl_pct": 0.10,
+        "reason": "tp",
+    }])
+    
+    events_df = pd.DataFrame([{
+        "timestamp": datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
+        "event_type": "ATTEMPT_ACCEPTED_OPEN",
+        "strategy": "Runner_Baseline",
+        "signal_id": "sig1",
+        "contract_address": "0x123",
+        "position_id": "pos1",
+    }])
+    
+    # Должно выполниться без ошибок (_check_policy_consistency не должен упасть)
+    anomalies = checker.check_all(positions_df, events_df)
+    
+    # Проверяем, что нет ошибок
+    assert isinstance(anomalies, list)
