@@ -119,7 +119,7 @@ class BacktestRunner:
                         exit_price=None,
                         pnl=0.0,
                         reason="no_entry",
-                        meta={"detail": "no candles found"},
+                        meta={"detail": "no_candles"},
                     )
                     results.append({
                         "signal_id": sig.id,
@@ -159,12 +159,12 @@ class BacktestRunner:
             if len(results) == 0:  # Первая стратегия для этого сигнала
                 self.signals_processed += 1
             
-            # Счетчики пропущенных сигналов (детализация)
+            # Счетчики пропущенных сигналов (детализация) - канонические значения v1.9
             if out.entry_time is None and out.reason == "no_entry":
                 meta_detail = out.meta.get("detail", "") if out.meta else ""
-                if "corrupt" in meta_detail.lower() or "invalid" in meta_detail.lower():
+                if meta_detail == "corrupt_candles":
                     self.signals_skipped_corrupt_candles += 1
-                elif "no candles" in meta_detail.lower() or not candles:
+                elif meta_detail == "no_candles":
                     self.signals_skipped_no_candles += 1
 
             # Добавляем результат в список

@@ -17,3 +17,4 @@ def test_import_models():
     """Test that StrategyOutput can be imported without errors."""
     from backtester.domain.models import StrategyOutput  # noqa: F401
 
+

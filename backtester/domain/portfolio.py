@@ -424,15 +424,50 @@ class PortfolioEngine:
             if additional_meta:
                 event_meta.update(additional_meta)
             
-            portfolio_events.append(PortfolioEventModel(
-                timestamp=current_time,
-                strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
-                signal_id=pos.signal_id,
-                contract_address=pos.contract_address,
-                event_type=event_type,
-                reason=reset_reason,
-                meta=event_meta,
-            ))
+            # Используем фабрики для создания событий закрытия (v1.9)
+            strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
+            if event_type == PortfolioEventType.CLOSED_BY_CAPACITY_PRUNE:
+                portfolio_events.append(
+                    PortfolioEvent.create_closed_by_prune(
+                        timestamp=current_time,
+                        strategy=strategy_name,
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        meta=event_meta,
+                    )
+                )
+            elif event_type == PortfolioEventType.CLOSED_BY_PROFIT_RESET:
+                portfolio_events.append(
+                    PortfolioEvent.create_closed_by_profit_reset(
+                        timestamp=current_time,
+                        strategy=strategy_name,
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        meta=event_meta,
+                    )
+                )
+            elif event_type == PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL:
+                portfolio_events.append(
+                    PortfolioEvent.create_closed_by_capacity_close_all(
+                        timestamp=current_time,
+                        strategy=strategy_name,
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        meta=event_meta,
+                    )
+                )
+            else:
+                # Fallback на обычное закрытие
+                portfolio_events.append(
+                    PortfolioEvent.create_executed_close(
+                        timestamp=current_time,
+                        strategy=strategy_name,
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        reason=reset_reason,
+                        meta=event_meta,
+                    )
+                )
         
         return {
             "exit_pnl_sol": exit_pnl_sol,
@@ -1226,23 +1261,50 @@ class PortfolioEngine:
                         ResetReason.CAPACITY_PRESSURE: "capacity",
                     }.get(reason, reason.value)
                     
-                    portfolio_events.append(PortfolioEventModel(
-                        timestamp=reset_time,
-                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        event_type=close_event_type,
-                        reason=reset_reason_str,
-                        meta={
-                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
-                            "exit_time": reset_time.isoformat(),
-                            "pnl_pct": pos.pnl_pct,
-                            "pnl_sol": pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0,
-                            "fees_total_sol": pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0,
-                            "reset_reason": reset_reason_str,
-                            "closed_by_reset": True,
-                        },
-                    ))
+                    # Используем фабрики для создания событий закрытия (v1.9)
+                    strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
+                    close_meta = {
+                        "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                        "exit_time": reset_time.isoformat(),
+                        "pnl_pct": pos.pnl_pct,
+                        "pnl_sol": pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0,
+                        "fees_total_sol": pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0,
+                        "reset_reason": reset_reason_str,
+                        "closed_by_reset": True,
+                    }
+                    
+                    if close_event_type == PortfolioEventType.CLOSED_BY_PROFIT_RESET:
+                        portfolio_events.append(
+                            PortfolioEvent.create_closed_by_profit_reset(
+                                timestamp=reset_time,
+                                strategy=strategy_name,
+                                signal_id=pos.signal_id,
+                                contract_address=pos.contract_address,
+                                meta=close_meta,
+                            )
+                        )
+                    elif close_event_type == PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL:
+                        portfolio_events.append(
+                            PortfolioEvent.create_closed_by_capacity_close_all(
+                                timestamp=reset_time,
+                                strategy=strategy_name,
+                                signal_id=pos.signal_id,
+                                contract_address=pos.contract_address,
+                                meta=close_meta,
+                            )
+                        )
+                    else:
+                        # Fallback на обычное закрытие
+                        portfolio_events.append(
+                            PortfolioEvent.create_executed_close(
+                                timestamp=reset_time,
+                                strategy=strategy_name,
+                                signal_id=pos.signal_id,
+                                contract_address=pos.contract_address,
+                                reason=reset_reason_str,
+                                meta=close_meta,
+                            )
+                        )
 
     def _process_runner_partial_exits(
         self,
@@ -1579,22 +1641,23 @@ class PortfolioEngine:
                 pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
                 fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
                 
-                portfolio_events.append(PortfolioEventModel(
-                    timestamp=current_time,
-                    strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
-                    signal_id=pos.signal_id,
-                    contract_address=pos.contract_address,
-                    event_type=PortfolioEventType.EXECUTED_CLOSE,
-                    reason=close_reason,
-                    meta={
-                        "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
-                        "exit_time": current_time.isoformat(),
-                        "pnl_pct": pos.pnl_pct,
-                        "pnl_sol": pnl_sol,
-                        "fees_total_sol": fees_total,
-                        "close_reason": close_reason,
-                    },
-                ))
+                portfolio_events.append(
+                    PortfolioEvent.create_executed_close(
+                        timestamp=current_time,
+                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        reason=close_reason,
+                        meta={
+                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                            "exit_time": current_time.isoformat(),
+                            "pnl_pct": pos.pnl_pct,
+                            "pnl_sol": pnl_sol,
+                            "fees_total_sol": fees_total,
+                            "close_reason": close_reason,
+                        },
+                    )
+                )
 
             state.peak_balance = max(state.peak_balance, state.balance)
             if pos.exit_time:
@@ -1779,12 +1842,11 @@ class PortfolioEngine:
         if raw_entry_price <= 0 or raw_exit_price <= 0:
             # Эмитим событие ATTEMPT_REJECTED_INVALID_INPUT (v1.9)
             portfolio_events.append(
-                PortfolioEventModel(
+                PortfolioEvent.create_attempt_rejected_invalid_input(
                     timestamp=current_time,
                     strategy=strategy_name,
                     signal_id=trade_data["signal_id"],
                     contract_address=trade_data["contract_address"],
-                    event_type=PortfolioEventType.ATTEMPT_REJECTED_INVALID_INPUT,
                     result=out,
                     reason="invalid_price",
                     meta={"entry_price": raw_entry_price, "exit_price": raw_exit_price},
@@ -2056,21 +2118,17 @@ class PortfolioEngine:
                 # Определяем timestamp для события (fallback на event_time если entry_time отсутствует)
                 event_timestamp = entry_time if entry_time is not None else event.event_time
                 
-                # Проверяем причину отсутствия entry_time (no_candles/corrupt)
+                # Проверяем причину отсутствия entry_time (no_candles/corrupt) - канонические значения v1.9
                 meta_detail = entry_output.meta.get("detail", "") if entry_output.meta else ""
-                is_no_candles = entry_time is None and (
-                    entry_output.reason == "no_entry" and (
-                        "no candles" in meta_detail.lower() or
-                        "empty" in meta_detail.lower() or
-                        not meta_detail  # Если detail пустой и нет entry_time
-                    )
+                is_no_candles = (
+                    entry_time is None and
+                    entry_output.reason == "no_entry" and
+                    meta_detail == "no_candles"
                 )
-                is_corrupt = entry_time is None and (
-                    entry_output.reason == "no_entry" and (
-                        "corrupt" in meta_detail.lower() or
-                        "invalid" in meta_detail.lower() or
-                        "anomalous" in meta_detail.lower()
-                    )
+                is_corrupt = (
+                    entry_time is None and
+                    entry_output.reason == "no_entry" and
+                    meta_detail == "corrupt_candles"
                 )
                 
                 # Эмитим ATTEMPT_RECEIVED событие (v1.9)
@@ -2085,58 +2143,61 @@ class PortfolioEngine:
                 
                 # Эмитим события для no_candles/corrupt (v1.9) - до проверки reset
                 if is_no_candles:
-                    portfolio_events.append(PortfolioEventModel(
-                        timestamp=event_timestamp,
-                        strategy=strategy_name,
-                        signal_id=signal_id,
-                        contract_address=contract_address,
-                        event_type=PortfolioEventType.ATTEMPT_REJECTED_NO_CANDLES,
-                        result=entry_output,
-                        reason="no_candles",
-                        meta=entry_output.meta or {},
-                    ))
+                    portfolio_events.append(
+                        PortfolioEvent.create_attempt_rejected_no_candles(
+                            timestamp=event_timestamp,
+                            strategy=strategy_name,
+                            signal_id=signal_id,
+                            contract_address=contract_address,
+                            result=entry_output,
+                            meta=entry_output.meta or {},
+                        )
+                    )
                     continue  # Не обрабатываем дальше
                 
                 if is_corrupt:
-                    portfolio_events.append(PortfolioEventModel(
-                        timestamp=event_timestamp,
-                        strategy=strategy_name,
-                        signal_id=signal_id,
-                        contract_address=contract_address,
-                        event_type=PortfolioEventType.ATTEMPT_REJECTED_CORRUPT_CANDLES,
-                        result=entry_output,
-                        reason="corrupt_candles",
-                        meta=entry_output.meta or {},
-                    ))
+                    portfolio_events.append(
+                        PortfolioEvent.create_attempt_rejected_corrupt_candles(
+                            timestamp=event_timestamp,
+                            strategy=strategy_name,
+                            signal_id=signal_id,
+                            contract_address=contract_address,
+                            result=entry_output,
+                            meta=entry_output.meta or {},
+                        )
+                    )
                     continue  # Не обрабатываем дальше
                 
-                # Если entry_time отсутствует но это не no_candles/corrupt - эмитим INVALID_INPUT
+                # Если entry_time отсутствует но это не no_candles/corrupt - эмитим STRATEGY_NO_ENTRY (v1.9)
+                # Это обычный no_entry от стратегии (неизвестный или пустой detail)
                 if entry_time is None:
-                    portfolio_events.append(PortfolioEventModel(
-                        timestamp=event_timestamp,
-                        strategy=strategy_name,
-                        signal_id=signal_id,
-                        contract_address=contract_address,
-                        event_type=PortfolioEventType.ATTEMPT_REJECTED_INVALID_INPUT,
-                        result=entry_output,
-                        reason="missing_entry_time",
-                        meta=entry_output.meta or {},
-                    ))
+                    portfolio_events.append(
+                        PortfolioEvent.create_attempt_rejected_strategy_no_entry(
+                            timestamp=event_timestamp,
+                            strategy=strategy_name,
+                            signal_id=signal_id,
+                            contract_address=contract_address,
+                            result=entry_output,
+                            reason="strategy_no_entry",
+                            meta=entry_output.meta or {},
+                        )
+                    )
                     continue  # Не обрабатываем дальше
                 
                 # Проверка: игнорируем входы до следующего сигнала после reset
                 if self.config.runner_reset_enabled and state.reset_until is not None and entry_time <= state.reset_until:
                     skipped_by_reset += 1
                     # Эмитим событие ATTEMPT_REJECTED_STRATEGY_NO_ENTRY (или специальный тип для reset)
-                    portfolio_events.append(PortfolioEventModel(
-                        timestamp=entry_time,
-                        strategy=strategy_name,
-                        signal_id=signal_id,
-                        contract_address=contract_address,
-                        event_type=PortfolioEventType.ATTEMPT_REJECTED_STRATEGY_NO_ENTRY,
-                        result=entry_output,
-                        reason="runner_reset_cooldown",
-                    ))
+                    portfolio_events.append(
+                        PortfolioEvent.create_attempt_rejected_strategy_no_entry(
+                            timestamp=entry_time,
+                            strategy=strategy_name,
+                            signal_id=signal_id,
+                            contract_address=contract_address,
+                            result=entry_output,
+                            reason="runner_reset_cooldown",
+                        )
+                    )
                     continue
                 
                 # Попытка открыть позицию

@@ -46,7 +46,7 @@ class PortfolioEventType(Enum):
     PROFIT_RESET_TRIGGERED = "profit_reset_triggered"  # Profit reset триггер сработал
 
 
-@dataclass
+@dataclass(frozen=True, kw_only=True)
 class PortfolioEvent:
     """
     Событие портфеля (v1.9) - источник истины для всех решений портфеля.
@@ -57,6 +57,16 @@ class PortfolioEvent:
     - Триггеры prune / reset
     - Backward compatibility счетчиков
     - Отладка и аналитика (portfolio_events.csv)
+    
+    Каноническая структура (v1.9):
+    - timestamp: datetime - время события
+    - strategy: str - название стратегии
+    - signal_id: str - идентификатор сигнала
+    - contract_address: str - адрес контракта
+    - event_type: PortfolioEventType - тип события
+    - reason: Optional[str] - детализация причины (опционально)
+    - result: Optional[StrategyOutput] - результат стратегии (опционально)
+    - meta: Dict[str, Any] - дополнительные метаданные (всегда dict, не None)
     """
     
     timestamp: datetime
@@ -65,7 +75,7 @@ class PortfolioEvent:
     contract_address: str
     event_type: PortfolioEventType
     reason: Optional[str] = None  # Детализация причины (например "capacity_full", "max_exposure", "tp", "sl")
-    result: Optional[StrategyOutput] = None  # StrategyOutput если есть (для attempts с entry_time)
+    result: Optional["StrategyOutput"] = None  # StrategyOutput если есть (для attempts с entry_time) - forward ref для TYPE_CHECKING
     meta: Dict[str, Any] = field(default_factory=dict)  # Дополнительные поля (blocked_by_capacity, open_positions, etc.)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -92,9 +102,9 @@ class PortfolioEvent:
         strategy: str,
         signal_id: str,
         contract_address: str,
-        result: Optional[StrategyOutput] = None,
+        result: Optional["StrategyOutput"] = None,
         meta: Optional[Dict[str, Any]] = None,
-    ) -> PortfolioEvent:
+    ) -> "PortfolioEvent":
         """Создает событие ATTEMPT_RECEIVED."""
         return cls(
             timestamp=timestamp,
@@ -113,9 +123,9 @@ class PortfolioEvent:
         strategy: str,
         signal_id: str,
         contract_address: str,
-        result: StrategyOutput,
+        result: "StrategyOutput",
         meta: Optional[Dict[str, Any]] = None,
-    ) -> PortfolioEvent:
+    ) -> "PortfolioEvent":
         """Создает событие ATTEMPT_ACCEPTED_OPEN."""
         return cls(
             timestamp=timestamp,
@@ -135,10 +145,10 @@ class PortfolioEvent:
         strategy: str,
         signal_id: str,
         contract_address: str,
-        result: StrategyOutput,
+        result: "StrategyOutput",
         reason: str,
         meta: Optional[Dict[str, Any]] = None,
-    ) -> PortfolioEvent:
+    ) -> "PortfolioEvent":
         """Создает событие ATTEMPT_REJECTED_CAPACITY."""
         event_meta = meta or {}
         event_meta["blocked_by_capacity"] = True
@@ -160,10 +170,10 @@ class PortfolioEvent:
         strategy: str,
         signal_id: str,
         contract_address: str,
-        result: StrategyOutput,
+        result: "StrategyOutput",
         reason: str,
         meta: Optional[Dict[str, Any]] = None,
-    ) -> PortfolioEvent:
+    ) -> "PortfolioEvent":
         """Создает событие ATTEMPT_REJECTED_RISK."""
         return cls(
             timestamp=timestamp,
@@ -177,6 +187,96 @@ class PortfolioEvent:
         )
     
     @classmethod
+    def create_attempt_rejected_no_candles(
+        cls,
+        timestamp: datetime,
+        strategy: str,
+        signal_id: str,
+        contract_address: str,
+        result: Optional["StrategyOutput"] = None,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> "PortfolioEvent":
+        """Создает событие ATTEMPT_REJECTED_NO_CANDLES (v1.9)."""
+        return cls(
+            timestamp=timestamp,
+            strategy=strategy,
+            signal_id=signal_id,
+            contract_address=contract_address,
+            event_type=PortfolioEventType.ATTEMPT_REJECTED_NO_CANDLES,
+            result=result,
+            reason="no_candles",
+            meta=meta or {},
+        )
+    
+    @classmethod
+    def create_attempt_rejected_corrupt_candles(
+        cls,
+        timestamp: datetime,
+        strategy: str,
+        signal_id: str,
+        contract_address: str,
+        result: Optional["StrategyOutput"] = None,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> "PortfolioEvent":
+        """Создает событие ATTEMPT_REJECTED_CORRUPT_CANDLES (v1.9)."""
+        return cls(
+            timestamp=timestamp,
+            strategy=strategy,
+            signal_id=signal_id,
+            contract_address=contract_address,
+            event_type=PortfolioEventType.ATTEMPT_REJECTED_CORRUPT_CANDLES,
+            result=result,
+            reason="corrupt_candles",
+            meta=meta or {},
+        )
+    
+    @classmethod
+    def create_attempt_rejected_strategy_no_entry(
+        cls,
+        timestamp: datetime,
+        strategy: str,
+        signal_id: str,
+        contract_address: str,
+        result: Optional["StrategyOutput"] = None,
+        reason: Optional[str] = None,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> "PortfolioEvent":
+        """Создает событие ATTEMPT_REJECTED_STRATEGY_NO_ENTRY."""
+        return cls(
+            timestamp=timestamp,
+            strategy=strategy,
+            signal_id=signal_id,
+            contract_address=contract_address,
+            event_type=PortfolioEventType.ATTEMPT_REJECTED_STRATEGY_NO_ENTRY,
+            result=result,
+            reason=reason or "strategy_no_entry",
+            meta=meta or {},
+        )
+    
+    @classmethod
+    def create_attempt_rejected_invalid_input(
+        cls,
+        timestamp: datetime,
+        strategy: str,
+        signal_id: str,
+        contract_address: str,
+        result: Optional["StrategyOutput"] = None,
+        reason: str = "invalid_input",
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> "PortfolioEvent":
+        """Создает событие ATTEMPT_REJECTED_INVALID_INPUT."""
+        return cls(
+            timestamp=timestamp,
+            strategy=strategy,
+            signal_id=signal_id,
+            contract_address=contract_address,
+            event_type=PortfolioEventType.ATTEMPT_REJECTED_INVALID_INPUT,
+            result=result,
+            reason=reason,
+            meta=meta or {},
+        )
+    
+    @classmethod
     def create_closed_by_prune(
         cls,
         timestamp: datetime,
@@ -184,7 +284,7 @@ class PortfolioEvent:
         signal_id: str,
         contract_address: str,
         meta: Optional[Dict[str, Any]] = None,
-    ) -> PortfolioEvent:
+    ) -> "PortfolioEvent":
         """Создает событие CLOSED_BY_CAPACITY_PRUNE."""
         event_meta = meta or {}
         event_meta["capacity_prune"] = True
@@ -199,6 +299,71 @@ class PortfolioEvent:
         )
     
     @classmethod
+    def create_closed_by_profit_reset(
+        cls,
+        timestamp: datetime,
+        strategy: str,
+        signal_id: str,
+        contract_address: str,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> "PortfolioEvent":
+        """Создает событие CLOSED_BY_PROFIT_RESET."""
+        event_meta = meta or {}
+        event_meta["closed_by_reset"] = True
+        return cls(
+            timestamp=timestamp,
+            strategy=strategy,
+            signal_id=signal_id,
+            contract_address=contract_address,
+            event_type=PortfolioEventType.CLOSED_BY_PROFIT_RESET,
+            reason="profit_reset",
+            meta=event_meta,
+        )
+    
+    @classmethod
+    def create_closed_by_capacity_close_all(
+        cls,
+        timestamp: datetime,
+        strategy: str,
+        signal_id: str,
+        contract_address: str,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> "PortfolioEvent":
+        """Создает событие CLOSED_BY_CAPACITY_CLOSE_ALL."""
+        event_meta = meta or {}
+        event_meta["closed_by_reset"] = True
+        return cls(
+            timestamp=timestamp,
+            strategy=strategy,
+            signal_id=signal_id,
+            contract_address=contract_address,
+            event_type=PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL,
+            reason="capacity_close_all",
+            meta=event_meta,
+        )
+    
+    @classmethod
+    def create_executed_close(
+        cls,
+        timestamp: datetime,
+        strategy: str,
+        signal_id: str,
+        contract_address: str,
+        reason: str,
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> "PortfolioEvent":
+        """Создает событие EXECUTED_CLOSE (обычное закрытие позиции)."""
+        return cls(
+            timestamp=timestamp,
+            strategy=strategy,
+            signal_id=signal_id,
+            contract_address=contract_address,
+            event_type=PortfolioEventType.EXECUTED_CLOSE,
+            reason=reason,
+            meta=meta or {},
+        )
+    
+    @classmethod
     def create_capacity_prune_triggered(
         cls,
         timestamp: datetime,
@@ -206,7 +371,7 @@ class PortfolioEvent:
         closed_count: int,
         blocked_ratio: float,
         meta: Optional[Dict[str, Any]] = None,
-    ) -> PortfolioEvent:
+    ) -> "PortfolioEvent":
         """Создает событие CAPACITY_PRUNE_TRIGGERED."""
         event_meta = meta or {}
         event_meta.update({
@@ -232,7 +397,7 @@ class PortfolioEvent:
         marker_contract_address: str,
         closed_positions_count: int,
         meta: Optional[Dict[str, Any]] = None,
-    ) -> PortfolioEvent:
+    ) -> "PortfolioEvent":
         """Создает событие PROFIT_RESET_TRIGGERED."""
         event_meta = meta or {}
         event_meta.update({
@@ -256,7 +421,7 @@ class PortfolioEvent:
         marker_contract_address: str,
         closed_positions_count: int,
         meta: Optional[Dict[str, Any]] = None,
-    ) -> PortfolioEvent:
+    ) -> "PortfolioEvent":
         """Создает событие CAPACITY_CLOSE_ALL_TRIGGERED."""
         event_meta = meta or {}
         event_meta.update({
