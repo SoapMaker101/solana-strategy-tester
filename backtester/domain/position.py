@@ -1,5 +1,6 @@
 # backtester/domain/position.py
 from dataclasses import dataclass, field
+from uuid import uuid4
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -21,6 +22,7 @@ class Position:
     2. meta всегда существует (никогда не None)
     3. meta никогда не теряется: используем только setdefault/update, никогда не присваиваем meta = ...
     """
+    position_id: str = field(default_factory=lambda: uuid4().hex)
     signal_id: Any                        # Идентификатор сигнала, по которому была открыта позиция
     contract_address: str                 # Адрес токена/контракта, к которому относится позиция
     entry_time: datetime                  # Время входа в позицию
@@ -37,6 +39,8 @@ class Position:
         """Гарантируем, что meta всегда существует."""
         if self.meta is None:
             self.meta = {}
+        if not self.position_id:
+            self.position_id = uuid4().hex
     
     def mark_closed_by_reset(self) -> None:
         """

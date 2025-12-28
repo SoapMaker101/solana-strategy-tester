@@ -35,7 +35,7 @@ class DummyStrategy(Strategy):
             exit_time=data.candles[-1].timestamp,
             exit_price=data.candles[-1].close,
             pnl=0.0,
-            reason="timeout",
+            reason="time_stop",
             meta={}
         )
 
@@ -78,7 +78,7 @@ class TestRunnerEmptyCandles:
             
             strategy_config = StrategyConfig(
                 name="test_strategy",
-                type="RR",
+                type="RUNNER",
                 params={}
             )
             strategy = DummyStrategy(strategy_config)
@@ -140,7 +140,7 @@ class TestRunnerEmptyCandles:
             
             strategy_config = StrategyConfig(
                 name="test_strategy",
-                type="RR",
+                type="RUNNER",
                 params={}
             )
             strategy = DummyStrategy(strategy_config)
@@ -212,7 +212,7 @@ class TestRunnerEmptyCandles:
             
             strategy_config = StrategyConfig(
                 name="test_strategy",
-                type="RR",
+                type="RUNNER",
                 params={}
             )
             strategy = DummyStrategy(strategy_config)
@@ -276,7 +276,7 @@ class TestRunnerEmptyCandles:
             
             strategy_config = StrategyConfig(
                 name="test_strategy",
-                type="RR",
+                type="RUNNER",
                 params={}
             )
             strategy = DummyStrategy(strategy_config)
@@ -308,8 +308,6 @@ class TestRunnerEmptyCandles:
             assert results[0]["result"].reason == "no_entry"
             # Проверяем каноническое значение meta.detail
             assert results[0]["result"].meta.get("detail") == "no_candles"
-
-
 
 
 

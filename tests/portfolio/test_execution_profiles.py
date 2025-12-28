@@ -73,7 +73,7 @@ def test_round_trip_realistic_profile():
         exit_time=exit_time,
         exit_price=1.0,  # Нет движения цены
         pnl=0.0,
-        reason="timeout"
+        reason="time_stop"
     )
     
     all_results = [{
@@ -178,7 +178,7 @@ def test_round_trip_stress_profile():
         exit_time=exit_time,
         exit_price=1.0,
         pnl=0.0,
-        reason="timeout"
+        reason="time_stop"
     )
     
     all_results = [{
@@ -248,7 +248,7 @@ def test_slippage_applied_once():
         exit_time=exit_time,
         exit_price=1.05,  # 5% прибыль
         pnl=0.05,
-        reason="tp"
+        reason="ladder_tp"
     )
     
     all_results = [{
@@ -348,7 +348,7 @@ def test_legacy_config_compatibility():
         exit_time=exit_time,
         exit_price=1.0,
         pnl=0.0,
-        reason="timeout"
+        reason="time_stop"
     )
     
     all_results = [{
@@ -413,7 +413,7 @@ def test_different_exit_reasons():
         exit_time=exit_time,
         exit_price=1.05,
         pnl=0.05,
-        reason="tp"
+        reason="ladder_tp"
     )
     
     all_results_tp = [{
@@ -435,7 +435,7 @@ def test_different_exit_reasons():
         exit_time=exit_time,
         exit_price=0.95,
         pnl=-0.05,
-        reason="sl"
+        reason="stop_loss"
     )
     
     all_results_sl = [{

@@ -75,7 +75,7 @@ def test_fees_can_turn_small_profit_into_loss():
         exit_time=exit_time,
         exit_price=1.002,  # 0.2% прибыль
         pnl=raw_pnl_pct,   # 0.002 = 0.2%
-        reason="tp"
+        reason="ladder_tp"
     )
     
     all_results = [{
@@ -224,7 +224,7 @@ def test_fees_can_turn_small_profit_into_loss_with_different_sizes():
         exit_time=exit_time,
         exit_price=1.01,  # 1% прибыль
         pnl=raw_pnl_pct,
-        reason="tp"
+        reason="ladder_tp"
     )
     
     all_results = [{

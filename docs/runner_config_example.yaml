@@ -20,8 +20,8 @@
 #
 # Portfolio-level reset (в config/backtest_example.yaml):
 #   portfolio:
-#     runner_reset_enabled: true      # Включить portfolio-level reset
-#     runner_reset_multiple: 2.0      # Порог: equity >= cycle_start_equity * 2.0
+#     profit_reset_enabled: true      # Включить portfolio-level reset
+#     profit_reset_multiple: 2.0      # Порог: equity >= cycle_start_equity * 2.0
 
 runner:
   take_profit_levels:
@@ -45,7 +45,6 @@ runner:
 #     use_high_for_targets: true
 #     exit_on_first_tp: false
 #     allow_partial_fills: true
-
 
 
 

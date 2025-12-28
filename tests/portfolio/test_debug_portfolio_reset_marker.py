@@ -64,7 +64,7 @@ def test_debug_portfolio_reset_marker():
         exit_time=exit_time_1,
         exit_price=300.0,  # 3x
         pnl=2.0,  # 200%
-        reason="tp",
+        reason="ladder_tp",
         meta={}
     )
     
@@ -78,7 +78,7 @@ def test_debug_portfolio_reset_marker():
         exit_time=exit_time_2,
         exit_price=200.0,  # 2x
         pnl=1.0,
-        reason="tp",
+        reason="ladder_tp",
         meta={}
     )
     
@@ -106,7 +106,6 @@ def test_debug_portfolio_reset_marker():
     print("DIAGNOSTIC INFO: Portfolio Reset Marker")
     print("="*80)
     
-    print(f"\nRunner reset count: {result.stats.runner_reset_count}")
     print(f"Portfolio reset count: {result.stats.portfolio_reset_count}")
     print(f"Reset count (legacy): {result.stats.reset_count}")
     print(f"Cycle start equity: {result.stats.cycle_start_equity}")
@@ -150,7 +149,6 @@ def test_debug_portfolio_reset_marker():
     
     # Базовые проверки
     assert result.stats.portfolio_reset_count >= 0
-    assert result.stats.runner_reset_count >= 0
     assert result.stats.cycle_start_equity > 0
     
     # Если был portfolio-level reset, проверяем детали
@@ -159,7 +157,6 @@ def test_debug_portfolio_reset_marker():
         assert result.stats.last_portfolio_reset_time is not None
         assert len(reset_positions) > 0, "Должны быть позиции, закрытые по portfolio reset"
         assert len(marker_positions) > 0, "Должна быть хотя бы одна marker позиция с triggered_portfolio_reset=True"
-
 
 
 

@@ -65,7 +65,7 @@ def test_runner_strategy_basic(runner_strategy, sample_signal):
     result = runner_strategy.on_signal(data)
     
     assert result.entry_price == entry_price
-    assert result.reason == "tp"  # Все уровни достигнуты = take profit
+    assert result.reason == "ladder_tp"  # Все уровни достигнуты = take profit
     assert "realized_multiple" in result.meta
     assert "levels_hit" in result.meta
     assert "fractions_exited" in result.meta
@@ -146,4 +146,3 @@ def test_runner_strategy_no_levels_hit(runner_strategy, sample_signal):
     # realized_multiple = 140 / 100 = 1.4
     assert result.meta["realized_multiple"] == pytest.approx(1.4, rel=1e-3)
     assert len(result.meta["levels_hit"]) == 0  # Уровни не достигнуты
-

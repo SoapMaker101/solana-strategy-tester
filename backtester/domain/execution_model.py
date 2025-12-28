@@ -70,17 +70,19 @@ class ExecutionModel:
         (получаем меньше при продаже)
         
         :param price: Исходная цена выхода
-        :param reason: Причина выхода: "tp", "sl", "timeout", "manual" или другие
+        :param reason: Причина выхода: "ladder_tp", "stop_loss", "time_stop", "manual_close" или другие
         :return: Эффективная цена выхода с учетом slippage
         """
         # Маппинг reason на event
         event_map = {
-            "tp": "exit_tp",
-            "sl": "exit_sl",
-            "timeout": "exit_timeout",
-            "manual": "exit_manual",
+            "ladder_tp": "exit_tp",
+            "stop_loss": "exit_sl",
+            "time_stop": "exit_timeout",
+            "manual_close": "exit_manual",
+            "profit_reset": "exit_manual",
+            "capacity_prune": "exit_manual",
         }
-        event = event_map.get(reason, "exit_timeout")  # По умолчанию timeout
+        event = event_map.get(reason, "exit_timeout")
         
         slippage = self.profile.slippage_for(event)
         return price * (1.0 - slippage)

@@ -328,8 +328,6 @@ def calculate_runner_metrics(
         eps = 1e-6
         if abs(pnl_total_sol_pos) > eps:
             tail_pnl_share = pnl_tail_sol / pnl_total_sol_pos
-            # Clamp 0..1 для tail_pnl_share
-            tail_pnl_share = max(0.0, min(1.0, tail_pnl_share))
             # non_tail_pnl_share может быть отрицательным (leak)
             non_tail_pnl_share = (pnl_total_sol_pos - pnl_tail_sol) / pnl_total_sol_pos
         else:
@@ -382,8 +380,6 @@ def calculate_runner_metrics(
             eps = 1e-6
             if abs(pnl_total_sol_pos) > eps:
                 tail_pnl_share = pnl_tail_sol / pnl_total_sol_pos
-                # Clamp 0..1 для tail_pnl_share
-                tail_pnl_share = max(0.0, min(1.0, tail_pnl_share))
                 # non_tail_pnl_share может быть отрицательным (leak)
                 non_tail_pnl_share = (pnl_total_sol_pos - pnl_tail_sol) / pnl_total_sol_pos
             else:
@@ -880,7 +876,6 @@ def generate_stability_table_from_portfolio_trades(
             )
     
     return stability_df
-
 
 
 

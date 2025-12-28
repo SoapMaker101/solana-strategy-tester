@@ -48,5 +48,14 @@ class StrategyOutput:
     exit_time: Optional[datetime]               # Момент выхода
     exit_price: Optional[float]                 # Цена выхода
     pnl: float                                  # Прибыль/убыток в процентах (в десятичной форме)
-    reason: Literal["tp", "sl", "timeout", "no_entry", "error"]  # Причина выхода из сделки
+    reason: Literal[
+        "ladder_tp",
+        "stop_loss",
+        "time_stop",
+        "capacity_prune",
+        "profit_reset",
+        "manual_close",
+        "no_entry",
+        "error",
+    ]  # Причина выхода из сделки
     meta: Dict[str, Any] = field(default_factory=dict)           # Доп. информация (например, индекс свечи выхода)

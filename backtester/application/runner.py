@@ -253,11 +253,6 @@ class BacktestRunner:
                     print(f"rate_limit_failures: {summary.get('rate_limit_failures', 0)}")
                 print("="*60)
         
-        # Выводим summary по дедупликации предупреждений
-        from ..domain.rr_utils import get_warn_summary
-        warn_summary = get_warn_summary(top_n=10)
-        print(f"\n{warn_summary}")
-        
         return self.results
 
     def _build_portfolio_config(self) -> PortfolioConfig:
@@ -355,8 +350,18 @@ class BacktestRunner:
             execution_profile=execution_profile,
             backtest_start=backtest_start,
             backtest_end=backtest_end,
-            runner_reset_enabled=portfolio_cfg.get("runner_reset_enabled", False),
-            runner_reset_multiple=float(portfolio_cfg.get("runner_reset_multiple", 2.0)),
+            profit_reset_enabled=portfolio_cfg.get("profit_reset_enabled"),
+            profit_reset_multiple=(
+                float(portfolio_cfg.get("profit_reset_multiple"))
+                if portfolio_cfg.get("profit_reset_multiple") is not None
+                else None
+            ),
+            runner_reset_enabled=portfolio_cfg.get("runner_reset_enabled"),
+            runner_reset_multiple=(
+                float(portfolio_cfg.get("runner_reset_multiple"))
+                if portfolio_cfg.get("runner_reset_multiple") is not None
+                else None
+            ),
             profit_reset_enabled=profit_reset_enabled,
             profit_reset_multiple=profit_reset_multiple,
             capacity_reset_enabled=capacity_reset_enabled,

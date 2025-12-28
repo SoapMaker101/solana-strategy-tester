@@ -69,7 +69,7 @@ def test_portfolio_single_trade_applies_fees_and_updates_balance():
         exit_time=exit_time,
         exit_price=1.05,  # 5% прибыль
         pnl=raw_pnl_pct,
-        reason="tp"
+        reason="ladder_tp"
     )
     
     # Формируем all_results (как требуется для simulate)
@@ -214,7 +214,7 @@ def test_portfolio_single_trade_profitable_after_fees():
         exit_time=exit_time,
         exit_price=1.30,
         pnl=raw_pnl_pct,
-        reason="tp"
+        reason="ladder_tp"
     )
     
     all_results = [{

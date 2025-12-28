@@ -58,7 +58,7 @@ def test_max_open_positions_rejects_excess_trades():
             exit_time=exit_time,
             exit_price=1.05,  # 5% прибыль
             pnl=0.05,
-            reason="tp"
+            reason="ladder_tp"
         )
         
         trades.append({
@@ -152,7 +152,7 @@ def test_max_exposure_rejects_second_trade():
             exit_time=exit_time,
             exit_price=1.05,
             pnl=0.05,
-            reason="tp"
+            reason="ladder_tp"
         )
         
         trades.append({
@@ -241,7 +241,7 @@ def test_max_exposure_with_fixed_allocation():
             exit_time=exit_time,
             exit_price=1.05,
             pnl=0.05,
-            reason="tp"
+            reason="ladder_tp"
         )
         
         trades.append({
@@ -303,7 +303,7 @@ def test_limits_work_together():
             exit_time=exit_time,
             exit_price=1.05,
             pnl=0.05,
-            reason="tp"
+            reason="ladder_tp"
         )
         
         trades.append({
@@ -376,7 +376,7 @@ def test_fixed_allocation_allows_many_small_positions():
             exit_time=exit_time,
             exit_price=1.05,
             pnl=0.05,
-            reason="tp"
+            reason="ladder_tp"
         )
         
         trades.append({

@@ -100,23 +100,26 @@ class RunnerStrategy(Strategy):
         # config уже проверен в on_signal, используем cast для типизации
         config = cast(RunnerConfig, self.config)
 
-        # Рассчитываем exit_price на основе realized_multiple
-        # exit_price = entry_price * realized_multiple
-        exit_price = entry_candle.close * ladder_result.realized_multiple
+        # Рассчитываем exit_price как close свечи, на которой произошло финальное закрытие
+        exit_candle = next(
+            (c for c in candles if c.timestamp == ladder_result.exit_time),
+            candles[-1],
+        )
+        exit_price = exit_candle.close
 
         # PnL уже рассчитан в ladder_result.realized_pnl_pct (в процентах)
         # Преобразуем в десятичную форму
         pnl = ladder_result.realized_pnl_pct / 100.0
 
         # Преобразуем reason из RunnerTradeResult в StrategyOutput.reason
-        reason_map: dict[str, Literal["tp", "sl", "timeout", "no_entry", "error"]] = {
-            "time_stop": "timeout",
-            "all_levels_hit": "tp",  # Все уровни достигнуты = take profit
-            "no_data": "no_entry"
+        reason_map: dict[str, Literal["ladder_tp", "time_stop", "no_entry", "error"]] = {
+            "time_stop": "time_stop",
+            "all_levels_hit": "ladder_tp",
+            "no_data": "no_entry",
         }
         reason_str = reason_map.get(ladder_result.reason, "error")
-        reason: Literal["tp", "sl", "timeout", "no_entry", "error"] = cast(
-            Literal["tp", "sl", "timeout", "no_entry", "error"], reason_str
+        reason: Literal["ladder_tp", "time_stop", "no_entry", "error"] = cast(
+            Literal["ladder_tp", "time_stop", "no_entry", "error"], reason_str
         )
 
         # Вычисляем trade features

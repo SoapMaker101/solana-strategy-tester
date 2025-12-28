@@ -643,18 +643,20 @@ class Reporter:
         positions_data = []
         for pos in portfolio_result.positions:
             positions_data.append({
+                "position_id": pos.position_id,
                 "signal_id": pos.signal_id,
                 "contract_address": pos.contract_address,
                 "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
                 "entry_price": pos.entry_price,
                 "exit_time": pos.exit_time.isoformat() if pos.exit_time else None,
                 "exit_price": pos.exit_price,
-                "size_sol": pos.size,
+                "size_sol": pos.meta.get("original_size", pos.size) if pos.meta else pos.size,
                 "pnl_pct": pos.pnl_pct,
                 "pnl_sol": pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0,
                 "raw_pnl_pct": pos.meta.get("raw_pnl_pct", 0.0) if pos.meta else 0.0,
                 "fee_pct": pos.meta.get("fee_pct", 0.0) if pos.meta else 0.0,
                 "status": pos.status,
+                "reason": pos.meta.get("close_reason") if pos.meta else None,
             })
         
         if positions_data:
@@ -706,18 +708,20 @@ class Reporter:
         positions_data = []
         for pos in portfolio_result.positions:
             positions_data.append({
+                "position_id": pos.position_id,
                 "signal_id": pos.signal_id,
                 "contract_address": pos.contract_address,
                 "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
                 "entry_price": pos.entry_price,
                 "exit_time": pos.exit_time.isoformat() if pos.exit_time else None,
                 "exit_price": pos.exit_price,
-                "size_sol": pos.size,
+                "size_sol": pos.meta.get("original_size", pos.size) if pos.meta else pos.size,
                 "pnl_pct": pos.pnl_pct,
                 "pnl_sol": pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0,
                 "raw_pnl_pct": pos.meta.get("raw_pnl_pct", 0.0) if pos.meta else 0.0,
                 "fee_pct": pos.meta.get("fee_pct", 0.0) if pos.meta else 0.0,
                 "status": pos.status,
+                "reason": pos.meta.get("close_reason") if pos.meta else None,
             })
         
         if positions_data:
@@ -725,9 +729,9 @@ class Reporter:
         else:
             # Пустой DataFrame с правильными колонками
             sheets["positions"] = pd.DataFrame([], columns=[
-                "signal_id", "contract_address", "entry_time", "entry_price",
+                "position_id", "signal_id", "contract_address", "entry_time", "entry_price",
                 "exit_time", "exit_price", "size_sol", "pnl_pct", "pnl_sol",
-                "raw_pnl_pct", "fee_pct", "status"
+                "raw_pnl_pct", "fee_pct", "status", "reason"
             ])
         
         # Лист 2: Equity Curve
@@ -748,7 +752,6 @@ class Reporter:
             "trades_executed": [portfolio_result.stats.trades_executed],
             "trades_skipped_by_risk": [portfolio_result.stats.trades_skipped_by_risk],
             "trades_skipped_by_reset": [getattr(portfolio_result.stats, 'trades_skipped_by_reset', 0)],
-            "runner_reset_count": [getattr(portfolio_result.stats, 'runner_reset_count', 0)],
             "portfolio_reset_count": [getattr(portfolio_result.stats, 'portfolio_reset_count', 0)],
             "portfolio_reset_profit_count": [getattr(portfolio_result.stats, 'portfolio_reset_profit_count', 0)],
             "portfolio_reset_capacity_count": [getattr(portfolio_result.stats, 'portfolio_reset_capacity_count', 0)],
@@ -876,6 +879,7 @@ class Reporter:
         
         Обязательные колонки:
         - strategy: название стратегии
+        - position_id: uuid4 hex
         - signal_id: идентификатор сигнала
         - contract_address: адрес контракта
         - entry_time: время входа (ISO)
@@ -883,6 +887,9 @@ class Reporter:
         - status: статус (должен быть "closed")
         - size: размер позиции в SOL
         - pnl_sol: портфельный PnL в SOL (обязательно!)
+        - pnl_pct_total: PnL в процентах (percent)
+        - realized_multiple: суммарный multiple из ladder fills
+        - reason: каноническая причина закрытия
         - fees_total_sol: суммарные комиссии
         - exec_entry_price: исполненная цена входа (с slippage)
         - exec_exit_price: исполненная цена выхода (с slippage)
@@ -890,7 +897,7 @@ class Reporter:
         - raw_exit_price: сырая цена выхода (без slippage)
         - closed_by_reset: закрыта ли позиция по reset (bool)
         - triggered_portfolio_reset: триггернула ли portfolio-level reset (bool)
-        - reset_reason: причина reset (profit/capacity/runner/manual/none)
+        - reset_reason: причина reset (profit_reset/capacity_prune/manual_close/none)
         - hold_minutes: длительность удержания позиции в минутах
         - max_xn_reached: максимальный XN достигнутый (из levels_hit или fallback на цены)
         - hit_x2: достигнут ли XN >= 2.0 (bool)
@@ -947,6 +954,7 @@ class Reporter:
                 closed_by_reset = pos.meta.get("closed_by_reset", False) if pos.meta else False
                 triggered_portfolio_reset = pos.meta.get("triggered_portfolio_reset", False) if pos.meta else False
                 reset_reason = pos.meta.get("reset_reason", "none") if pos.meta else "none"
+                close_reason = pos.meta.get("close_reason", reset_reason) if pos.meta else reset_reason
                 
                 # Вычисляем hold_minutes
                 hold_minutes = None
@@ -998,15 +1006,27 @@ class Reporter:
                     else:
                         realized_tail_pnl_sol = 0.0
                 
+                fractions_exited = pos.meta.get("fractions_exited", {}) if pos.meta else {}
+                realized_multiple = pos.meta.get("realized_multiple")
+                if realized_multiple is None:
+                    realized_multiple = sum(
+                        float(xn) * float(frac) for xn, frac in fractions_exited.items()
+                    ) if fractions_exited else 1.0
+                pnl_pct_total = (float(realized_multiple) - 1.0) * 100.0
+
                 trade_row = {
                     "strategy": strategy_name,
+                    "position_id": pos.position_id,
                     "signal_id": pos.signal_id,
                     "contract_address": pos.contract_address,
                     "entry_time": pos.entry_time.isoformat(),
                     "exit_time": pos.exit_time.isoformat(),
                     "status": pos.status,
-                    "size": pos.size,
+                    "size": pos.meta.get("original_size", pos.size) if pos.meta else pos.size,
                     "pnl_sol": pnl_sol,
+                    "pnl_pct_total": pnl_pct_total,
+                    "realized_multiple": realized_multiple,
+                    "reason": close_reason,
                     "fees_total_sol": fees_total_sol,
                     "exec_entry_price": exec_entry_price,
                     "exec_exit_price": exec_exit_price,
@@ -1035,20 +1055,20 @@ class Reporter:
         else:
             # Создаем пустой DataFrame с правильными колонками
             df = pd.DataFrame([], columns=[  # type: ignore[arg-type]
-                "strategy", "signal_id", "contract_address",
+                "strategy", "position_id", "signal_id", "contract_address",
                 "entry_time", "exit_time", "status",
-                "size", "pnl_sol", "fees_total_sol",
-                "exec_entry_price", "exec_exit_price",
+                "size", "pnl_sol", "pnl_pct_total", "realized_multiple", "reason",
+                "fees_total_sol", "exec_entry_price", "exec_exit_price",
                 "raw_entry_price", "raw_exit_price",
                 "closed_by_reset", "triggered_portfolio_reset", "reset_reason", "hold_minutes",
                 "max_xn_reached", "hit_x2", "hit_x5",
                 "realized_total_pnl_sol", "realized_tail_pnl_sol",
             ])
         
-        # Удаляем дубликаты по (strategy, signal_id, contract_address) - positions-level агрегат
+        # Удаляем дубликаты по position_id - positions-level агрегат
         # (если есть данные)
         if not df.empty:
-            df = df.drop_duplicates(subset=["strategy", "signal_id", "contract_address"], keep="first")
+            df = df.drop_duplicates(subset=["position_id"], keep="first")
         
         # Сохраняем
         positions_path = self.output_dir / "portfolio_positions.csv"
@@ -1057,18 +1077,20 @@ class Reporter:
     
     def save_portfolio_events_table(self, portfolio_results: Dict[str, Any]) -> None:
         """
-        Сохраняет events-level таблицу для всех стратегий в CSV (v1.9).
+        Сохраняет events-level таблицу для всех стратегий в CSV (v2.0).
         
         Это таблица событий портфеля (events-level), где каждая запись = PortfolioEvent.
         Используется для отладки и анализа capacity pressure, prune, reset триггеров.
         
         Колонки:
         - timestamp: время события (ISO)
-        - event_type: тип события (ATTEMPT_ACCEPTED_OPEN, CLOSED_BY_CAPACITY_PRUNE, etc.)
+        - event_type: тип события (POSITION_OPENED, POSITION_PARTIAL_EXIT, POSITION_CLOSED, PORTFOLIO_RESET_TRIGGERED)
         - strategy: название стратегии
         - signal_id: идентификатор сигнала
         - contract_address: адрес контракта
-        - position_id: идентификатор позиции (если есть)
+        - position_id: идентификатор позиции
+        - event_id: идентификатор события
+        - reason: каноническая причина (для закрытий/reset)
         - meta_json: JSON строка с дополнительными метаданными
         
         :param portfolio_results: Словарь {strategy_name: PortfolioResult}
@@ -1091,9 +1113,6 @@ class Reporter:
                 if not isinstance(event, PortfolioEvent):
                     continue
                 
-                # Извлекаем position_id из meta если есть
-                position_id = event.meta.get("position_id") if event.meta else None
-                
                 # Сериализуем meta в JSON
                 meta_json = json.dumps(event.meta, ensure_ascii=False) if event.meta else "{}"
                 
@@ -1103,7 +1122,9 @@ class Reporter:
                     "strategy": event.strategy,
                     "signal_id": event.signal_id,
                     "contract_address": event.contract_address,
-                    "position_id": position_id,
+                    "position_id": event.position_id,
+                    "event_id": event.event_id,
+                    "reason": event.reason,
                     "meta_json": meta_json,
                 }
                 
@@ -1120,7 +1141,7 @@ class Reporter:
             # Создаем пустой DataFrame с правильными колонками
             df = pd.DataFrame([], columns=[  # type: ignore[arg-type]
                 "timestamp", "event_type", "strategy", "signal_id",
-                "contract_address", "position_id", "meta_json",
+                "contract_address", "position_id", "event_id", "reason", "meta_json",
             ])
         
         # Сохраняем
@@ -1148,16 +1169,20 @@ class Reporter:
         Используется для дебага и анализа исполнения.
         
         Колонки:
+        - position_id: идентификатор позиции
         - signal_id: идентификатор сигнала
         - strategy: название стратегии
         - event_time: время события (ISO)
-        - event_type: тип события (entry/partial_exit/final_exit/force_close_reset)
+        - event_type: тип события (POSITION_OPENED/POSITION_PARTIAL_EXIT/POSITION_CLOSED)
+        - event_id: ссылка на PortfolioEvent (если есть)
         - qty_delta: изменение количества (если есть)
         - raw_price: сырая цена (без slippage)
         - exec_price: исполненная цена (с slippage)
         - fees_sol: комиссии для этого события
         - pnl_sol_delta: изменение PnL для этого события
-        - reset_reason: причина reset (если force close)
+        - reason: каноническая причина (если применимо)
+        - xn: target multiple (для ladder exits)
+        - fraction: доля выхода (для ladder exits)
         
         :param portfolio_results: Словарь {strategy_name: PortfolioResult}
         """
@@ -1182,16 +1207,20 @@ class Reporter:
                 fees_entry = network_fee_entry
                 
                 executions_rows.append({
+                    "position_id": pos.position_id,
                     "signal_id": pos.signal_id,
                     "strategy": strategy_name,
                     "event_time": pos.entry_time.isoformat(),
-                    "event_type": "entry",
+                    "event_type": "POSITION_OPENED",
+                    "event_id": pos.meta.get("open_event_id") if pos.meta else None,
                     "qty_delta": pos.size,
                     "raw_price": raw_entry_price,
                     "exec_price": exec_entry_price,
                     "fees_sol": fees_entry,
-                    "pnl_sol_delta": 0.0,  # Entry не имеет PnL
-                    "reset_reason": None,
+                    "pnl_sol_delta": 0.0,
+                    "reason": None,
+                    "xn": None,
+                    "fraction": None,
                 })
                 
                 # Partial exits (для Runner стратегий)
@@ -1218,16 +1247,20 @@ class Reporter:
                             raw_exit_price = exit_price / (1.0 - 0.03) if exit_price > 0 else 0.0  # Примерный slippage
                             
                             executions_rows.append({
+                                "position_id": pos.position_id,
                                 "signal_id": pos.signal_id,
                                 "strategy": strategy_name,
                                 "event_time": hit_time.isoformat() if isinstance(hit_time, datetime) else str(hit_time),
-                                "event_type": "partial_exit",
+                                "event_type": "POSITION_PARTIAL_EXIT",
+                                "event_id": partial.get("event_id"),
                                 "qty_delta": -exit_size,
                                 "raw_price": raw_exit_price,
                                 "exec_price": exit_price,
                                 "fees_sol": fees_partial,
                                 "pnl_sol_delta": pnl_sol,
-                                "reset_reason": None,
+                                "reason": "time_stop" if partial.get("is_remainder") else "ladder_tp",
+                                "xn": partial.get("xn"),
+                                "fraction": partial.get("exit_size", 0.0) / pos.meta.get("original_size", pos.size) if pos.meta else None,
                             })
                 
                 # Final exit или force close
@@ -1239,19 +1272,21 @@ class Reporter:
                     closed_by_reset = pos.meta.get("closed_by_reset", False) if pos.meta else False
                     reset_reason = pos.meta.get("reset_reason", None) if pos.meta else None
                     
-                    event_type = "force_close_reset" if closed_by_reset else "final_exit"
-                    
                     executions_rows.append({
+                        "position_id": pos.position_id,
                         "signal_id": pos.signal_id,
                         "strategy": strategy_name,
                         "event_time": pos.exit_time.isoformat(),
-                        "event_type": event_type,
+                        "event_type": "POSITION_CLOSED",
+                        "event_id": pos.meta.get("close_event_id") if pos.meta else None,
                         "qty_delta": -pos.size,
                         "raw_price": raw_exit_price,
                         "exec_price": exec_exit_price,
                         "fees_sol": fees_total,
                         "pnl_sol_delta": pnl_sol,
-                        "reset_reason": reset_reason,
+                        "reason": reset_reason if closed_by_reset else pos.meta.get("close_reason") if pos.meta else None,
+                        "xn": None,
+                        "fraction": None,
                     })
         
         # Создаем DataFrame
@@ -1264,8 +1299,9 @@ class Reporter:
         else:
             # Создаем пустой DataFrame с правильными колонками
             df = pd.DataFrame([], columns=[  # type: ignore[arg-type]
-                "signal_id", "strategy", "event_time", "event_type",
-                "qty_delta", "raw_price", "exec_price", "fees_sol", "pnl_sol_delta", "reset_reason",
+                "position_id", "signal_id", "strategy", "event_time", "event_type", "event_id",
+                "qty_delta", "raw_price", "exec_price", "fees_sol", "pnl_sol_delta",
+                "reason", "xn", "fraction",
             ])
         
         # Сохраняем

@@ -57,7 +57,7 @@ def test_profit_reset_uses_new_fields():
         exit_time=exit_time,
         exit_price=300.0,  # 3x - очень прибыльная
         pnl=2.0,  # 200%
-        reason="tp",
+        reason="ladder_tp",
         meta={}
     )
     
@@ -122,7 +122,7 @@ def test_profit_reset_falls_back_to_runner_alias():
         exit_time=exit_time,
         exit_price=300.0,  # 3x - очень прибыльная
         pnl=2.0,  # 200%
-        reason="tp",
+        reason="ladder_tp",
         meta={}
     )
     

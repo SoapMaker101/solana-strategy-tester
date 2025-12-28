@@ -16,10 +16,8 @@ from .position import Position
 
 class ResetReason(Enum):
     """Причина срабатывания reset."""
-    EQUITY_THRESHOLD = "equity_threshold"  # Portfolio equity достигло порога (profit reset)
-    CAPACITY_PRESSURE = "capacity_pressure"  # Capacity reset: портфель забит, мало закрытий, много отклонений (close-all)
-    CAPACITY_PRUNE = "capacity_prune"  # Capacity prune: частичное закрытие плохих позиций (v1.7)
-    RUNNER_XN = "runner_xn"  # Runner позиция достигла XN уровня
+    PROFIT_RESET = "profit_reset"  # Portfolio equity достигло порога (profit reset)
+    CAPACITY_PRUNE = "capacity_prune"  # Capacity prune: частичное/полное закрытие плохих позиций
     MANUAL = "manual"  # Ручной reset (для расширения в будущем)
 
 
@@ -73,10 +71,6 @@ class PortfolioState:
     closed_positions: List[Position]
     equity_curve: List[Dict[str, Any]]
     
-    # Runner reset tracking
-    runner_reset_count: int = 0
-    last_runner_reset_time: Optional[datetime] = None
-    
     # Portfolio-level reset tracking
     portfolio_reset_count: int = 0
     last_portfolio_reset_time: Optional[datetime] = None
@@ -100,9 +94,6 @@ class PortfolioState:
     
     cycle_start_equity: float = 0.0  # Equity в начале текущего цикла
     equity_peak_in_cycle: float = 0.0  # Пик equity в текущем цикле
-    
-    # Reset blocking (для runner reset по XN)
-    reset_until: Optional[datetime] = None
     
     # Capacity tracking метрики (v1.6)
     blocked_by_capacity_in_window: int = 0  # Количество отклоненных сигналов по capacity за окно
@@ -176,7 +167,6 @@ def apply_portfolio_reset(
     1. marker_position ОБЯЗАТЕЛЬНО помечается флагами:
        - closed_by_reset = True (для portfolio-level reset)
        - triggered_portfolio_reset = True (для portfolio-level reset)
-       - triggered_reset = True (для runner XN reset)
     
     2. Все позиции из positions_to_force_close закрываются market close
        (используется текущая цена через execution_model, не pnl=0)
@@ -199,7 +189,7 @@ def apply_portfolio_reset(
         raw_exit_price = get_mark_price_for_position(pos, context.reset_time)
         
         # Применяем slippage к цене выхода (используем reason="manual" для reset)
-        effective_exit_price = execution_model.apply_exit(raw_exit_price, "manual")
+        effective_exit_price = execution_model.apply_exit(raw_exit_price, "manual_close")
         
         # Вычисляем PnL на основе исполненных цен (market close)
         exec_entry_price = pos.meta.get("exec_entry_price", pos.entry_price)
@@ -225,20 +215,19 @@ def apply_portfolio_reset(
         pos.status = "closed"
         
         # ВАЖНО: используем setdefault/update, никогда не присваиваем meta = ...
-        # Маппинг ResetReason -> каноническое значение для meta/CSV
-        reset_reason_str = {
-            ResetReason.EQUITY_THRESHOLD: "profit",
-            ResetReason.CAPACITY_PRESSURE: "capacity",
-            ResetReason.CAPACITY_PRUNE: "capacity_prune",
-            ResetReason.RUNNER_XN: "runner",
-            ResetReason.MANUAL: "manual",
-        }.get(context.reason, context.reason.value)
+    # Маппинг ResetReason -> каноническое значение для meta/CSV
+    reset_reason_str = {
+        ResetReason.PROFIT_RESET: "profit_reset",
+        ResetReason.CAPACITY_PRUNE: "capacity_prune",
+        ResetReason.MANUAL: "manual_close",
+    }.get(context.reason, context.reason.value)
         
         pos.meta.update({
             "pnl_sol": exit_pnl_sol,
             "fees_total_sol": fees_total,
             "closed_by_reset": True,
             "reset_reason": reset_reason_str,
+            "close_reason": reset_reason_str,
         })
         pos.meta["network_fee_sol"] = pos.meta.get("network_fee_sol", 0.0) + network_fee_exit
         
@@ -261,95 +250,68 @@ def apply_portfolio_reset(
     if marker.meta is None:
         marker.meta = {}
     
-    # Устанавливаем флаги в зависимости от причины
-    if context.reason == ResetReason.EQUITY_THRESHOLD:
-        # Portfolio-level profit reset: marker помечается флагами
-        # ВАЖНО: используем update для гарантии установки флагов (не setdefault)
-        marker.meta.update({
-            "closed_by_reset": True,
-            "triggered_portfolio_reset": True,
-            "reset_reason": "profit",
-        })
-    elif context.reason == ResetReason.CAPACITY_PRESSURE:
-        # Portfolio-level capacity reset: marker закрывается отдельно через market close
-        # (marker не в positions_to_force_close из-за архитектурного инварианта)
-        
-        # Закрываем marker через market close (как и остальные позиции)
-        raw_exit_price = get_mark_price_for_position(marker, context.reset_time)
-        effective_exit_price = execution_model.apply_exit(raw_exit_price, "manual")
-        
-        # Вычисляем PnL на основе исполненных цен (market close)
-        exec_entry_price = marker.meta.get("exec_entry_price", marker.entry_price)
-        exit_pnl_pct = (effective_exit_price - exec_entry_price) / exec_entry_price if exec_entry_price > 0 else 0.0
-        exit_pnl_sol = marker.size * exit_pnl_pct
-        
-        # Применяем fees к возвращаемому нотионалу
-        notional_returned = marker.size + exit_pnl_sol
-        notional_after_fees = execution_model.apply_fees(notional_returned)
-        fees_total = notional_returned - notional_after_fees
-        network_fee_exit = execution_model.network_fee()
-        
-        # Возвращаем капитал
-        state.balance += notional_after_fees
-        state.balance -= network_fee_exit
-        
-        # Обновляем позицию
-        marker.exit_time = context.reset_time
-        marker.exit_price = raw_exit_price  # Сохраняем raw цену
-        marker.meta.setdefault("exec_exit_price", effective_exit_price)
-        marker.pnl_pct = exit_pnl_pct
-        marker.status = "closed"
-        
-        # Устанавливаем флаги для marker (канонические значения)
-        marker.meta.update({
-            "pnl_sol": exit_pnl_sol,
-            "fees_total_sol": fees_total,
-            "closed_by_reset": True,
-            "triggered_portfolio_reset": True,
-            "reset_reason": "capacity",  # Каноническое значение для capacity reset
-        })
-        marker.meta["network_fee_sol"] = marker.meta.get("network_fee_sol", 0.0) + network_fee_exit
-        
-        # Добавляем marker в closed_positions
-        state.closed_positions.append(marker)
-        state.peak_balance = max(state.peak_balance, state.balance)
-        state.equity_curve.append({"timestamp": context.reset_time, "balance": state.balance})
-        
-        # Удаляем marker из open_positions
-        state.open_positions = [
-            p for p in state.open_positions 
-            if p.signal_id != marker.signal_id
-        ]
-    elif context.reason == ResetReason.RUNNER_XN:
-        # Runner XN reset: триггерная позиция НЕ имеет closed_by_reset (она закрывается нормально с прибылью)
-        # Только остальные позиции force-close и получают closed_by_reset=True
-        marker.meta.setdefault("triggered_reset", True)
-        marker.meta.setdefault("reset_reason", "runner")
-        # НЕ ставим closed_by_reset для триггерной позиции при runner reset
+    # Закрываем marker через market close (как и остальные позиции)
+    raw_exit_price = get_mark_price_for_position(marker, context.reset_time)
+    effective_exit_price = execution_model.apply_exit(raw_exit_price, "manual_close")
+
+    # Вычисляем PnL на основе исполненных цен (market close)
+    exec_entry_price = marker.meta.get("exec_entry_price", marker.entry_price)
+    exit_pnl_pct = (effective_exit_price - exec_entry_price) / exec_entry_price if exec_entry_price > 0 else 0.0
+    exit_pnl_sol = marker.size * exit_pnl_pct
+
+    # Применяем fees к возвращаемому нотионалу
+    notional_returned = marker.size + exit_pnl_sol
+    notional_after_fees = execution_model.apply_fees(notional_returned)
+    fees_total = notional_returned - notional_after_fees
+    network_fee_exit = execution_model.network_fee()
+
+    # Возвращаем капитал
+    state.balance += notional_after_fees
+    state.balance -= network_fee_exit
+
+    # Обновляем позицию
+    marker.exit_time = context.reset_time
+    marker.exit_price = raw_exit_price
+    marker.meta.setdefault("exec_exit_price", effective_exit_price)
+    marker.pnl_pct = exit_pnl_pct
+    marker.status = "closed"
+
+    reset_reason_str = "profit_reset" if context.reason == ResetReason.PROFIT_RESET else "capacity_prune"
+    marker.meta.update({
+        "pnl_sol": exit_pnl_sol,
+        "fees_total_sol": fees_total,
+        "closed_by_reset": True,
+        "triggered_portfolio_reset": True,
+        "reset_reason": reset_reason_str,
+        "close_reason": reset_reason_str,
+    })
+    marker.meta["network_fee_sol"] = marker.meta.get("network_fee_sol", 0.0) + network_fee_exit
+
+    # Добавляем marker в closed_positions
+    state.closed_positions.append(marker)
+    state.peak_balance = max(state.peak_balance, state.balance)
+    state.equity_curve.append({"timestamp": context.reset_time, "balance": state.balance})
+
+    # Удаляем marker из open_positions
+    state.open_positions = [
+        p for p in state.open_positions
+        if p.signal_id != marker.signal_id
+    ]
     
     # 3. Обновляем reset tracking переменные в зависимости от типа reset
-    if context.reason == ResetReason.RUNNER_XN:
-        # Runner reset по XN
-        state.runner_reset_count += 1
-        if state.last_runner_reset_time is None or context.reset_time > state.last_runner_reset_time:
-            state.last_runner_reset_time = context.reset_time
-        state.reset_until = context.reset_time
-    elif context.reason == ResetReason.EQUITY_THRESHOLD:
+    if context.reason == ResetReason.PROFIT_RESET:
         # Portfolio-level profit reset
         state.portfolio_reset_count += 1
         state.portfolio_reset_profit_count = getattr(state, 'portfolio_reset_profit_count', 0) + 1
         if state.last_portfolio_reset_time is None or context.reset_time > state.last_portfolio_reset_time:
             state.last_portfolio_reset_time = context.reset_time
-        # Portfolio reset обновляет cycle tracking
         state.cycle_start_equity = state.balance
         state.equity_peak_in_cycle = state.cycle_start_equity
-    elif context.reason == ResetReason.CAPACITY_PRESSURE:
-        # Portfolio-level capacity reset
+    elif context.reason == ResetReason.CAPACITY_PRUNE:
+        # Portfolio-level capacity reset (close-all or prune)
         state.portfolio_reset_count += 1
         state.portfolio_reset_capacity_count = getattr(state, 'portfolio_reset_capacity_count', 0) + 1
         if state.last_portfolio_reset_time is None or context.reset_time > state.last_portfolio_reset_time:
             state.last_portfolio_reset_time = context.reset_time
-        # Portfolio reset обновляет cycle tracking
         state.cycle_start_equity = state.balance
         state.equity_peak_in_cycle = state.cycle_start_equity
-

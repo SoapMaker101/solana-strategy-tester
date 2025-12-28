@@ -12,13 +12,11 @@ class SelectionCriteria:
     """
     Неизменяемые критерии отбора стратегий.
     
-    Поддерживает два набора критериев:
-    - RR/RRD критерии (survival_rate, variance, worst_window_pnl и т.д.)
-    - Runner критерии (hit_rate_x2, hit_rate_x5, tail_contribution и т.д.)
-    
-    Критерии применяются условно в зависимости от типа стратегии.
+    Runner-only criteria:
+    - window stability metrics (survival_rate, variance, worst_window_pnl и т.д.)
+    - ladder metrics (hit_rate_x2, hit_rate_x5, tail_contribution и т.д.)
     """
-    # RR/RRD критерии
+    # Window stability критерии
     min_survival_rate: float
     """Минимальный survival_rate (доля окон с положительным pnl)."""
     
@@ -34,7 +32,7 @@ class SelectionCriteria:
     min_windows: int
     """Минимальное количество окон для анализа (windows_total)."""
     
-    # Runner критерии
+    # Runner ladder критерии
     min_hit_rate_x2: Optional[float] = None
     """Минимальный hit_rate для уровня x2 (доля сделок, достигших x2)."""
     
@@ -57,9 +55,7 @@ class SelectionCriteria:
     """Максимальная допустимая доля PnL от сделок с realized_multiple >= 5x (tail contribution)."""
 
 
-# Базовые критерии для RR/RRD (DEFAULT)
-# ⚠️ ВАЖНО: Эти значения фиксируются как baseline и могут меняться вручную позже.
-# Cursor НЕ ПОДБИРАЕТ эти значения.
+# Базовые критерии (DEFAULT)
 DEFAULT_CRITERIA = SelectionCriteria(
     min_survival_rate=0.6,
     max_pnl_variance=0.3,
@@ -96,10 +92,8 @@ DEFAULT_CRITERIA_V1 = SelectionCriteria(
 )
 
 # Runner критерии (baseline)
-# ⚠️ ВАЖНО: Эти значения фиксируются как baseline для Runner стратегий.
-# ⚠️ LEGACY: Это baseline критерии, но не canonical V3. См. DEFAULT_RUNNER_CRITERIA_V3.
 DEFAULT_RUNNER_CRITERIA = SelectionCriteria(
-    # RR/RRD критерии не используются для Runner
+    # Window критерии не используются для Runner фильтра
     min_survival_rate=0.0,
     max_pnl_variance=float('inf'),
     min_worst_window_pnl=-float('inf'),
@@ -119,7 +113,7 @@ DEFAULT_RUNNER_CRITERIA = SelectionCriteria(
 # Пороги из ТЗ: hit_rate_x2 >= 0.35, hit_rate_x5 >= 0.08, 
 # tail_contribution <= 0.80, p90_hold_days <= 35
 DEFAULT_RUNNER_CRITERIA_V1 = SelectionCriteria(
-    # RR/RRD критерии не используются для Runner
+    # Window критерии не используются для Runner фильтра
     min_survival_rate=0.0,
     max_pnl_variance=float('inf'),
     min_worst_window_pnl=-float('inf'),
@@ -144,7 +138,7 @@ DEFAULT_RUNNER_CRITERIA_V1 = SelectionCriteria(
 # Проверки hit_rate_x4/tail_pnl_share/non_tail_pnl_share должны быть добавлены в check_strategy_criteria.
 # Пока используем существующие поля SelectionCriteria с похожими значениями.
 DEFAULT_RUNNER_CRITERIA_V2 = SelectionCriteria(
-    # RR/RRD критерии не используются для Runner
+    # Window критерии не используются для Runner фильтра
     min_survival_rate=0.0,
     max_pnl_variance=float('inf'),
     min_worst_window_pnl=-float('inf'),
@@ -193,7 +187,6 @@ DEFAULT_RUNNER_CRITERIA_V3 = DEFAULT_RUNNER_CRITERIA_V2  # TODO: создать 
 # V2 - legacy fallback только для старых тестов.
 # Примечание: В текущей реализации V3 использует V2 как алиас, но логика в check_strategy_criteria
 # различает их через разные пороги (TODO: явно разделить V2 и V3 логику с canonical порогами 0.15/0.80).
-
 
 
 
