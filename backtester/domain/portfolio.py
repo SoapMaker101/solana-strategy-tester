@@ -2074,14 +2074,14 @@ class PortfolioEngine:
                         marker_position = pos
                     
                     reset_time_portfolio = final_exit_time
-                        self._apply_reset(
-                            state=state,
-                            marker_position=marker_position,
-                            reset_time=reset_time_portfolio,
-                            positions_to_force_close=positions_to_force_close,
-                            reason=ResetReason.PROFIT_RESET,
-                            portfolio_events=portfolio_events,
-                        )
+                    self._apply_reset(
+                        state=state,
+                        marker_position=marker_position,
+                        reset_time=reset_time_portfolio,
+                        positions_to_force_close=positions_to_force_close,
+                        reason=ResetReason.PROFIT_RESET,
+                        portfolio_events=portfolio_events,
+                    )
                     self._dbg_meta(marker_position, "AFTER_process_portfolio_level_reset_final_close")
 
         # 5. Сортируем equity curve по времени для корректного расчета drawdown

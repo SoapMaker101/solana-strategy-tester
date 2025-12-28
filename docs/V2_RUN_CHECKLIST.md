@@ -24,3 +24,16 @@
    - `portfolio_positions.csv` includes `position_id`, `reason`, `pnl_pct_total`, `realized_multiple`
    - `portfolio_events.csv` includes `position_id` and `event_id`
    - `portfolio_executions.csv` includes `position_id`
+
+## Git Push for v2.0 Branch
+
+When working with the `codex/refactor-repository-for-runner-only-v2.0-release` branch locally (as `codex-v2`), push using:
+
+```bash
+git push origin HEAD:codex/refactor-repository-for-runner-only-v2.0-release
+```
+
+Or set upstream tracking:
+```bash
+git push -u origin HEAD:codex/refactor-repository-for-runner-only-v2.0-release
+```

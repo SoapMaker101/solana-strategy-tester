@@ -24,7 +24,6 @@ class Position:
     3. meta никогда не теряется: используем только setdefault/update, никогда не присваиваем meta = ...
     4. position_id - уникальный идентификатор позиции (uuid4 hex), генерируется автоматически
     """
-    position_id: str = field(default_factory=lambda: uuid4().hex)
     signal_id: Any                        # Идентификатор сигнала, по которому была открыта позиция
     contract_address: str                 # Адрес токена/контракта, к которому относится позиция
     entry_time: datetime                  # Время входа в позицию

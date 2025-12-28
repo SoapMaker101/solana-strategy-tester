@@ -350,12 +350,6 @@ class BacktestRunner:
             execution_profile=execution_profile,
             backtest_start=backtest_start,
             backtest_end=backtest_end,
-            profit_reset_enabled=portfolio_cfg.get("profit_reset_enabled"),
-            profit_reset_multiple=(
-                float(portfolio_cfg.get("profit_reset_multiple"))
-                if portfolio_cfg.get("profit_reset_multiple") is not None
-                else None
-            ),
             runner_reset_enabled=portfolio_cfg.get("runner_reset_enabled"),
             runner_reset_multiple=(
                 float(portfolio_cfg.get("runner_reset_multiple"))
