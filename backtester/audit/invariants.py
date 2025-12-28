@@ -340,7 +340,7 @@ class InvariantChecker:
                 details={"pnl_pct": pnl_pct, "reason": reason, "normalized_reason": normalized_reason},
             ))
         
-        # Проверка: reason=sl/stop_loss, но pnl >= 0 (неотрицательный)
+        # Проверка: reason=sl/stop_loss, но pnl >= 0 (неотрицательный) - строго < 0 согласно ТЗ
         if normalized_reason == "sl" and pnl_pct >= 0:
             self.anomalies.append(Anomaly(
                 position_id=row.get("position_id"),

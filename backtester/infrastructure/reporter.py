@@ -1014,32 +1014,43 @@ class Reporter:
                     ) if fractions_exited else 1.0
                 pnl_pct_total = (float(realized_multiple) - 1.0) * 100.0
 
+                # Порядок колонок согласно ТЗ v2.0.1
                 trade_row = {
-                    "position_id": pos.position_id,  # Уникальный идентификатор позиции (первая колонка)
-                    "strategy": strategy_name,
+                    # Идентификаторы
                     "position_id": pos.position_id,
+                    "strategy": strategy_name,
                     "signal_id": pos.signal_id,
                     "contract_address": pos.contract_address,
-                    "entry_time": pos.entry_time.isoformat(),
-                    "exit_time": pos.exit_time.isoformat(),
+                    # Время и статус
+                    "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                    "exit_time": pos.exit_time.isoformat() if pos.exit_time else None,
                     "status": pos.status,
+                    # Размер и PnL
                     "size": pos.meta.get("original_size", pos.size) if pos.meta else pos.size,
                     "pnl_sol": pnl_sol,
                     "pnl_pct_total": pnl_pct_total,
                     "realized_multiple": realized_multiple,
+                    # Причина закрытия
                     "reason": close_reason,
+                    # Комиссии
                     "fees_total_sol": fees_total_sol,
+                    # Execution цены
                     "exec_entry_price": exec_entry_price,
                     "exec_exit_price": exec_exit_price,
+                    # Raw цены
                     "raw_entry_price": raw_entry_price,
                     "raw_exit_price": raw_exit_price,
+                    # Reset флаги
                     "closed_by_reset": closed_by_reset,
                     "triggered_portfolio_reset": triggered_portfolio_reset,
                     "reset_reason": reset_reason,
+                    # Время удержания
                     "hold_minutes": hold_minutes,
+                    # Runner ladder метрики
                     "max_xn_reached": max_xn_reached,
                     "hit_x2": hit_x2,
                     "hit_x5": hit_x5,
+                    # Realized PnL метрики
                     "realized_total_pnl_sol": realized_total_pnl_sol,
                     "realized_tail_pnl_sol": realized_tail_pnl_sol,
                 }
@@ -1049,20 +1060,53 @@ class Reporter:
         # Создаем DataFrame
         if trades_rows:
             df = pd.DataFrame(trades_rows)
+            # Убеждаемся, что порядок колонок соответствует ТЗ v2.0.1
+            expected_columns = [
+                "position_id", "strategy", "signal_id", "contract_address",
+                "entry_time", "exit_time", "status",
+                "size", "pnl_sol", "pnl_pct_total", "realized_multiple",
+                "reason", "fees_total_sol",
+                "exec_entry_price", "exec_exit_price",
+                "raw_entry_price", "raw_exit_price",
+                "closed_by_reset", "triggered_portfolio_reset", "reset_reason",
+                "hold_minutes",
+                "max_xn_reached", "hit_x2", "hit_x5",
+                "realized_total_pnl_sol", "realized_tail_pnl_sol",
+            ]
+            # Добавляем отсутствующие колонки как NaN
+            for col in expected_columns:
+                if col not in df.columns:
+                    df[col] = None
+            # Переупорядочиваем колонки согласно ТЗ
+            df = df[expected_columns]
             # Сортируем по entry_time для консистентности
             df["entry_time_dt"] = pd.to_datetime(df["entry_time"], utc=True)
             df = df.sort_values("entry_time_dt")
             df = df.drop("entry_time_dt", axis=1)
         else:
-            # Создаем пустой DataFrame с правильными колонками
+            # Создаем пустой DataFrame с правильными колонками (порядок согласно ТЗ v2.0.1)
             df = pd.DataFrame([], columns=[  # type: ignore[arg-type]
+                # Идентификаторы
                 "position_id", "strategy", "signal_id", "contract_address",
+                # Время и статус
                 "entry_time", "exit_time", "status",
-                "size", "pnl_sol", "pnl_pct_total", "realized_multiple", "reason",
-                "fees_total_sol", "exec_entry_price", "exec_exit_price",
+                # Размер и PnL
+                "size", "pnl_sol", "pnl_pct_total", "realized_multiple",
+                # Причина закрытия
+                "reason",
+                # Комиссии
+                "fees_total_sol",
+                # Execution цены
+                "exec_entry_price", "exec_exit_price",
+                # Raw цены
                 "raw_entry_price", "raw_exit_price",
-                "closed_by_reset", "triggered_portfolio_reset", "reset_reason", "hold_minutes",
+                # Reset флаги
+                "closed_by_reset", "triggered_portfolio_reset", "reset_reason",
+                # Время удержания
+                "hold_minutes",
+                # Runner ladder метрики
                 "max_xn_reached", "hit_x2", "hit_x5",
+                # Realized PnL метрики
                 "realized_total_pnl_sol", "realized_tail_pnl_sol",
             ])
         
@@ -1120,14 +1164,15 @@ class Reporter:
                 # Сериализуем meta в JSON
                 meta_json = json.dumps(event.meta, ensure_ascii=False) if event.meta else "{}"
                 
+                # Порядок колонок согласно ТЗ v2.0.1
                 event_row = {
+                    "event_id": event.event_id,
                     "timestamp": event.timestamp.isoformat(),
                     "event_type": event.event_type.value,
                     "strategy": event.strategy,
                     "signal_id": event.signal_id,
                     "contract_address": event.contract_address,
                     "position_id": event.position_id,
-                    "event_id": event.event_id,
                     "reason": event.reason,
                     "meta_json": meta_json,
                 }
@@ -1137,15 +1182,26 @@ class Reporter:
         # Создаем DataFrame
         if events_rows:
             df = pd.DataFrame(events_rows)
+            # Убеждаемся, что порядок колонок соответствует ТЗ v2.0.1
+            expected_columns = [
+                "event_id", "timestamp", "event_type", "strategy", "signal_id",
+                "contract_address", "position_id", "reason", "meta_json",
+            ]
+            # Добавляем отсутствующие колонки как NaN
+            for col in expected_columns:
+                if col not in df.columns:
+                    df[col] = None
+            # Переупорядочиваем колонки согласно ТЗ
+            df = df[expected_columns]
             # Сортируем по timestamp для консистентности
             df["timestamp_dt"] = pd.to_datetime(df["timestamp"], utc=True)
             df = df.sort_values("timestamp_dt")
             df = df.drop("timestamp_dt", axis=1)
         else:
-            # Создаем пустой DataFrame с правильными колонками
+            # Создаем пустой DataFrame с правильными колонками (порядок согласно ТЗ v2.0.1)
             df = pd.DataFrame([], columns=[  # type: ignore[arg-type]
-                "timestamp", "event_type", "strategy", "signal_id",
-                "contract_address", "position_id", "event_id", "reason", "meta_json",
+                "event_id", "timestamp", "event_type", "strategy", "signal_id",
+                "contract_address", "position_id", "reason", "meta_json",
             ])
         
         # Сохраняем
@@ -1301,7 +1357,7 @@ class Reporter:
             df = df.sort_values("event_time_dt")
             df = df.drop("event_time_dt", axis=1)
         else:
-            # Создаем пустой DataFrame с правильными колонками
+            # Создаем пустой DataFrame с правильными колонками (position_id должен быть первым согласно ТЗ v2.0.1)
             df = pd.DataFrame([], columns=[  # type: ignore[arg-type]
                 "position_id", "signal_id", "strategy", "event_time", "event_type", "event_id",
                 "qty_delta", "raw_price", "exec_price", "fees_sol", "pnl_sol_delta",

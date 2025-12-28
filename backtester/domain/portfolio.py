@@ -403,13 +403,11 @@ class PortfolioEngine:
             pos.meta.update(meta_updates)
             pos.meta["network_fee_sol"] = pos.meta.get("network_fee_sol", 0.0) + network_fee_exit
         
-        # Эмитим событие закрытия (v2.0)
+        # Эмитим событие закрытия (v2.0.1) - каноническое POSITION_CLOSED
         if portfolio_events is not None:
             event_meta = {
                 "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
                 "exit_time": current_time.isoformat(),
-                "pnl_pct": exit_pnl_pct,
-                "pnl_sol": exit_pnl_sol,
                 "fees_total_sol": fees_total,
                 "reset_reason": reset_reason,
             }
@@ -417,18 +415,6 @@ class PortfolioEngine:
                 event_meta.update(additional_meta)
 
             strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
-            portfolio_events.append(
-                PortfolioEvent.create_position_closed(
-                    timestamp=current_time,
-                    strategy=strategy_name,
-                    signal_id=pos.signal_id,
-                    contract_address=pos.contract_address,
-                    position_id=pos.position_id,
-                    reason=reset_reason,
-                    meta=event_meta,
-                )
-            
-            # Эмитим каноническое событие POSITION_CLOSED с position_id
             portfolio_events.append(
                 PortfolioEvent.create_position_closed(
                     timestamp=current_time,
@@ -1086,46 +1072,52 @@ class PortfolioEngine:
         )
         apply_portfolio_reset(context, state, self.execution_model)
         
-        # Эмитим события reset (v2.0)
+        # Эмитим события reset (v2.0.1) - канонический контракт
         if portfolio_events is not None:
-            reset_reason = "profit_reset" if reason == ResetReason.PROFIT_RESET else "capacity_prune"
-            trigger_meta = {
-                "reset_time": reset_time.isoformat(),
-                "cycle_start_equity": state.cycle_start_equity,
-                "equity_peak_in_cycle": state.equity_peak_in_cycle,
-                "current_balance": state.balance,
-                "closed_positions_count": len(positions_to_force_close) + 1,
-            }
-            
-            # Эмитим общее событие PORTFOLIO_RESET_TRIGGERED
+            # Маппинг ResetReason -> канонический reason
             reset_reason_str = {
                 ResetReason.EQUITY_THRESHOLD: "profit_reset",
-                ResetReason.CAPACITY_PRESSURE: "capacity_reset",
-                ResetReason.RUNNER_XN: "runner_xn",
+                ResetReason.CAPACITY_PRESSURE: "capacity_prune",
                 ResetReason.CAPACITY_PRUNE: "capacity_prune",
-                ResetReason.MANUAL: "manual",
-            }.get(reason, reason.value)
+                ResetReason.RUNNER_XN: "manual_close",
+                ResetReason.MANUAL: "manual_close",
+            }.get(reason, "manual_close")
             
+            # 1. Эмитим PORTFOLIO_RESET_TRIGGERED (1 событие)
             portfolio_events.append(
                 PortfolioEvent.create_portfolio_reset_triggered(
                     timestamp=reset_time,
                     reason=reset_reason_str,
                     closed_positions_count=len(positions_to_force_close),
+                    position_id=marker_position.position_id,
+                    signal_id=marker_position.signal_id,
+                    contract_address=marker_position.contract_address,
+                    strategy=marker_position.meta.get("strategy", "portfolio") if marker_position.meta else "portfolio",
                     meta={
                         "reset_time": reset_time.isoformat(),
-                        "marker_signal_id": marker_position.signal_id,
-                        "marker_contract_address": marker_position.contract_address,
-                        "marker_position_id": marker_position.position_id,
+                        "cycle_start_equity": state.cycle_start_equity,
+                        "equity_peak_in_cycle": state.equity_peak_in_cycle,
+                        "current_balance": state.balance,
                     },
                 )
             )
             
-            trigger_event_type = trigger_event_type_map.get(reason)
-            if trigger_event_type:
-                # Эмитим специфичное TRIGGERED событие через helper-методы (для обратной совместимости)
-                trigger_meta = {
-                    "reset_time": reset_time.isoformat(),
+            # 2. Эмитим POSITION_CLOSED для каждой закрытой позиции (N событий)
+            for pos in positions_to_force_close:
+                strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
+                raw_exit_price = pos.exit_price
+                exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+                pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
+                pnl_pct = pos.pnl_pct * 100.0 if pos.pnl_pct else None  # В процентах
+                
+                close_meta = {
+                    "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                    "exit_time": reset_time.isoformat(),
+                    "fees_total_sol": pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0,
+                    "closed_by_reset": True,
+                    "reset_reason": reset_reason_str,
                 }
+                
                 portfolio_events.append(
                     PortfolioEvent.create_position_closed(
                         timestamp=reset_time,
@@ -1133,94 +1125,14 @@ class PortfolioEngine:
                         signal_id=pos.signal_id,
                         contract_address=pos.contract_address,
                         position_id=pos.position_id,
-                        reason=reset_reason,
+                        reason=reset_reason_str,
+                        raw_price=raw_exit_price,
+                        exec_price=exec_exit_price,
+                        pnl_pct=pnl_pct,
+                        pnl_sol=pnl_sol,
                         meta=close_meta,
                     )
-            
-            # Эмитим события закрытий для каждой закрытой позиции
-            # Тип события зависит от reason
-            close_event_type_map = {
-                ResetReason.EQUITY_THRESHOLD: PortfolioEventType.CLOSED_BY_PROFIT_RESET,
-                ResetReason.CAPACITY_PRESSURE: PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL,
-                # CAPACITY_PRUNE обрабатывается в _forced_close_position
-                # RUNNER_XN - обычное закрытие или можно добавить отдельный тип
-            }
-            
-            close_event_type = close_event_type_map.get(reason)
-            if close_event_type:
-                # Закрытия уже выполнены в apply_portfolio_reset, эмитим события
-                for pos in positions_to_force_close:
-                    reset_reason_str = {
-                        ResetReason.EQUITY_THRESHOLD: "profit",
-                        ResetReason.CAPACITY_PRESSURE: "capacity",
-                    }.get(reason, reason.value)
-                    
-                    # Используем фабрики для создания событий закрытия (v1.9)
-                    strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
-                    close_meta = {
-                        "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
-                        "exit_time": reset_time.isoformat(),
-                        "pnl_pct": pos.pnl_pct,
-                        "pnl_sol": pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0,
-                        "fees_total_sol": pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0,
-                        "reset_reason": reset_reason_str,
-                        "closed_by_reset": True,
-                    }
-                    
-                    # Эмитим legacy событие для обратной совместимости
-                    if close_event_type == PortfolioEventType.CLOSED_BY_PROFIT_RESET:
-                        portfolio_events.append(
-                            PortfolioEvent.create_closed_by_profit_reset(
-                                timestamp=reset_time,
-                                strategy=strategy_name,
-                                signal_id=pos.signal_id,
-                                contract_address=pos.contract_address,
-                                meta=close_meta,
-                            )
-                        )
-                    elif close_event_type == PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL:
-                        portfolio_events.append(
-                            PortfolioEvent.create_closed_by_capacity_close_all(
-                                timestamp=reset_time,
-                                strategy=strategy_name,
-                                signal_id=pos.signal_id,
-                                contract_address=pos.contract_address,
-                                meta=close_meta,
-                            )
-                        )
-                    else:
-                        # Fallback на обычное закрытие
-                        portfolio_events.append(
-                            PortfolioEvent.create_executed_close(
-                                timestamp=reset_time,
-                                strategy=strategy_name,
-                                signal_id=pos.signal_id,
-                                contract_address=pos.contract_address,
-                                reason=reset_reason_str,
-                                meta=close_meta,
-                            )
-                        )
-                    
-                    # Эмитим каноническое событие POSITION_CLOSED с position_id
-                    raw_exit_price = pos.exit_price
-                    exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
-                    pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
-                    
-                    portfolio_events.append(
-                        PortfolioEvent.create_position_closed(
-                            timestamp=reset_time,
-                            strategy=strategy_name,
-                            signal_id=pos.signal_id,
-                            contract_address=pos.contract_address,
-                            position_id=pos.position_id,
-                            reason=reset_reason_str,
-                            raw_price=raw_exit_price,
-                            exec_price=exec_exit_price,
-                            pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах
-                            pnl_sol=pnl_sol,
-                            meta=close_meta,
-                        )
-                    )
+                )
 
     def _process_runner_partial_exits(
         self,
@@ -1640,34 +1552,26 @@ class PortfolioEngine:
             if pos.signal_id in positions_by_signal_id:
                 del positions_by_signal_id[pos.signal_id]
 
-            # Эмитим событие POSITION_CLOSED - обычное закрытие
+            # Эмитим событие POSITION_CLOSED (v2.0.1) - каноническое
             if portfolio_events is not None:
-                close_reason = pos.meta.get("close_reason", pos.meta.get("ladder_reason", "tp")) if pos.meta else "tp"
+                close_reason_raw = pos.meta.get("close_reason", pos.meta.get("ladder_reason", "tp")) if pos.meta else "tp"
+                # Маппинг legacy close_reason -> канонический reason
+                close_reason_map = {
+                    "tp": "ladder_tp",
+                    "sl": "stop_loss",
+                    "timeout": "time_stop",
+                    "time_stop": "time_stop",
+                    "stop_loss": "stop_loss",
+                    "ladder_tp": "ladder_tp",
+                }
+                canonical_reason = close_reason_map.get(close_reason_raw, close_reason_raw)
+                
                 pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
                 fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
                 raw_exit_price = pos.exit_price
                 exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
                 
-                # Legacy событие для обратной совместимости
-                portfolio_events.append(
-                    PortfolioEvent.create_executed_close(
-                        timestamp=current_time,
-                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        reason=close_reason,
-                        meta={
-                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
-                            "exit_time": current_time.isoformat(),
-                            "pnl_pct": pos.pnl_pct,
-                            "pnl_sol": pnl_sol,
-                            "fees_total_sol": fees_total,
-                            "close_reason": close_reason,
-                        },
-                    )
-                )
-                
-                # Каноническое событие POSITION_CLOSED с position_id
+                # Каноническое событие POSITION_CLOSED (v2.0.1)
                 portfolio_events.append(
                     PortfolioEvent.create_position_closed(
                         timestamp=current_time,
@@ -1675,7 +1579,7 @@ class PortfolioEngine:
                         signal_id=pos.signal_id,
                         contract_address=pos.contract_address,
                         position_id=pos.position_id,
-                        reason=close_reason,
+                        reason=canonical_reason,
                         raw_price=raw_exit_price,
                         exec_price=exec_exit_price,
                         pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах

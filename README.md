@@ -1,7 +1,9 @@
-# Solana Strategy Tester — Runner-only v2.0
+# Solana Strategy Tester — Runner-only v2.0.1
 
 Runner-only backtesting framework for Solana signals. The system is now fully
 event-driven and uses a single, canonical Runner ladder contract.
+
+**Version 2.0.1** includes full refactor with unified event contract and enhanced audit layer.
 
 ## Quick start
 
@@ -40,7 +42,7 @@ python -m backtester.decision.run_stage_b --stability-csv output/reports/strateg
 
 Stage A/B refuse to run when the audit reports any P0 anomalies.
 
-## Outputs (Runner-only v2.0)
+## Outputs (Runner-only v2.0.1)
 
 All research outputs live in `output/reports/`:
 

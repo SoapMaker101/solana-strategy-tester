@@ -1,5 +1,8 @@
 # backtester/decision/run_stage_b.py
 # CLI entry-point for Stage B: Strategy Selection
+#
+# Run:
+#   python -m backtester.decision.run_stage_b --stability-csv output/reports/strategy_stability.csv
 
 from __future__ import annotations
 

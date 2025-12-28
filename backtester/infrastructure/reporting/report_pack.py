@@ -94,7 +94,7 @@ def _create_summary_sheet(
     # Блок A: Run metadata
     rows.append({"key": "=== Run Metadata ===", "value": ""})
     rows.append({"key": "run_timestamp_utc", "value": datetime.now(timezone.utc).isoformat()})
-    rows.append({"key": "project_version", "value": "v1.10"})
+    rows.append({"key": "project_version", "value": "v2.0.1"})
     
     # Git commit (если доступно)
     try:
@@ -142,19 +142,8 @@ def _create_summary_sheet(
             })
 
             # Считаем события из portfolio_events если есть
-            if hasattr(stats, "portfolio_events") and stats.portfolio_events:
-                from ...domain.portfolio_events import PortfolioEventType
-
-                events = stats.portfolio_events
-                attempted_total = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_RECEIVED])
-                blocked_capacity = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_REJECTED_CAPACITY])
-                blocked_risk = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_REJECTED_RISK])
-                no_entry = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_REJECTED_STRATEGY_NO_ENTRY])
-
-                rows.append({"key": "trades_attempted_total", "value": str(attempted_total)})
-                rows.append({"key": "trades_blocked_capacity", "value": str(blocked_capacity)})
-                rows.append({"key": "trades_blocked_risk", "value": str(blocked_risk)})
-                rows.append({"key": "trades_no_entry", "value": str(no_entry)})
+            # v2.0.1: ATTEMPT_* events removed (Runner-only canonical events only)
+            # Legacy attempt tracking removed - no longer tracked in canonical event ledger
 
             rows.append({
                 "key": "portfolio_capacity_prune_count",

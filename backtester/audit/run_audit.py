@@ -1,3 +1,10 @@
+# backtester/audit/run_audit.py
+# Audit module entry point for Runner-only v2.0.1
+#
+# Run:
+#   python -m backtester.audit.run_audit --reports-dir output/reports
+#   python -m backtester.audit.run_audit --reports-dir output/reports
+
 from __future__ import annotations
 
 import argparse

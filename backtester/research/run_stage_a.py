@@ -1,5 +1,8 @@
 # backtester/research/run_stage_a.py
 # CLI entry-point for Stage A: Aggregation & Stability Analysis
+#
+# Run:
+#   python -m backtester.research.run_stage_a --reports-dir output/reports
 
 from __future__ import annotations
 

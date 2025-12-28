@@ -1,4 +1,4 @@
-# V2 Run Checklist
+# V2.0.1 Run Checklist
 
 1. Run backtest:
    ```bash

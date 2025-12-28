@@ -4,7 +4,6 @@ from uuid import uuid4
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
-from uuid import uuid4
 
 
 class PositionStatus(Enum):
@@ -30,7 +29,6 @@ class Position:
     entry_price: float                    # Цена входа
     size: float                           # Размер позиции в SOL (номинал)
     position_id: str = field(default_factory=lambda: uuid4().hex)  # Уникальный идентификатор позиции
-
     exit_time: Optional[datetime] = None         # Время выхода из позиции (если закрыта)
     exit_price: Optional[float] = None           # Цена выхода (если закрыта)
     pnl_pct: Optional[float] = None              # Прибыль/убыток в процентах (может быть None до закрытия)

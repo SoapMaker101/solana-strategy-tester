@@ -1,5 +1,5 @@
 # backtester/domain/portfolio_events.py
-# Portfolio Event System (v2.0) - Runner-only canonical events
+# Portfolio Event System (v2.0.1) - Runner-only canonical events
 
 from __future__ import annotations
 
@@ -12,44 +12,32 @@ from uuid import uuid4
 
 class PortfolioEventType(Enum):
     """
-    Canonical event types for Runner-only pipeline.
+    Canonical event types for Runner-only pipeline (v2.0.1).
+    
+    Only 4 types:
+    - POSITION_OPENED: Position opened
+    - POSITION_PARTIAL_EXIT: Partial exit (ladder TP)
+    - POSITION_CLOSED: Position closed (any reason in meta.reason)
+    - PORTFOLIO_RESET_TRIGGERED: Portfolio reset triggered
     """
-    
-    # Attempt events
-    ATTEMPT_RECEIVED = "attempt_received"  # Сигнал получен, начинаем обработку
-    ATTEMPT_ACCEPTED_OPEN = "attempt_accepted_open"  # Портфель принял и открыл позицию
-    ATTEMPT_REJECTED_CAPACITY = "attempt_rejected_capacity"  # Отклонено: нет места (max_open_positions)
-    ATTEMPT_REJECTED_RISK = "attempt_rejected_risk"  # Отклонено: риск-правила (max_exposure, allocation, etc.)
-    ATTEMPT_REJECTED_STRATEGY_NO_ENTRY = "attempt_rejected_strategy_no_entry"  # Стратегия вернула no_entry
-    ATTEMPT_REJECTED_NO_CANDLES = "attempt_rejected_no_candles"  # Нет свечей для входа
-    ATTEMPT_REJECTED_CORRUPT_CANDLES = "attempt_rejected_corrupt_candles"  # Битые свечи
-    ATTEMPT_REJECTED_INVALID_INPUT = "attempt_rejected_invalid_input"  # Некорректный вход (нет entry_price и т.д.)
-    
-    # Executed events (position lifecycle)
-    POSITION_OPENED = "position_opened"  # Позиция открыта
-    POSITION_PARTIAL_EXIT = "position_partial_exit"  # Частичное закрытие позиции (для ladder)
-    EXECUTED_CLOSE = "executed_close"  # Обычное закрытие позиции (tp/sl/timeout)
-    POSITION_CLOSED = "position_closed"  # Позиция закрыта (канонический тип закрытия)
-    CLOSED_BY_CAPACITY_PRUNE = "closed_by_capacity_prune"  # Закрыто prune'ом
-    CLOSED_BY_PROFIT_RESET = "closed_by_profit_reset"  # Закрыто profit reset
-    CLOSED_BY_CAPACITY_CLOSE_ALL = "closed_by_capacity_close_all"  # Закрыто legacy close-all
-    
-    # Portfolio maintenance events
-    PORTFOLIO_RESET_TRIGGERED = "portfolio_reset_triggered"  # Portfolio reset триггер сработал (общий тип)
-    PORTFOLIO_CYCLE_START_UPDATED = "portfolio_cycle_start_updated"  # Обновлен cycle_start_equity
-    CAPACITY_PRESSURE_TRIGGERED = "capacity_pressure_triggered"  # Capacity pressure сработал (debug marker)
-    CAPACITY_PRUNE_TRIGGERED = "capacity_prune_triggered"  # Prune триггер сработал
-    CAPACITY_CLOSE_ALL_TRIGGERED = "capacity_close_all_triggered"  # Close-all триггер сработал
-    PROFIT_RESET_TRIGGERED = "profit_reset_triggered"  # Profit reset триггер сработал
+    POSITION_OPENED = "position_opened"
+    POSITION_PARTIAL_EXIT = "position_partial_exit"
+    POSITION_CLOSED = "position_closed"
+    PORTFOLIO_RESET_TRIGGERED = "portfolio_reset_triggered"
 
 
 @dataclass(frozen=True, kw_only=True)
 class PortfolioEvent:
     """
-    Canonical portfolio event (v2.0).
+    Canonical portfolio event (v2.0.1).
 
     Position events always include position_id, strategy, signal_id, timestamp, contract_address.
     Reset events also reference marker position_id for audit traceability.
+    
+    Invariants:
+    - event_id: unique UUID (generated automatically)
+    - position_id: required for all events (for reset events, use empty string or marker position_id)
+    - reason: canonical taxonomy (ladder_tp, stop_loss, time_stop, capacity_prune, profit_reset, manual_close, no_entry, error)
     """
 
     timestamp: datetime
@@ -63,14 +51,14 @@ class PortfolioEvent:
     meta: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
         return {
             "event_id": self.event_id,
             "timestamp": self.timestamp.isoformat(),
+            "event_type": self.event_type.value,
             "strategy": self.strategy,
             "signal_id": self.signal_id,
             "contract_address": self.contract_address,
-            "position_id": self.position_id,
-            "event_type": self.event_type.value,
             "position_id": self.position_id,
             "reason": self.reason,
             "meta": self.meta,
@@ -87,6 +75,7 @@ class PortfolioEvent:
         position_id: str,
         meta: Optional[Dict[str, Any]] = None,
     ) -> "PortfolioEvent":
+        """Create POSITION_OPENED event."""
         return cls(
             timestamp=timestamp,
             strategy=strategy,
@@ -106,171 +95,7 @@ class PortfolioEvent:
         signal_id: str,
         contract_address: str,
         position_id: str,
-        reason: str,
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> "PortfolioEvent":
-        return cls(
-            timestamp=timestamp,
-            strategy=strategy,
-            signal_id=signal_id,
-            contract_address=contract_address,
-            position_id=position_id,
-            event_type=PortfolioEventType.POSITION_PARTIAL_EXIT,
-            reason=reason,
-            meta=meta or {},
-        )
-
-    @classmethod
-    def create_position_closed(
-        cls,
-        *,
-        timestamp: datetime,
-        strategy: str,
-        signal_id: str,
-        contract_address: str,
-        position_id: str,
-        reason: str,
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> "PortfolioEvent":
-        return cls(
-            timestamp=timestamp,
-            strategy=strategy,
-            signal_id=signal_id,
-            contract_address=contract_address,
-            position_id=position_id,
-            event_type=PortfolioEventType.POSITION_CLOSED,
-            reason=reason,
-            meta=meta or {},
-        )
-
-    @classmethod
-    def create_portfolio_reset_triggered(
-        cls,
-        *,
-        timestamp: datetime,
-        strategy: str,
-        signal_id: str,
-        contract_address: str,
-        position_id: str,
-        reason: str,
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> "PortfolioEvent":
-        return cls(
-            timestamp=timestamp,
-            strategy=strategy,
-            signal_id=signal_id,
-            contract_address=contract_address,
-            position_id=position_id,
-            event_type=PortfolioEventType.PORTFOLIO_RESET_TRIGGERED,
-            reason=reason,
-            meta=meta or {},
-        )
-    
-    @classmethod
-    def create_capacity_prune_triggered(
-        cls,
-        timestamp: datetime,
-        candidates_count: int,
-        closed_count: int,
-        blocked_ratio: float,
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> "PortfolioEvent":
-        """Создает событие CAPACITY_PRUNE_TRIGGERED."""
-        event_meta = meta or {}
-        event_meta.update({
-            "candidates_count": candidates_count,
-            "closed_count": closed_count,
-            "blocked_ratio": blocked_ratio,
-        })
-        return cls(
-            timestamp=timestamp,
-            strategy="portfolio",
-            signal_id="",
-            contract_address="",
-            event_type=PortfolioEventType.CAPACITY_PRUNE_TRIGGERED,
-            reason="capacity_pressure",
-            meta=event_meta,
-        )
-    
-    @classmethod
-    def create_profit_reset_triggered(
-        cls,
-        timestamp: datetime,
-        marker_signal_id: str,
-        marker_contract_address: str,
-        closed_positions_count: int,
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> "PortfolioEvent":
-        """Создает событие PROFIT_RESET_TRIGGERED."""
-        event_meta = meta or {}
-        event_meta.update({
-            "closed_positions_count": closed_positions_count,
-        })
-        return cls(
-            timestamp=timestamp,
-            strategy="portfolio",
-            signal_id=marker_signal_id,
-            contract_address=marker_contract_address,
-            event_type=PortfolioEventType.PROFIT_RESET_TRIGGERED,
-            reason="equity_threshold",
-            meta=event_meta,
-        )
-    
-    @classmethod
-    def create_capacity_close_all_triggered(
-        cls,
-        timestamp: datetime,
-        marker_signal_id: str,
-        marker_contract_address: str,
-        closed_positions_count: int,
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> "PortfolioEvent":
-        """Создает событие CAPACITY_CLOSE_ALL_TRIGGERED."""
-        event_meta = meta or {}
-        event_meta.update({
-            "closed_positions_count": closed_positions_count,
-        })
-        return cls(
-            timestamp=timestamp,
-            strategy="portfolio",
-            signal_id=marker_signal_id,
-            contract_address=marker_contract_address,
-            event_type=PortfolioEventType.CAPACITY_CLOSE_ALL_TRIGGERED,
-            reason="capacity_pressure",
-            meta=event_meta,
-        )
-    
-    @classmethod
-    def create_position_opened(
-        cls,
-        timestamp: datetime,
-        strategy: str,
-        signal_id: str,
-        contract_address: str,
-        position_id: str,
-        meta: Optional[Dict[str, Any]] = None,
-    ) -> "PortfolioEvent":
-        """Создает событие POSITION_OPENED."""
-        return cls(
-            timestamp=timestamp,
-            strategy=strategy,
-            signal_id=signal_id,
-            contract_address=contract_address,
-            event_type=PortfolioEventType.POSITION_OPENED,
-            position_id=position_id,
-            reason="opened",
-            meta=meta or {},
-        )
-    
-    @classmethod
-    def create_position_partial_exit(
-        cls,
-        timestamp: datetime,
-        strategy: str,
-        signal_id: str,
-        contract_address: str,
-        position_id: str,
-        level: float,
+        level_xn: float,
         fraction: float,
         raw_price: float,
         exec_price: float,
@@ -278,10 +103,20 @@ class PortfolioEvent:
         pnl_sol_contrib: float,
         meta: Optional[Dict[str, Any]] = None,
     ) -> "PortfolioEvent":
-        """Создает событие POSITION_PARTIAL_EXIT (для runner ladder)."""
+        """
+        Create POSITION_PARTIAL_EXIT event (ladder TP).
+        
+        Args:
+            level_xn: Target level (e.g., 2.0 for 2x)
+            fraction: Fraction of position exited (e.g., 0.4 for 40%)
+            raw_price: Market price at exit
+            exec_price: Execution price (after slippage)
+            pnl_pct_contrib: PnL contribution in percent (e.g., 80.0 for 80%)
+            pnl_sol_contrib: PnL contribution in SOL
+        """
         event_meta = meta or {}
         event_meta.update({
-            "level": level,
+            "level_xn": level_xn,
             "fraction": fraction,
             "raw_price": raw_price,
             "exec_price": exec_price,
@@ -293,15 +128,16 @@ class PortfolioEvent:
             strategy=strategy,
             signal_id=signal_id,
             contract_address=contract_address,
-            event_type=PortfolioEventType.POSITION_PARTIAL_EXIT,
             position_id=position_id,
+            event_type=PortfolioEventType.POSITION_PARTIAL_EXIT,
             reason="ladder_tp",
             meta=event_meta,
         )
-    
+
     @classmethod
     def create_position_closed(
         cls,
+        *,
         timestamp: datetime,
         strategy: str,
         signal_id: str,
@@ -314,7 +150,16 @@ class PortfolioEvent:
         pnl_sol: Optional[float] = None,
         meta: Optional[Dict[str, Any]] = None,
     ) -> "PortfolioEvent":
-        """Создает событие POSITION_CLOSED (канонический тип закрытия)."""
+        """
+        Create POSITION_CLOSED event.
+        
+        Args:
+            reason: Canonical reason (stop_loss, time_stop, capacity_prune, profit_reset, manual_close, no_entry, error)
+            raw_price: Market price at exit (optional)
+            exec_price: Execution price after slippage (optional)
+            pnl_pct: Total PnL in percent (optional)
+            pnl_sol: Total PnL in SOL (optional)
+        """
         event_meta = meta or {}
         if raw_price is not None:
             event_meta["raw_price"] = raw_price
@@ -329,21 +174,33 @@ class PortfolioEvent:
             strategy=strategy,
             signal_id=signal_id,
             contract_address=contract_address,
-            event_type=PortfolioEventType.POSITION_CLOSED,
             position_id=position_id,
+            event_type=PortfolioEventType.POSITION_CLOSED,
             reason=reason,
             meta=event_meta,
         )
-    
+
     @classmethod
     def create_portfolio_reset_triggered(
         cls,
+        *,
         timestamp: datetime,
         reason: str,
         closed_positions_count: int = 0,
+        position_id: str = "",
+        signal_id: str = "",
+        contract_address: str = "",
+        strategy: str = "portfolio",
         meta: Optional[Dict[str, Any]] = None,
     ) -> "PortfolioEvent":
-        """Создает событие PORTFOLIO_RESET_TRIGGERED."""
+        """
+        Create PORTFOLIO_RESET_TRIGGERED event.
+        
+        Args:
+            reason: Reset reason (profit_reset, capacity_prune, etc.)
+            closed_positions_count: Number of positions closed by reset
+            position_id: Optional marker position_id for audit traceability
+        """
         event_meta = meta or {}
         event_meta.update({
             "closed_positions_count": closed_positions_count,
@@ -351,12 +208,11 @@ class PortfolioEvent:
         })
         return cls(
             timestamp=timestamp,
-            strategy="portfolio",
-            signal_id="",
-            contract_address="",
+            strategy=strategy,
+            signal_id=signal_id,
+            contract_address=contract_address,
+            position_id=position_id,
             event_type=PortfolioEventType.PORTFOLIO_RESET_TRIGGERED,
             reason=reason,
             meta=event_meta,
         )
-
-

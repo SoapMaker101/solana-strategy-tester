@@ -1,5 +1,9 @@
 # main.py
 # main.py — точка входа для запуска системы бэктестинга стратегий Solana
+#
+# Run:
+#   python main.py --config config/backtest_A.yaml
+#   python main.py --signals signals/example_signals.csv --strategies-config config/runner_baseline.yaml --backtest-config config/backtest_example.yaml
 
 import argparse                         # Для обработки аргументов командной строки
 import json                             # Для сохранения результатов в формате JSON

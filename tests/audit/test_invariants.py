@@ -222,10 +222,10 @@ def test_invariant_checker_handles_missing_columns():
         # Нет closed_by_reset и reset_reason
     }])
     
-    # DataFrame событий без некоторых колонок
+    # DataFrame событий без некоторых колонок (используем канонический тип события v2.0.1)
     events_df = pd.DataFrame([{
         "timestamp": datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
-        "event_type": "ATTEMPT_ACCEPTED_OPEN",
+        "event_type": "POSITION_OPENED",
         "strategy": "Runner_Baseline",
         "signal_id": "sig1",
         "contract_address": "0x123",
@@ -260,7 +260,7 @@ def test_invariant_checker_handles_missing_policy_columns():
     
     events_df = pd.DataFrame([{
         "timestamp": datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
-        "event_type": "ATTEMPT_ACCEPTED_OPEN",
+        "event_type": "POSITION_OPENED",
         "strategy": "Runner_Baseline",
         "signal_id": "sig1",
         "contract_address": "0x123",
