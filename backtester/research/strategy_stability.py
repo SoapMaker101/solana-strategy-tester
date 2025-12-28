@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Mapping, Union
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
@@ -16,6 +16,78 @@ from .window_aggregator import (
     aggregate_all_strategies, WINDOWS, load_trades_csv,
     split_into_equal_windows, calculate_window_metrics
 )
+
+# Type aliases
+Number = Union[int, float]
+
+
+def _to_float(v: Any) -> Optional[float]:
+    """
+    Безопасно конвертирует значение в float.
+    
+    :param v: Значение для конвертации.
+    :return: float или None если конвертация невозможна.
+    """
+    try:
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        # pandas/np scalars
+        return float(v)
+    except Exception:
+        return None
+
+
+def _get_row_value(row: Any, key: str) -> Any:
+    """
+    Безопасно получает значение из row (dict/Series/другой объект).
+    
+    :param row: Объект с данными (dict, Series, и т.д.).
+    :param key: Ключ для доступа.
+    :return: Значение или None.
+    """
+    if hasattr(row, "get"):
+        return row.get(key)
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _calc_max_xn_from_row(row: Any) -> Optional[float]:
+    """
+    Вычисляет max_xn (максимальный множитель) из цен в строке.
+    
+    Сначала пытается использовать exec_entry_price/exec_exit_price,
+    затем fallback на raw_entry_price/raw_exit_price.
+    
+    :param row: Словарь/Series с данными позиции (любой объект с .get() или [] доступом).
+    :return: max_xn или None если цены недоступны/невалидны.
+    """
+    exec_entry = _to_float(_get_row_value(row, "exec_entry_price"))
+    exec_exit = _to_float(_get_row_value(row, "exec_exit_price"))
+    if exec_entry is not None and exec_exit is not None and exec_entry > 0:
+        return exec_exit / exec_entry
+
+    raw_entry = _to_float(_get_row_value(row, "raw_entry_price"))
+    raw_exit = _to_float(_get_row_value(row, "raw_exit_price"))
+    if raw_entry is not None and raw_exit is not None and raw_entry > 0:
+        return raw_exit / raw_entry
+
+    return None
+
+
+def _empty_df(columns: list[str]) -> pd.DataFrame:
+    """
+    Создает пустой DataFrame с указанными колонками.
+    
+    :param columns: Список имен колонок.
+    :return: Пустой DataFrame с правильными типами колонок.
+    """
+    return pd.DataFrame({c: pd.Series(dtype="object") for c in columns})
 
 
 def calculate_stability_metrics(
@@ -158,12 +230,7 @@ def calculate_runner_metrics(
         hit_x2_count = 0
         hit_x5_count = 0
         for _, row in strategy_positions.iterrows():
-            max_xn = None
-            if pd.notna(row.get("exec_entry_price")) and pd.notna(row.get("exec_exit_price")) and row.get("exec_entry_price", 0) > 0:
-                max_xn = row["exec_exit_price"] / row["exec_entry_price"]
-            elif pd.notna(row.get("raw_entry_price")) and pd.notna(row.get("raw_exit_price")) and row.get("raw_entry_price", 0) > 0:
-                max_xn = row["raw_exit_price"] / row["raw_entry_price"]
-            
+            max_xn = _calc_max_xn_from_row(row)
             if max_xn is not None:
                 if max_xn >= 2.0:
                     hit_x2_count += 1
@@ -187,12 +254,7 @@ def calculate_runner_metrics(
         # Fallback: вычисляем из exec или raw цен
         hit_x4_count = 0
         for _, row in strategy_positions.iterrows():
-            max_xn = None
-            if pd.notna(row.get("exec_entry_price")) and pd.notna(row.get("exec_exit_price")) and row.get("exec_entry_price", 0) > 0:
-                max_xn = row["exec_exit_price"] / row["exec_entry_price"]
-            elif pd.notna(row.get("raw_entry_price")) and pd.notna(row.get("raw_exit_price")) and row.get("raw_entry_price", 0) > 0:
-                max_xn = row["raw_exit_price"] / row["raw_entry_price"]
-            
+            max_xn = _calc_max_xn_from_row(row)
             if max_xn is not None and max_xn >= TAIL_XN_THRESHOLD:
                 hit_x4_count += 1
     
@@ -200,10 +262,14 @@ def calculate_runner_metrics(
     
     # p90_hold_days из hold_minutes
     if "hold_minutes" in strategy_positions.columns:
-        hold_minutes_values = strategy_positions["hold_minutes"].dropna()
-        if len(hold_minutes_values) > 0:
-            hold_days_values = hold_minutes_values / (24 * 60)  # Конвертируем минуты в дни
-            p90_hold_days = np.percentile(hold_days_values, 90)
+        hold_minutes_series = strategy_positions["hold_minutes"]
+        if isinstance(hold_minutes_series, pd.Series):
+            hold_minutes_values = hold_minutes_series.dropna()
+            if not hold_minutes_values.empty:
+                hold_days_values = hold_minutes_values / (24 * 60)  # Конвертируем минуты в дни
+                p90_hold_days = float(np.percentile(hold_days_values, 90))
+            else:
+                p90_hold_days = 0.0
         else:
             p90_hold_days = 0.0
     else:
@@ -247,14 +313,11 @@ def calculate_runner_metrics(
         else:
             tail_pnl_sol = 0.0
             for _, row in strategy_positions.iterrows():
-                max_xn = None
-                if pd.notna(row.get("exec_entry_price")) and pd.notna(row.get("exec_exit_price")) and row.get("exec_entry_price", 0) > 0:
-                    max_xn = row["exec_exit_price"] / row["exec_entry_price"]
-                elif pd.notna(row.get("raw_entry_price")) and pd.notna(row.get("raw_exit_price")) and row.get("raw_entry_price", 0) > 0:
-                    max_xn = row["raw_exit_price"] / row["raw_entry_price"]
-                
+                max_xn = _calc_max_xn_from_row(row)
                 if max_xn is not None and max_xn >= tail_threshold:
-                    tail_pnl_sol += row.get("pnl_sol", 0.0)
+                    pnl_sol = _to_float(row.get("pnl_sol"))
+                    if pnl_sol is not None:
+                        tail_pnl_sol += pnl_sol
             tail_contribution = tail_pnl_sol / total_pnl_sol
     
     # Вычисляем tail_pnl_share и non_tail_pnl_share из realized PnL
@@ -285,27 +348,29 @@ def calculate_runner_metrics(
             # Вычисляем realized_tail_pnl_sol из max_xn_reached
             if "max_xn_reached" in strategy_positions.columns:
                 # realized_tail_pnl_sol = pnl_sol if max_xn_reached >= 4.0 else 0.0
-                strategy_positions["realized_tail_pnl_sol"] = strategy_positions.apply(
-                    lambda row: row["pnl_sol"] if pd.notna(row.get("max_xn_reached")) and row["max_xn_reached"] >= TAIL_XN_THRESHOLD else 0.0,
-                    axis=1
-                )
+                def _calc_tail_from_max_xn_reached(row: Any) -> float:
+                    max_xn_val = _to_float(_get_row_value(row, "max_xn_reached"))
+                    if max_xn_val is not None and max_xn_val >= TAIL_XN_THRESHOLD:
+                        pnl_val = _to_float(_get_row_value(row, "pnl_sol"))
+                        return pnl_val if pnl_val is not None else 0.0
+                    return 0.0
+                strategy_positions["realized_tail_pnl_sol"] = strategy_positions.apply(_calc_tail_from_max_xn_reached, axis=1)
             elif "max_xn" in strategy_positions.columns:
                 # Backward compatibility
-                strategy_positions["realized_tail_pnl_sol"] = strategy_positions.apply(
-                    lambda row: row["pnl_sol"] if pd.notna(row.get("max_xn")) and row["max_xn"] >= TAIL_XN_THRESHOLD else 0.0,
-                    axis=1
-                )
+                def _calc_tail_from_max_xn(row: Any) -> float:
+                    max_xn_val = _to_float(_get_row_value(row, "max_xn"))
+                    if max_xn_val is not None and max_xn_val >= TAIL_XN_THRESHOLD:
+                        pnl_val = _to_float(_get_row_value(row, "pnl_sol"))
+                        return pnl_val if pnl_val is not None else 0.0
+                    return 0.0
+                strategy_positions["realized_tail_pnl_sol"] = strategy_positions.apply(_calc_tail_from_max_xn, axis=1)
             else:
                 # Fallback: вычисляем max_xn на лету из цен
-                def calc_tail_pnl(row):
-                    max_xn = None
-                    if pd.notna(row.get("exec_entry_price")) and pd.notna(row.get("exec_exit_price")) and row.get("exec_entry_price", 0) > 0:
-                        max_xn = row["exec_exit_price"] / row["exec_entry_price"]
-                    elif pd.notna(row.get("raw_entry_price")) and pd.notna(row.get("raw_exit_price")) and row.get("raw_entry_price", 0) > 0:
-                        max_xn = row["raw_exit_price"] / row["raw_entry_price"]
-                    
+                def calc_tail_pnl(row: Any) -> float:
+                    max_xn = _calc_max_xn_from_row(row)
                     if max_xn is not None and max_xn >= TAIL_XN_THRESHOLD:
-                        return row.get("pnl_sol", 0.0)
+                        pnl_sol = _to_float(_get_row_value(row, "pnl_sol"))
+                        return pnl_sol if pnl_sol is not None else 0.0
                     return 0.0
                 
                 strategy_positions["realized_tail_pnl_sol"] = strategy_positions.apply(calc_tail_pnl, axis=1)
@@ -465,8 +530,7 @@ def build_stability_table(
             "windows_positive",
             "windows_total",
         ]
-        empty_df = pd.DataFrame({col: [] for col in columns})
-        return empty_df
+        return _empty_df(columns)
 
     df = pd.DataFrame(stability_rows)
 
@@ -543,7 +607,7 @@ def build_detailed_windows_table(
             "window_trades",
             "window_pnl",
         ]
-        return pd.DataFrame({col: [] for col in columns})
+        return _empty_df(columns)
     
     df = pd.DataFrame(detailed_rows)
     return df
@@ -633,7 +697,7 @@ def generate_stability_table_from_reports(
             sheets["window_metrics"] = stability_df
         else:
             # Пустой DataFrame с правильными колонками
-            sheets["window_metrics"] = pd.DataFrame([], columns=[
+            sheets["window_metrics"] = _empty_df([
                 "strategy", "split_count", "survival_rate", "pnl_variance",
                 "worst_window_pnl", "best_window_pnl", "median_window_pnl",
                 "windows_positive", "windows_total", "trades_total"
@@ -643,7 +707,7 @@ def generate_stability_table_from_reports(
             sheets["strategy_summary"] = detailed_df
         else:
             # Пустой DataFrame с правильными колонками
-            sheets["strategy_summary"] = pd.DataFrame([], columns=[
+            sheets["strategy_summary"] = _empty_df([
                 "strategy", "split_count", "window_index", "window_start",
                 "window_end", "window_trades", "window_pnl"
             ])
@@ -709,7 +773,7 @@ def generate_stability_table_from_portfolio_trades(
             "worst_window_pnl", "best_window_pnl", "median_window_pnl",
             "windows_positive", "windows_total", "trades_total",
         ]
-        return pd.DataFrame({col: [] for col in columns})
+        return _empty_df(columns)
     
     # Получаем уникальные стратегии
     strategy_series = pd.Series(filtered_df["strategy"])
@@ -791,7 +855,7 @@ def generate_stability_table_from_portfolio_trades(
             sheets["window_metrics"] = stability_df
         else:
             # Пустой DataFrame с правильными колонками
-            sheets["window_metrics"] = pd.DataFrame([], columns=[
+            sheets["window_metrics"] = _empty_df([
                 "strategy", "split_count", "survival_rate", "pnl_variance",
                 "worst_window_pnl", "best_window_pnl", "median_window_pnl",
                 "windows_positive", "windows_total", "trades_total"
@@ -801,7 +865,7 @@ def generate_stability_table_from_portfolio_trades(
             sheets["strategy_summary"] = detailed_df
         else:
             # Пустой DataFrame с правильными колонками
-            sheets["strategy_summary"] = pd.DataFrame([], columns=[
+            sheets["strategy_summary"] = _empty_df([
                 "strategy", "split_count", "window_index", "window_start",
                 "window_end", "window_trades", "window_pnl"
             ])
@@ -816,11 +880,6 @@ def generate_stability_table_from_portfolio_trades(
             )
     
     return stability_df
-
-
-
-
-
 
 
 

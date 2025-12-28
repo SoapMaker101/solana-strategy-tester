@@ -155,6 +155,64 @@ python -m backtester.decision.run_stage_b \
 
 ---
 
+## 🚀 Run v1.10 (quick)
+
+### Установка Excel engine (рекомендуется)
+
+```bash
+# Рекомендуемый engine (предпочтительно)
+pip install -U openpyxl
+
+# Опционально (fallback)
+pip install -U xlsxwriter
+```
+
+### Прогон backtest
+
+```bash
+python main.py \
+  --signals signals/example_signals.csv \
+  --strategies-config config/runner_baseline.yaml \
+  --backtest-config config/backtest_example.yaml \
+  --reports-dir output/reports
+```
+
+**При включенном `reporting.export_xlsx: true` (по умолчанию) будет создан `report_pack.xlsx`.**
+
+### Прогон Stage A / Stage B
+
+**Stage A (research):**
+```bash
+python -m backtester.research.run_stage_a \
+  --reports-dir output/reports
+```
+
+**Stage B (decision):**
+```bash
+python -m backtester.decision.run_stage_b \
+  --stability-csv output/reports/strategy_stability.csv
+```
+
+**Ожидаемые файлы:**
+- CSV файлы создаются всегда (source of truth)
+- XLSX файлы создаются при наличии Excel engine (best-effort)
+
+### Где смотреть результат
+
+**Директория:** `output/reports/`
+
+**Файлы:**
+- `portfolio_positions.csv` — позиции (source of truth для Stage A/B)
+- `portfolio_events.csv` — события портфеля (v1.9)
+- `portfolio_policy_summary.csv` — сводка по политикам (если есть)
+- `strategy_stability.csv` — результаты Stage A
+- `strategy_selection.csv` — результаты Stage B
+- `report_pack.xlsx` — единый XLSX-отчёт (v1.10, если включен)
+
+**Примечание:** XLSX — не источник истины, source of truth — CSV. XLSX создаётся для удобства анализа и передачи артефактов.
+
+---
+
 ## 📊 Data contracts
 
 ### Signal
