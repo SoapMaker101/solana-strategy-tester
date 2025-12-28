@@ -624,6 +624,7 @@ def generate_stability_table_from_reports(
     # Сохраняем XLSX отчет с несколькими листами
     if len(stability_df) > 0 or len(detailed_df) > 0:
         from ..infrastructure.xlsx_writer import save_xlsx
+        import warnings
         
         xlsx_path = reports_dir / "stage_a_report.xlsx"
         sheets = {}
@@ -647,7 +648,14 @@ def generate_stability_table_from_reports(
                 "window_end", "window_trades", "window_pnl"
             ])
         
-        save_xlsx(xlsx_path, sheets)
+        try:
+            save_xlsx(xlsx_path, sheets)
+        except Exception as e:
+            warnings.warn(
+                f"Excel export failed for Stage A report: {e}. Continuing with CSV only.",
+                UserWarning,
+                stacklevel=2
+            )
     
     return stability_df
 
@@ -774,6 +782,7 @@ def generate_stability_table_from_portfolio_trades(
     # Сохраняем XLSX отчет с несколькими листами
     if len(stability_df) > 0 or len(detailed_df) > 0:
         from ..infrastructure.xlsx_writer import save_xlsx
+        import warnings
         
         xlsx_path = reports_dir / "stage_a_report.xlsx"
         sheets = {}
@@ -797,7 +806,14 @@ def generate_stability_table_from_portfolio_trades(
                 "window_end", "window_trades", "window_pnl"
             ])
         
-        save_xlsx(xlsx_path, sheets)
+        try:
+            save_xlsx(xlsx_path, sheets)
+        except Exception as e:
+            warnings.warn(
+                f"Excel export failed for Stage A report: {e}. Continuing with CSV only.",
+                UserWarning,
+                stacklevel=2
+            )
     
     return stability_df
 

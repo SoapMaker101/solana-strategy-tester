@@ -124,46 +124,46 @@ def _create_summary_sheet(
         first_result = next(iter(portfolio_results.values()))
         if hasattr(first_result, "stats"):
             stats = first_result.stats
-                rows.append({
-                    "key": "final_balance_sol",
-                    "value": str(getattr(stats, "final_balance_sol", 0.0))
-                })
-                rows.append({
-                    "key": "total_return_pct",
-                    "value": str(getattr(stats, "total_return_pct", 0.0))
-                })
-                rows.append({
-                    "key": "max_drawdown_pct",
-                    "value": str(getattr(stats, "max_drawdown_pct", 0.0))
-                })
-                rows.append({
-                    "key": "trades_executed",
-                    "value": str(getattr(stats, "trades_executed", 0))
-                })
-                
-                # Считаем события из portfolio_events если есть
-                if hasattr(stats, "portfolio_events") and stats.portfolio_events:
-                    from ...domain.portfolio_events import PortfolioEventType
-                    
-                    events = stats.portfolio_events
-                    attempted_total = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_RECEIVED])
-                    blocked_capacity = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_REJECTED_CAPACITY])
-                    blocked_risk = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_REJECTED_RISK])
-                    no_entry = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_REJECTED_STRATEGY_NO_ENTRY])
-                    
-                    rows.append({"key": "trades_attempted_total", "value": str(attempted_total)})
-                    rows.append({"key": "trades_blocked_capacity", "value": str(blocked_capacity)})
-                    rows.append({"key": "trades_blocked_risk", "value": str(blocked_risk)})
-                    rows.append({"key": "trades_no_entry", "value": str(no_entry)})
-                
-                rows.append({
-                    "key": "portfolio_capacity_prune_count",
-                    "value": str(getattr(stats, "portfolio_capacity_prune_count", 0))
-                })
-                rows.append({
-                    "key": "portfolio_reset_count",
-                    "value": str(getattr(stats, "portfolio_reset_count", 0))
-                })
+            rows.append({
+                "key": "final_balance_sol",
+                "value": str(getattr(stats, "final_balance_sol", 0.0))
+            })
+            rows.append({
+                "key": "total_return_pct",
+                "value": str(getattr(stats, "total_return_pct", 0.0))
+            })
+            rows.append({
+                "key": "max_drawdown_pct",
+                "value": str(getattr(stats, "max_drawdown_pct", 0.0))
+            })
+            rows.append({
+                "key": "trades_executed",
+                "value": str(getattr(stats, "trades_executed", 0))
+            })
+
+            # Считаем события из portfolio_events если есть
+            if hasattr(stats, "portfolio_events") and stats.portfolio_events:
+                from ...domain.portfolio_events import PortfolioEventType
+
+                events = stats.portfolio_events
+                attempted_total = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_RECEIVED])
+                blocked_capacity = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_REJECTED_CAPACITY])
+                blocked_risk = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_REJECTED_RISK])
+                no_entry = len([e for e in events if e.event_type == PortfolioEventType.ATTEMPT_REJECTED_STRATEGY_NO_ENTRY])
+
+                rows.append({"key": "trades_attempted_total", "value": str(attempted_total)})
+                rows.append({"key": "trades_blocked_capacity", "value": str(blocked_capacity)})
+                rows.append({"key": "trades_blocked_risk", "value": str(blocked_risk)})
+                rows.append({"key": "trades_no_entry", "value": str(no_entry)})
+
+            rows.append({
+                "key": "portfolio_capacity_prune_count",
+                "value": str(getattr(stats, "portfolio_capacity_prune_count", 0))
+            })
+            rows.append({
+                "key": "portfolio_reset_count",
+                "value": str(getattr(stats, "portfolio_reset_count", 0))
+            })
     
     if runner_stats:
         rows.append({

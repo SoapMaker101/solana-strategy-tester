@@ -56,11 +56,17 @@ def test_xlsx_data_integrity(tmp_path):
     
     # Проверяем первый лист
     read_df1 = pd.read_excel(xls, sheet_name="data")
-    pd.testing.assert_frame_equal(read_df1, df1, check_index=False)
+    pd.testing.assert_frame_equal(
+        read_df1.reset_index(drop=True),
+        df1.reset_index(drop=True)
+    )
     
     # Проверяем второй лист
     read_df2 = pd.read_excel(xls, sheet_name="numbers")
-    pd.testing.assert_frame_equal(read_df2, df2, check_index=False)
+    pd.testing.assert_frame_equal(
+        read_df2.reset_index(drop=True),
+        df2.reset_index(drop=True)
+    )
 
 
 def test_xlsx_empty_dataframes(tmp_path):
