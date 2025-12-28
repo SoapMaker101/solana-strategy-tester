@@ -13,16 +13,16 @@
 #   - use_high_for_targets: true - ориентироваться на HIGH как триггер
 #   - exit остатка по close последней свечи окна (зафиксировано в реализации)
 # -----------------------------
-- name: Runner_Ladder_2x_5x_10x
+- name: Runner_Tail_3_7_15_45d
   type: RUNNER
   params:
     take_profit_levels:
-      - { xn: 2.0, fraction: 0.4 }   # 40% позиции закрывается на 2x
-      - { xn: 5.0, fraction: 0.4 }   # 40% позиции закрывается на 5x
-      - { xn: 10.0, fraction: 0.2 }  # 20% позиции закрывается на 10x
-    time_stop_minutes: 20160  # 14 дней (20160 минут = 14 * 24 * 60)
-    use_high_for_targets: true  # Ориентироваться на HIGH как триггер для TP
-    exit_on_first_tp: false  # Не закрывать всю позицию на первом TP
-    allow_partial_fills: true  # Разрешить частичные фиксации
+      - { xn: 3.0, fraction: 0.20 }
+      - { xn: 7.0, fraction: 0.30 }
+      - { xn: 15.0, fraction: 0.50 }
+    time_stop_minutes: 64800   # 45d
+    use_high_for_targets: true
+    exit_on_first_tp: false
+    allow_partial_fills: true # Разрешить частичные фиксации
 
 # Дополнительные примеры Runner стратегий см. в config/runner_baseline.yaml
