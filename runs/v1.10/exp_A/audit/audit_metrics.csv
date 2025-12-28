@@ -1,0 +1,16 @@
+metric,value
+positions_total,918.0
+positions_closed,918.0
+events_total,2473.0
+executions_total,2616.0
+anomalies_total,3229.0
+anomaly_rate_pct,351.74291938997817
+share_positions_with_any_anomaly,0.0
+anomalies_p0,1579.0
+anomalies_p1,1650.0
+anomalies_by_code_execution_without_trade_event,1133.0
+anomalies_by_code_reset_without_events,918.0
+anomalies_by_code_pnl_cap_or_magic,661.0
+anomalies_by_code_position_closed_but_no_close_event,353.0
+anomalies_by_code_execution_price_out_of_range,164.0
+anomalies_by_strategy_Runner_Ladder_2x_5x_10x,3229.0
