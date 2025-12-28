@@ -7,3 +7,4 @@ pytest
 requests
 python-dateutil
 xlsxwriter
+# openpyxl  # Optional: for report_pack.xlsx (v1.10). xlsxwriter also works as fallback.

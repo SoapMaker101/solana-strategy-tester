@@ -1,5 +1,109 @@
 # Changelog
 
+## [Feature: Report Pack v1.10] - 2025-01-XX
+
+### Report Pack: единый XLSX-отчёт со всеми ключевыми таблицами
+
+#### 🎯 Цель изменений
+
+Создать единый XLSX-отчёт (`report_pack.xlsx`), который собирает все ключевые таблицы пайплайна в одном месте и облегчает передачу артефактов без ручных пересохранений.
+
+#### ✨ Основные изменения
+
+##### 1. **Модуль report_pack (v1.10)**
+
+**Файл:** `backtester/infrastructure/reporting/report_pack.py` (новый)
+
+**Создано:**
+- `build_report_pack_xlsx()` — функция для сборки единого XLSX-отчёта
+- Поддержка openpyxl (предпочтительно) и xlsxwriter (fallback)
+- Best-effort подход: отсутствующие CSV не ломают генерацию
+
+**Листы в report_pack.xlsx:**
+- `summary` — метаданные запуска и топлайновые метрики
+- `positions` — копия `portfolio_positions.csv`
+- `portfolio_events` — копия `portfolio_events.csv`
+- `stage_a_stability` — копия `strategy_stability.csv` (если есть)
+- `stage_b_selection` — копия `strategy_selection.csv` (если есть)
+- `policy_summary` — копия `portfolio_policy_summary.csv` (если есть)
+- `capacity_prune_events` — опционально
+
+##### 2. **Reporter.save_report_pack_xlsx()**
+
+**Файл:** `backtester/infrastructure/reporter.py`
+
+**Добавлено:**
+- Метод `save_report_pack_xlsx()` для создания единого XLSX-отчёта
+- Автоматическое обнаружение CSV файлов в `output_dir`
+- Поддержка конфигурации через `global_config.reporting`
+
+##### 3. **Интеграция в main.py**
+
+**Файл:** `main.py`
+
+**Добавлено:**
+- Автоматический вызов `save_report_pack_xlsx()` после сохранения всех CSV
+- Передача `runner_stats` для summary метрик
+- Конфигурация через `backtest_cfg.reporting`
+
+##### 4. **Конфигурация (YAML)**
+
+**Файл:** `config/*.yaml`
+
+**Добавлено:**
+```yaml
+reporting:
+  export_xlsx: true              # включает генерацию report_pack.xlsx
+  xlsx_filename: report_pack.xlsx
+  xlsx_timestamped: false        # если true => добавлять timestamp к имени
+  xlsx_include_csv_backups: true # CSV остаются (всегда true)
+  xlsx_sheets:
+    - summary
+    - positions
+    - portfolio_events
+    - stage_a_stability
+    - stage_b_selection
+    - policy_summary
+```
+
+**Дефолты:**
+- `export_xlsx: true` (но graceful fallback если нет engine)
+- `xlsx_filename: report_pack.xlsx`
+- `xlsx_timestamped: false`
+- `xlsx_include_csv_backups: true` (CSV всегда остаются)
+
+#### 🔧 Технические детали
+
+**Инварианты v1.10:**
+
+1. **CSV остаются**: XLSX дополняет, не заменяет CSV-выгрузки
+2. **Best-effort**: Отсутствующие CSV не ломают генерацию (лист либо пропускается, либо содержит "missing")
+3. **Graceful fallback**: При отсутствии openpyxl/xlsxwriter — warning + продолжение, CSV остаются
+4. **Single source of truth**: XLSX собирается из уже созданных CSV (не пересчитывается)
+
+#### 📝 Измененные файлы
+
+**Новые:**
+- `backtester/infrastructure/reporting/report_pack.py` — модуль сборки XLSX
+- `backtester/infrastructure/reporting/__init__.py` — экспорты
+- `tests/infrastructure/test_report_pack_xlsx.py` — тесты
+
+**Измененные:**
+- `backtester/infrastructure/reporter.py` — метод `save_report_pack_xlsx()`
+- `main.py` — интеграция с конфигом
+- `README.md` — раздел "Report Pack (v1.10)"
+- `docs/CHANGELOG.md` — запись v1.10
+
+#### 🧪 Тесты
+
+**Добавлены:**
+- `test_report_pack_created_when_openpyxl_available` — позитивный кейс
+- `test_report_pack_best_effort_missing_optional_csv` — best-effort поведение
+- `test_report_pack_skips_when_no_engine` — graceful fallback
+- `test_reporter_save_report_pack_xlsx` — интеграция с Reporter
+
+---
+
 ## [Release: Portfolio Events v1.9] - 2025-01-XX
 
 ### Portfolio Events: Canonical event-driven architecture (RELEASE)

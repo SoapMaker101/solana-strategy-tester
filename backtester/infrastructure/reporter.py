@@ -11,6 +11,7 @@ from collections import Counter
 
 import numpy as np
 from .xlsx_writer import save_xlsx
+from .reporting.report_pack import build_report_pack_xlsx
 
 
 class Reporter:
@@ -1357,3 +1358,71 @@ class Reporter:
             summary_path = self.output_dir / "portfolio_policy_summary.csv"
             df.to_csv(summary_path, index=False)
             print(f"📊 Saved empty portfolio policy summary to {summary_path}")
+    
+    def save_report_pack_xlsx(
+        self,
+        portfolio_results: Optional[Dict[str, Any]] = None,
+        runner_stats: Optional[Dict[str, Any]] = None,
+        include_skipped_attempts: bool = True,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Path]:
+        """
+        Создает единый XLSX-отчёт (report_pack.xlsx) со всеми ключевыми таблицами (v1.10).
+        
+        Args:
+            portfolio_results: Словарь {strategy_name: PortfolioResult} для summary метрик
+            runner_stats: Статистика Runner для summary (signals_processed, etc.)
+            include_skipped_attempts: Флаг для summary
+            config: Конфигурация из global_config.reporting (опционально)
+        
+        Returns:
+            Path к созданному файлу или None если не удалось создать
+        """
+        # Конфиг по умолчанию
+        default_config = {
+            "export_xlsx": True,
+            "xlsx_filename": "report_pack.xlsx",
+            "xlsx_timestamped": False,
+            "xlsx_include_csv_backups": True,
+            "xlsx_sheets": [
+                "summary",
+                "positions",
+                "portfolio_events",
+                "stage_a_stability",
+                "stage_b_selection",
+                "policy_summary",
+                "capacity_prune_events",
+            ],
+        }
+        
+        if config is None:
+            config = default_config
+        else:
+            # Мержим с дефолтами
+            merged_config = default_config.copy()
+            merged_config.update(config)
+            config = merged_config
+        
+        # Проверяем флаг export_xlsx
+        if not config.get("export_xlsx", True):
+            return None
+        
+        # Собираем пути к CSV файлам
+        inputs = {
+            "positions_csv": self.output_dir / "portfolio_positions.csv",
+            "portfolio_events_csv": self.output_dir / "portfolio_events.csv",
+            "stage_a_stability_csv": self.output_dir / "strategy_stability.csv",
+            "stage_b_selection_csv": self.output_dir / "strategy_selection.csv",
+            "policy_summary_csv": self.output_dir / "portfolio_policy_summary.csv",
+            "capacity_prune_events_csv": None,  # Пока нет отдельного файла
+        }
+        
+        # Вызываем build_report_pack_xlsx
+        return build_report_pack_xlsx(
+            output_dir=self.output_dir,
+            inputs=inputs,
+            config=config,
+            portfolio_results=portfolio_results,
+            runner_stats=runner_stats,
+            include_skipped_attempts=include_skipped_attempts,
+        )

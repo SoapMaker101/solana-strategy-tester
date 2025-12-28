@@ -751,6 +751,23 @@ def main():
         
         # Сохраняем сводный отчет по политике reset/prune (hardening v1.7.1)
         base_reporter.save_portfolio_policy_summary(portfolio_results)
+        
+        # v1.10: Создаем единый XLSX-отчёт (report_pack.xlsx)
+        reporting_cfg = backtest_cfg.get("reporting", {})
+        if reporting_cfg.get("export_xlsx", True):
+            # Собираем runner_stats для summary
+            runner_stats = {
+                "signals_processed": runner.signals_processed,
+                "signals_skipped_no_candles": runner.signals_skipped_no_candles,
+                "signals_skipped_corrupt_candles": runner.signals_skipped_corrupt_candles,
+            }
+            
+            base_reporter.save_report_pack_xlsx(
+                portfolio_results=portfolio_results,
+                runner_stats=runner_stats,
+                include_skipped_attempts=True,  # v1.9: всегда True в main.py
+                config=reporting_cfg,
+            )
     
     # Генерируем summary отчеты
     if args.report_mode in ["summary", "top"]:

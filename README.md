@@ -207,6 +207,41 @@ class Candle:
 2. `raw_exit_price / raw_entry_price` (if raw prices available)
 3. `exec_exit_price / exec_entry_price` (fallback)
 
+### report_pack.xlsx (v1.10: Report Pack)
+
+**Единый XLSX-отчёт** со всеми ключевыми таблицами пайплайна в одном файле.
+
+**Расположение:** `output/reports/report_pack.xlsx`
+
+**Листы:**
+- `summary` — метаданные запуска и топлайновые метрики
+- `positions` — копия `portfolio_positions.csv`
+- `portfolio_events` — копия `portfolio_events.csv` (v1.9)
+- `stage_a_stability` — копия `strategy_stability.csv` (если запускался Stage A)
+- `stage_b_selection` — копия `strategy_selection.csv` (если запускался Stage B)
+- `policy_summary` — копия `portfolio_policy_summary.csv` (если существует)
+- `capacity_prune_events` — опционально (если есть отдельная таблица)
+
+**Требования:** `pip install openpyxl` (или `xlsxwriter`)
+
+**Конфигурация (YAML):**
+```yaml
+reporting:
+  export_xlsx: true              # включает генерацию report_pack.xlsx
+  xlsx_filename: report_pack.xlsx
+  xlsx_timestamped: false        # если true => добавлять timestamp к имени
+  xlsx_include_csv_backups: true # CSV остаются (всегда true)
+  xlsx_sheets:
+    - summary
+    - positions
+    - portfolio_events
+    - stage_a_stability
+    - stage_b_selection
+    - policy_summary
+```
+
+**Примечание:** Если Excel engine не установлен, XLSX-экспорт пропускается с предупреждением, CSV-файлы создаются как обычно.
+
 ### portfolio_events.csv (v1.9: Event-driven architecture)
 
 **Semantics v1.9: ATTEMPT vs EXECUTED**
