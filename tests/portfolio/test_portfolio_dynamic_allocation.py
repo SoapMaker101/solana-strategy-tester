@@ -65,7 +65,7 @@ def test_dynamic_allocation_scales_position_sizing():
         exit_time=first_exit_time,
         exit_price=1.30,  # 30% прибыль
         pnl=0.30,
-        reason="tp"
+        reason="ladder_tp"
     )
     
     # Вторая сделка: начинается ПОСЛЕ закрытия первой (последовательно, без overlap)
@@ -78,7 +78,7 @@ def test_dynamic_allocation_scales_position_sizing():
         exit_time=second_exit_time,
         exit_price=1.05,  # 5% прибыль
         pnl=0.05,
-        reason="tp"
+        reason="ladder_tp"
     )
     
     all_results = [
@@ -250,7 +250,7 @@ def test_dynamic_allocation_vs_fixed_allocation():
                 exit_time=first_exit_time,
                 exit_price=1.30,
                 pnl=0.30,
-                reason="tp"
+                reason="ladder_tp"
             )
         },
         {
@@ -264,7 +264,7 @@ def test_dynamic_allocation_vs_fixed_allocation():
                 exit_time=second_exit_time,
                 exit_price=1.05,
                 pnl=0.05,
-                reason="tp"
+                reason="ladder_tp"
             )
         }
     ]

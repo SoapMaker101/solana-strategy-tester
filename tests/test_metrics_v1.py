@@ -28,7 +28,6 @@ from backtester.decision.strategy_selector import (
     check_strategy_criteria,
 )
 from backtester.decision.selection_rules import (
-    DEFAULT_CRITERIA_V1,
     DEFAULT_RUNNER_CRITERIA_V1,
 )
 
@@ -232,26 +231,8 @@ def test_runner_metrics_computation(tmp_path):
 
 def test_stage_b_reasons_present():
     """Проверяет, что Stage B генерирует reasons и passed булевый."""
-    # Создаем синтетическую stability table
+    # Создаем синтетическую stability table (Runner-only)
     stability_data = [
-        {
-            "strategy": "RR_pass",
-            "split_count": 3,
-            "survival_rate": 0.70,  # >= 0.60 ✓
-            "worst_window_pnl": -0.20,  # >= -0.25 ✓
-            "median_window_pnl": 0.05,  # >= 0.00 ✓
-            "pnl_variance": 0.10,  # <= 0.15 ✓
-            "windows_total": 3,  # >= 3 ✓
-        },
-        {
-            "strategy": "RR_fail",
-            "split_count": 3,
-            "survival_rate": 0.50,  # < 0.60 ✗
-            "worst_window_pnl": -0.30,  # < -0.25 ✗
-            "median_window_pnl": -0.05,  # < 0.00 ✗
-            "pnl_variance": 0.20,  # > 0.15 ✗
-            "windows_total": 3,
-        },
         {
             "strategy": "Runner_pass",
             "split_count": 3,
@@ -260,11 +241,11 @@ def test_stage_b_reasons_present():
             "median_window_pnl": 0.05,
             "pnl_variance": 0.10,
             "windows_total": 3,
-            "hit_rate_x2": 0.40,  # >= 0.35 ✓
-            "hit_rate_x5": 0.10,  # >= 0.08 ✓
-            "p90_hold_days": 30.0,  # <= 35 ✓
-            "tail_contribution": 0.60,  # <= 0.80 ✓
-            "max_drawdown_pct": -0.50,  # >= -0.60 ✓
+            "hit_rate_x2": 0.40,
+            "hit_rate_x5": 0.10,
+            "p90_hold_days": 30.0,
+            "tail_contribution": 0.60,
+            "max_drawdown_pct": -0.50,
         },
         {
             "strategy": "Runner_fail",
@@ -274,11 +255,11 @@ def test_stage_b_reasons_present():
             "median_window_pnl": 0.05,
             "pnl_variance": 0.10,
             "windows_total": 3,
-            "hit_rate_x2": 0.30,  # < 0.35 ✗
-            "hit_rate_x5": 0.05,  # < 0.08 ✗
-            "p90_hold_days": 40.0,  # > 35 ✗
-            "tail_contribution": 0.90,  # > 0.80 ✗
-            "max_drawdown_pct": -0.70,  # < -0.60 ✗
+            "hit_rate_x2": 0.30,
+            "hit_rate_x5": 0.05,
+            "p90_hold_days": 40.0,
+            "tail_contribution": 0.90,
+            "max_drawdown_pct": -0.70,
         },
     ]
     
@@ -287,7 +268,7 @@ def test_stage_b_reasons_present():
     # Применяем отбор
     selection_df = select_strategies(
         stability_df,
-        criteria=DEFAULT_CRITERIA_V1,
+        criteria=DEFAULT_RUNNER_CRITERIA_V1,
         runner_criteria=DEFAULT_RUNNER_CRITERIA_V1,
     )
     
@@ -299,17 +280,6 @@ def test_stage_b_reasons_present():
     assert selection_df["passed"].dtype == bool
     
     # Проверяем результаты
-    rr_pass = selection_df[selection_df["strategy"] == "RR_pass"].iloc[0]
-    assert rr_pass["passed"] == True
-    assert len(rr_pass["failed_reasons"]) == 0
-    
-    rr_fail = selection_df[selection_df["strategy"] == "RR_fail"].iloc[0]
-    assert rr_fail["passed"] == False
-    assert len(rr_fail["failed_reasons"]) > 0
-    # Проверяем, что reasons содержат человекочитаемые сообщения
-    reasons_str = "; ".join(rr_fail["failed_reasons"])
-    assert "survival_rate" in reasons_str or "worst_window_pnl" in reasons_str
-    
     runner_pass = selection_df[selection_df["strategy"] == "Runner_pass"].iloc[0]
     assert runner_pass["passed"] == True
     assert len(runner_pass["failed_reasons"]) == 0
@@ -326,6 +296,6 @@ def test_is_runner_strategy():
     assert is_runner_strategy("Runner_test") == True
     assert is_runner_strategy("runner_test") == True
     assert is_runner_strategy("RUNNER_test") == True
-    assert is_runner_strategy("RR_2.0_0.5") == False
-    assert is_runner_strategy("RRD_3.0_1.5") == False
-    assert is_runner_strategy("test_strategy") == False
+    assert is_runner_strategy("RR_2.0_0.5") == True
+    assert is_runner_strategy("RRD_3.0_1.5") == True
+    assert is_runner_strategy("test_strategy") == True

@@ -73,7 +73,7 @@ def test_capacity_reset_triggers():
             exit_time=exit_time,
             exit_price=1.05,  # 5% прибыль
             pnl=0.05,
-            reason="tp"
+            reason="ladder_tp"
         )
         
         trades.append({
@@ -100,7 +100,7 @@ def test_capacity_reset_triggers():
             exit_time=exit_time,
             exit_price=1.05,
             pnl=0.05,
-            reason="tp"
+            reason="ladder_tp"
         )
         
         trades.append({
@@ -197,7 +197,7 @@ def test_capacity_reset_not_triggers_with_turnover():
             exit_time=exit_time_1,
             exit_price=1.05,
             pnl=0.05,
-            reason="tp"
+            reason="ladder_tp"
         )
     })
     
@@ -216,7 +216,7 @@ def test_capacity_reset_not_triggers_with_turnover():
             exit_time=exit_time_2,
             exit_price=1.05,
             pnl=0.05,
-            reason="tp"
+            reason="ladder_tp"
         )
     })
     
@@ -236,7 +236,7 @@ def test_capacity_reset_not_triggers_with_turnover():
                 exit_time=exit_time,
                 exit_price=1.05,
                 pnl=0.05,
-                reason="tp"
+                reason="ladder_tp"
             )
         })
     
@@ -304,7 +304,7 @@ def test_capacity_reset_disabled():
                 exit_time=exit_time,
                 exit_price=1.05,
                 pnl=0.05,
-                reason="tp"
+                reason="ladder_tp"
             )
         })
     
@@ -324,7 +324,7 @@ def test_capacity_reset_disabled():
                 exit_time=exit_time,
                 exit_price=1.05,
                 pnl=0.05,
-                reason="tp"
+                reason="ladder_tp"
             )
         })
     

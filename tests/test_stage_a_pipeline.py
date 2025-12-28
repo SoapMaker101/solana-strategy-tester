@@ -44,7 +44,7 @@ def fake_reports_dir(tmp_path):
         "entry_price": [100.0, 100.0, 100.0, 100.0],
         "exit_price": [110.0, 95.0, 115.0, 120.0],
         "pnl_pct": [0.1, -0.05, 0.15, 0.2],  # В долях
-        "reason": ["tp", "sl", "tp", "tp"],
+        "reason": ["ladder_tp", "stop_loss", "ladder_tp", "ladder_tp"],
         "source": ["test", "test", "test", "test"],
         "narrative": ["test", "test", "test", "test"],
     })
@@ -71,7 +71,7 @@ def fake_reports_dir(tmp_path):
         "entry_price": [100.0, 100.0],
         "exit_price": [90.0, 105.0],
         "pnl_pct": [-0.1, 0.05],  # В долях
-        "reason": ["sl", "tp"],
+        "reason": ["stop_loss", "ladder_tp"],
         "source": ["test", "test"],
         "narrative": ["test", "test"],
     })

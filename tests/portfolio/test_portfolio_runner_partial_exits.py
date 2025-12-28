@@ -60,7 +60,7 @@ def test_runner_partial_exit_reduces_exposure():
         exit_time=exit_time,
         exit_price=200.0,  # 2x для остатка
         pnl=1.0,  # 100% (но это для остатка, частичные выходы учтены в realized_multiple)
-        reason="tp",
+        reason="ladder_tp",
         meta={
             "runner_ladder": True,
             "levels_hit": {"2.0": level_2x_time.isoformat()},
@@ -149,7 +149,7 @@ def test_runner_max_open_positions_limit():
             exit_time=exit_time,
             exit_price=200.0,
             pnl=1.0,
-            reason="tp",
+            reason="ladder_tp",
             meta={
                 "runner_ladder": True,
                 "levels_hit": {},
@@ -214,7 +214,7 @@ def test_runner_dynamic_allocation_changes_notional():
         exit_time=exit_time_1,
         exit_price=200.0,  # 2x
         pnl=1.0,
-        reason="tp",
+        reason="ladder_tp",
         meta={
             "runner_ladder": True,
             "levels_hit": {},
@@ -234,7 +234,7 @@ def test_runner_dynamic_allocation_changes_notional():
         exit_time=exit_time_2,
         exit_price=200.0,
         pnl=1.0,
-        reason="tp",
+        reason="ladder_tp",
         meta={
             "runner_ladder": True,
             "levels_hit": {},
@@ -328,7 +328,7 @@ def test_runner_time_stop_closes_remainder():
         exit_time=time_stop_time,
         exit_price=150.0,  # Цена на момент time_stop
         pnl=0.5,  # 50% для остатка
-        reason="timeout",
+        reason="time_stop",
         meta={
             "runner_ladder": True,
             "levels_hit": {"2.0": level_2x_time.isoformat()},
@@ -410,7 +410,7 @@ def test_runner_fees_applied_to_each_partial_exit():
         exit_time=exit_time,
         exit_price=500.0,
         pnl=4.0,
-        reason="tp",
+        reason="ladder_tp",
         meta={
             "runner_ladder": True,
             "levels_hit": {
@@ -501,7 +501,7 @@ def test_runner_isoformat_datetime_parsing():
         exit_time=exit_time,
         exit_price=300.0,  # 3x для остатка
         pnl=2.0,
-        reason="tp",
+        reason="ladder_tp",
         meta={
             "runner_ladder": True,
             # Используем isoformat-строки (как они могут прийти из внешних источников)

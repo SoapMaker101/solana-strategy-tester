@@ -44,10 +44,13 @@ def test_report_pack_created_when_openpyxl_available(tmp_path):
     events_df = pd.DataFrame([
         {
             "timestamp": "2024-01-01T12:00:00Z",
-            "event_type": "ATTEMPT_RECEIVED",
+            "event_type": "POSITION_OPENED",
             "strategy": "test_strategy",
             "signal_id": "sig1",
             "contract_address": "CONTRACT1",
+            "position_id": "pos1",
+            "event_id": "event1",
+            "reason": None,
         }
     ])
     events_df.to_csv(portfolio_events_csv, index=False)
@@ -122,10 +125,13 @@ def test_report_pack_best_effort_missing_optional_csv(tmp_path):
     events_df = pd.DataFrame([
         {
             "timestamp": "2024-01-01T12:00:00Z",
-            "event_type": "ATTEMPT_RECEIVED",
+            "event_type": "POSITION_OPENED",
             "strategy": "test_strategy",
             "signal_id": "sig1",
             "contract_address": "CONTRACT1",
+            "position_id": "pos1",
+            "event_id": "event1",
+            "reason": None,
         }
     ])
     events_df.to_csv(portfolio_events_csv, index=False)
@@ -254,10 +260,13 @@ def test_reporter_save_report_pack_xlsx(tmp_path):
     events_df = pd.DataFrame([
         {
             "timestamp": "2024-01-01T12:00:00Z",
-            "event_type": "ATTEMPT_RECEIVED",
+            "event_type": "POSITION_OPENED",
             "strategy": "test_strategy",
             "signal_id": "sig1",
             "contract_address": "CONTRACT1",
+            "position_id": "pos1",
+            "event_id": "event1",
+            "reason": None,
         }
     ])
     events_df.to_csv(portfolio_events_csv, index=False)
@@ -280,4 +289,3 @@ def test_reporter_save_report_pack_xlsx(tmp_path):
         assert "summary" in xls.sheet_names
         assert "positions" in xls.sheet_names
         assert "portfolio_events" in xls.sheet_names
-

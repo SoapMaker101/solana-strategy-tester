@@ -10,6 +10,7 @@ from typing import Optional
 
 from .window_aggregator import DEFAULT_SPLITS
 from .strategy_stability import generate_stability_table_from_portfolio_trades
+from ..audit.run_audit import audit_run
 
 
 def format_summary(stability_df) -> str:
@@ -97,6 +98,10 @@ def main():
     args = parser.parse_args()
     
     reports_dir = Path(args.reports_dir)
+    p0_count, _ = audit_run(reports_dir)
+    if p0_count > 0:
+        print("ERROR: Audit P0 anomalies detected. Stage A blocked.")
+        sys.exit(2)
     
     # Определяем путь к portfolio_positions.csv
     if args.trades:
@@ -180,7 +185,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
 

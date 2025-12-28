@@ -33,7 +33,7 @@ def test_trades_table_has_required_columns(reporter):
                 exit_time=datetime(2024, 1, 1, 12, 5, 0, tzinfo=timezone.utc),
                 exit_price=110.0,
                 pnl=0.1,  # 10%
-                reason="tp",
+                reason="ladder_tp",
                 meta={
                     "total_supply_used": 1000000.0,
                     "entry_mcap_proxy": 100000000.0,
@@ -66,7 +66,7 @@ def test_trades_table_has_required_columns(reporter):
     assert df.iloc[0]["entry_price"] == 100.0
     assert df.iloc[0]["exit_price"] == 110.0
     assert df.iloc[0]["pnl_pct"] == 10.0  # 0.1 * 100 = 10.0%
-    assert df.iloc[0]["reason"] == "tp"
+    assert df.iloc[0]["reason"] == "ladder_tp"
     assert df.iloc[0]["source"] == "test_source"
     assert df.iloc[0]["narrative"] == "test narrative"
 
@@ -85,7 +85,7 @@ def test_trades_table_flattens_meta_scalars(reporter):
                 exit_time=datetime(2024, 1, 1, 12, 5, 0, tzinfo=timezone.utc),
                 exit_price=110.0,
                 pnl=0.1,
-                reason="tp",
+                reason="ladder_tp",
                 meta={
                     "total_supply_used": 1000000.0,
                     "entry_mcap_proxy": 100000000.0,
@@ -140,7 +140,7 @@ def test_trades_table_jsonifies_nested_meta(reporter):
                 exit_time=datetime(2024, 1, 1, 12, 5, 0, tzinfo=timezone.utc),
                 exit_price=110.0,
                 pnl=0.1,
-                reason="tp",
+                reason="ladder_tp",
                 meta={
                     "scalar_value": 42.0,
                     "nested_dict": nested_dict,
@@ -198,7 +198,7 @@ def test_trades_table_filters_no_entry_and_error(reporter):
                 exit_time=datetime(2024, 1, 1, 12, 5, 0, tzinfo=timezone.utc),
                 exit_price=110.0,
                 pnl=0.1,
-                reason="tp",
+                reason="ladder_tp",
                 meta={}
             )
         },
@@ -267,7 +267,6 @@ def test_trades_table_handles_empty_results(reporter):
     ]
     for col in required_columns:
         assert col in df.columns
-
 
 
 

@@ -36,7 +36,7 @@ def sample_trades_df():
             "2024-03-01T10:01:00Z",
         ], utc=True),
         "pnl_pct": [0.1, -0.05, 0.15, 0.2],
-        "reason": ["tp", "sl", "tp", "tp"],
+        "reason": ["ladder_tp", "stop_loss", "ladder_tp", "ladder_tp"],
     })
 
 
@@ -99,7 +99,7 @@ def test_calculate_window_metrics_single_trade():
         "entry_time": pd.to_datetime(["2024-01-01T10:00:00Z"], utc=True),
         "exit_time": pd.to_datetime(["2024-01-01T10:01:00Z"], utc=True),
         "pnl_pct": [0.1],
-        "reason": ["tp"],
+        "reason": ["ladder_tp"],
     })
     
     metrics = calculate_window_metrics(df)
@@ -127,7 +127,7 @@ def test_calculate_window_metrics_multiple_trades():
             "2024-01-01T12:01:00Z",
         ], utc=True),
         "pnl_pct": [0.1, -0.05, 0.15],
-        "reason": ["tp", "sl", "tp"],
+        "reason": ["ladder_tp", "stop_loss", "ladder_tp"],
     })
     
     metrics = calculate_window_metrics(df)
@@ -159,7 +159,7 @@ def test_calculate_window_metrics_max_drawdown():
             "2024-01-01T12:01:00Z",
         ], utc=True),
         "pnl_pct": [0.1, -0.2, 0.1],
-        "reason": ["tp", "sl", "tp"],
+        "reason": ["ladder_tp", "stop_loss", "ladder_tp"],
     })
     
     metrics = calculate_window_metrics(df)
@@ -180,7 +180,7 @@ def test_calculate_window_metrics_profit_factor():
             "2024-01-01T11:01:00Z",
         ], utc=True),
         "pnl_pct": [0.2, -0.1],  # profit = 0.2, loss = 0.1, factor = 2.0
-        "reason": ["tp", "sl"],
+        "reason": ["ladder_tp", "stop_loss"],
     })
     
     metrics = calculate_window_metrics(df)
@@ -461,7 +461,7 @@ def test_split_into_equal_windows_empty_window_is_not_survived():
             "2024-01-02T10:01:00Z",
         ], utc=True),
         "pnl_pct": [0.1, 0.1],
-        "reason": ["tp", "tp"],
+        "reason": ["ladder_tp", "ladder_tp"],
     })
     
     windows = split_into_equal_windows(df, split_n=3)

@@ -66,7 +66,7 @@ def test_portfolio_reset_closes_all_positions_on_threshold():
             exit_time=exit_time,
             exit_price=300.0,  # 3x - очень прибыльная
             pnl=2.0,  # 200%
-            reason="tp",
+            reason="ladder_tp",
             meta={}
         )
         
@@ -134,7 +134,7 @@ def test_portfolio_reset_updates_cycle_start_equity():
         exit_time=exit_time_1,
         exit_price=200.0,  # 2x - очень прибыльная
         pnl=1.0,
-        reason="tp",
+        reason="ladder_tp",
         meta={}
     )
     
@@ -194,7 +194,7 @@ def test_portfolio_reset_disabled_does_not_trigger():
             exit_time=exit_time,
             exit_price=200.0,  # 2x
             pnl=1.0,
-            reason="tp",
+            reason="ladder_tp",
             meta={}
         )
         
@@ -260,7 +260,7 @@ def test_portfolio_reset_equity_peak_tracking():
         exit_time=exit_time_1,
         exit_price=200.0,  # 2x
         pnl=1.0,
-        reason="tp",
+        reason="ladder_tp",
         meta={}
     )
     
@@ -328,7 +328,7 @@ def test_portfolio_reset_triggered_when_threshold_reached():
         exit_time=exit_time_1,
         exit_price=300.0,  # 3x
         pnl=2.0,  # 200%
-        reason="tp",
+        reason="ladder_tp",
         meta={}
     )
     
@@ -342,7 +342,7 @@ def test_portfolio_reset_triggered_when_threshold_reached():
         exit_time=exit_time_2,
         exit_price=200.0,  # 2x
         pnl=1.0,
-        reason="tp",
+        reason="ladder_tp",
         meta={}
     )
     

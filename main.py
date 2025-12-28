@@ -23,9 +23,6 @@ from backtester.infrastructure.reporter import Reporter
 
 # Базовая стратегия и конкретные реализации стратегий
 from backtester.domain.strategy_base import StrategyConfig, Strategy
-# LEGACY: RR/RRD признаны неэффективными, исключены из пайплайна с декабря 2025
-from backtester.domain.rr_strategy import RRStrategy  # LEGACY
-from backtester.domain.rrd_strategy import RRDStrategy  # LEGACY
 from backtester.domain.runner_strategy import RunnerStrategy
 from backtester.domain.runner_config import RunnerConfig, create_runner_config_from_dict
 
@@ -35,7 +32,7 @@ def parse_args():
     Разбирает аргументы, переданные при запуске скрипта из командной строки.
     """
     parser = argparse.ArgumentParser(
-        description="Solana strategy backtester (Runner-only since Dec 2025). RR/RRD are legacy and excluded from pipeline."
+        description="Solana strategy backtester (Runner-only v2.0)."
     )
 
     parser.add_argument(
@@ -137,17 +134,9 @@ def build_strategy(cfg: StrategyConfig) -> Strategy:
     """
     По типу стратегии создает и возвращает соответствующий объект стратегии.
     
-    ⚠️ ВАЖНО: С декабря 2025 проект работает только с RUNNER.
-    RR/RRD признаны неэффективными и исключены из пайплайна.
-    Они остаются только как legacy-код для обратной совместимости.
+    Runner-only (v2.0).
     """
     t = cfg.type.upper()
-    if t == "RR":
-        # LEGACY: RR признана неэффективной, исключена из пайплайна
-        return RRStrategy(cfg)
-    if t == "RRD":
-        # LEGACY: RRD признана неэффективной, исключена из пайплайна
-        return RRDStrategy(cfg)
     if t == "RUNNER":
         return RunnerStrategy(cfg)
     raise ValueError(f"Unknown strategy type: {cfg.type}")
@@ -164,15 +153,9 @@ def load_strategies(config_path: str) -> List[Strategy]:
         name = s["name"]
         params = s.get("params", {})
         
-        # Для RUNNER создаем RunnerConfig, для остальных - обычный StrategyConfig
-        if strategy_type == "RUNNER":
-            config = create_runner_config_from_dict(name, params)
-        else:
-            config = StrategyConfig(
-                name=name,
-                type=s["type"],
-                params=params
-            )
+        if strategy_type != "RUNNER":
+            raise ValueError(f"Runner-only v2.0: unsupported strategy type {strategy_type}")
+        config = create_runner_config_from_dict(name, params)
         strategies.append(build_strategy(config))
     return strategies
 

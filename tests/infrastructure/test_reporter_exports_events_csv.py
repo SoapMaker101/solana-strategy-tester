@@ -1,5 +1,5 @@
 """
-Unit tests for Reporter portfolio_events.csv export (v1.9).
+Unit tests for Reporter portfolio_events.csv export (v2.0).
 """
 import tempfile
 from pathlib import Path
@@ -38,9 +38,9 @@ def test_reporter_exports_events_csv():
                 strategy="test_strategy",
                 signal_id="sig1",
                 contract_address="CONTRACT1",
-                event_type=PortfolioEventType.ATTEMPT_ACCEPTED_OPEN,
+                position_id="pos1",
+                event_type=PortfolioEventType.POSITION_OPENED,
                 reason=None,
-                result=None,
                 meta={"open_positions": 1},
             ),
             PortfolioEvent(
@@ -48,23 +48,21 @@ def test_reporter_exports_events_csv():
                 strategy="test_strategy",
                 signal_id="sig2",
                 contract_address="CONTRACT2",
-                event_type=PortfolioEventType.ATTEMPT_REJECTED_CAPACITY,
-                reason="capacity_full",
-                result=None,
-                meta={"blocked_by_capacity": True},
+                position_id="pos2",
+                event_type=PortfolioEventType.POSITION_CLOSED,
+                reason="capacity_prune",
+                meta={"closed_by_reset": True},
             ),
             PortfolioEvent(
                 timestamp=base_time,
                 strategy="test_strategy",
                 signal_id="sig1",
                 contract_address="CONTRACT1",
-                event_type=PortfolioEventType.CAPACITY_PRUNE_TRIGGERED,
-                reason=None,
-                result=None,
+                position_id="pos1",
+                event_type=PortfolioEventType.PORTFOLIO_RESET_TRIGGERED,
+                reason="capacity_prune",
                 meta={
-                    "candidates_count": 2,
-                    "closed_count": 1,
-                    "blocked_ratio": 0.5,
+                    "closed_positions_count": 1,
                 },
             ),
         ]
@@ -106,6 +104,8 @@ def test_reporter_exports_events_csv():
             "signal_id",
             "contract_address",
             "position_id",
+            "event_id",
+            "reason",
             "meta_json",
         ]
         assert list(df.columns) == expected_columns, \
@@ -116,7 +116,7 @@ def test_reporter_exports_events_csv():
         
         # Check first event
         first_row = df.iloc[0]
-        assert first_row["event_type"] == PortfolioEventType.ATTEMPT_ACCEPTED_OPEN.value
+        assert first_row["event_type"] == PortfolioEventType.POSITION_OPENED.value
         assert first_row["strategy"] == "test_strategy"
         assert first_row["signal_id"] == "sig1"
         assert first_row["contract_address"] == "CONTRACT1"
@@ -128,20 +128,18 @@ def test_reporter_exports_events_csv():
         assert isinstance(meta_dict, dict), "meta_json should parse to dict"
         assert meta_dict.get("open_positions") == 1
         
-        # Check second event (ATTEMPT_REJECTED_CAPACITY)
+        # Check second event (POSITION_CLOSED)
         second_row = df.iloc[1]
-        assert second_row["event_type"] == PortfolioEventType.ATTEMPT_REJECTED_CAPACITY.value
+        assert second_row["event_type"] == PortfolioEventType.POSITION_CLOSED.value
         assert second_row["signal_id"] == "sig2"
         meta_dict_2 = json.loads(second_row["meta_json"])
-        assert meta_dict_2.get("blocked_by_capacity") is True
+        assert meta_dict_2.get("closed_by_reset") is True
         
-        # Check third event (CAPACITY_PRUNE_TRIGGERED)
+        # Check third event (PORTFOLIO_RESET_TRIGGERED)
         third_row = df.iloc[2]
-        assert third_row["event_type"] == PortfolioEventType.CAPACITY_PRUNE_TRIGGERED.value
+        assert third_row["event_type"] == PortfolioEventType.PORTFOLIO_RESET_TRIGGERED.value
         meta_dict_3 = json.loads(third_row["meta_json"])
-        assert meta_dict_3.get("candidates_count") == 2
-        assert meta_dict_3.get("closed_count") == 1
-        assert meta_dict_3.get("blocked_ratio") == 0.5
+        assert meta_dict_3.get("closed_positions_count") == 1
 
 
 def test_reporter_exports_events_csv_empty():
@@ -186,8 +184,9 @@ def test_reporter_exports_events_csv_empty():
             "signal_id",
             "contract_address",
             "position_id",
+            "event_id",
+            "reason",
             "meta_json",
         ]
         assert list(df.columns) == expected_columns
         assert len(df) == 0, "Should have 0 rows for empty events"
-

@@ -11,15 +11,15 @@ from .strategy_selector import (
     load_stability_csv,
     select_strategies,
 )
-from .selection_rules import DEFAULT_CRITERIA, DEFAULT_RUNNER_CRITERIA, DEFAULT_CRITERIA_V1, DEFAULT_RUNNER_CRITERIA_V1
-from .strategy_selector import is_runner_strategy
+from .selection_rules import DEFAULT_RUNNER_CRITERIA_V1
+from ..audit.run_audit import audit_run
 
 
 def format_selection_summary(selection_df) -> str:
     """
     Форматирует краткий summary для вывода в консоль.
     
-    Для Runner стратегий показывает Runner-метрики, для RR/RRD - стандартные.
+    Runner-only summary.
     
     :param selection_df: DataFrame с результатами отбора.
     :return: Форматированная строка.
@@ -31,26 +31,18 @@ def format_selection_summary(selection_df) -> str:
     lines.append("Strategy Selection Results")
     lines.append("="*100)
     
-    # Заголовок для RR/RRD
-    lines.append(f"{'Strategy':<30} {'Passed':<8} {'Survival':<10} {'Worst':<12} {'Variance':<12}")
+    # Заголовок для Runner
+    lines.append(f"{'Strategy':<30} {'Passed':<8} {'HitX2':<8} {'HitX5':<8} {'Tail':<8}")
     lines.append("-"*100)
     
     for _, row in selection_df.iterrows():
         strategy = str(row["strategy"])[:28]
         passed = "YES" if row["passed"] else "NO"
         
-        if is_runner_strategy(strategy):
-            # Для Runner стратегий показываем Runner-метрики
-            hit_x2 = f"{row.get('hit_rate_x2', 0.0):.2f}" if 'hit_rate_x2' in row else "N/A"
-            hit_x5 = f"{row.get('hit_rate_x5', 0.0):.2f}" if 'hit_rate_x5' in row else "N/A"
-            tail = f"{row.get('tail_contribution', 0.0):.2f}" if 'tail_contribution' in row else "N/A"
-            lines.append(f"{strategy:<30} {passed:<8} HitX2:{hit_x2:<6} HitX5:{hit_x5:<6} Tail:{tail:<6}")
-        else:
-            # Для RR/RRD стратегий показываем стандартные метрики
-            survival = f"{row.get('survival_rate', 0.0):.2f}" if 'survival_rate' in row else "N/A"
-            worst = f"{row.get('worst_window_pnl', 0.0):.4f}" if 'worst_window_pnl' in row else "N/A"
-            variance = f"{row.get('pnl_variance', 0.0):.6f}" if 'pnl_variance' in row else "N/A"
-            lines.append(f"{strategy:<30} {passed:<8} {survival:<10} {worst:<12} {variance:<12}")
+        hit_x2 = f"{row.get('hit_rate_x2', 0.0):.2f}" if 'hit_rate_x2' in row else "N/A"
+        hit_x5 = f"{row.get('hit_rate_x5', 0.0):.2f}" if 'hit_rate_x5' in row else "N/A"
+        tail = f"{row.get('tail_contribution', 0.0):.2f}" if 'tail_contribution' in row else "N/A"
+        lines.append(f"{strategy:<30} {passed:<8} {hit_x2:<8} {hit_x5:<8} {tail:<8}")
     
     lines.append("="*100)
     
@@ -98,12 +90,11 @@ def main():
     
     print(f"Stage B: Strategy Selection (Decision Layer)")
     print(f"Stability CSV: {stability_csv_path}")
-    print(f"Using v1 criteria (fixed/1%/exposure=0.95/100 pos/no reset)")
-    print(f"RR/RRD Criteria v1: min_survival_rate={DEFAULT_CRITERIA_V1.min_survival_rate}, "
-          f"max_pnl_variance={DEFAULT_CRITERIA_V1.max_pnl_variance}, "
-          f"min_worst_window_pnl={DEFAULT_CRITERIA_V1.min_worst_window_pnl}, "
-          f"min_median_window_pnl={DEFAULT_CRITERIA_V1.min_median_window_pnl}, "
-          f"min_windows={DEFAULT_CRITERIA_V1.min_windows}")
+    p0_count, _ = audit_run(stability_csv_path.parent)
+    if p0_count > 0:
+        print("ERROR: Audit P0 anomalies detected. Stage B blocked.")
+        raise SystemExit(2)
+    print(f"Using Runner criteria v1")
     print(f"Runner Criteria v1: min_hit_rate_x2={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x2}, "
           f"min_hit_rate_x5={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x5}, "
           f"max_tail_contribution={DEFAULT_RUNNER_CRITERIA_V1.max_tail_contribution}, "
@@ -117,7 +108,7 @@ def main():
         selection_df = generate_selection_table_from_stability(
             stability_csv_path=stability_csv_path,
             output_path=output_path,
-            criteria=DEFAULT_CRITERIA_V1,
+            criteria=DEFAULT_RUNNER_CRITERIA_V1,
             runner_criteria=DEFAULT_RUNNER_CRITERIA_V1,
         )
         
@@ -146,8 +137,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
 
 
 

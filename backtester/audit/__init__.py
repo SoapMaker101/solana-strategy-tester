@@ -1,5 +1,4 @@
-# backtester/audit
-# Global Audit: Pricing, PnL, Exit Reasons, Policy Decisions (Runner-only)
+"""Audit utilities for Runner-only pipeline."""
 
 from .invariants import (
     AnomalyType,
@@ -37,4 +36,3 @@ __all__ = [
     "AuditReport",
     "generate_audit_report",
 ]
-

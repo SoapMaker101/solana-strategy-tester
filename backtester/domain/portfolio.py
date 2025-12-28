@@ -111,11 +111,10 @@ class PortfolioConfig:
     # Profit reset конфигурация (reset по росту equity портфеля)
     profit_reset_enabled: Optional[bool] = None
     profit_reset_multiple: Optional[float] = None  # Множитель для profit reset (например, 2.0 = x2)
-    
-    # DEPRECATED: Используйте profit_reset_enabled и profit_reset_multiple вместо этих полей
-    # Оставлено для обратной совместимости со старыми YAML конфигами
-    runner_reset_enabled: bool = False
-    runner_reset_multiple: float = 2.0  # XN multiplier (например, 2.0 = x2)
+
+    # DEPRECATED: legacy alias для profit reset
+    runner_reset_enabled: Optional[bool] = None
+    runner_reset_multiple: Optional[float] = None
     
     # Capacity reset конфигурация (v1.6)
     capacity_reset_enabled: bool = True
@@ -149,6 +148,8 @@ class PortfolioConfig:
         if self.profit_reset_enabled is not None:
             return bool(self.profit_reset_enabled)
         # Fallback на старое поле для обратной совместимости
+        if self.runner_reset_enabled is None:
+            return False
         return bool(self.runner_reset_enabled)
     
     def resolved_profit_reset_multiple(self) -> float:
@@ -162,6 +163,8 @@ class PortfolioConfig:
         if self.profit_reset_multiple is not None:
             return float(self.profit_reset_multiple)
         # Fallback на старое поле для обратной совместимости
+        if self.runner_reset_multiple is None:
+            return 1.0
         return float(self.runner_reset_multiple)
 
 
@@ -172,11 +175,7 @@ class PortfolioStats:
     max_drawdown_pct: float
     trades_executed: int
     trades_skipped_by_risk: int
-    trades_skipped_by_reset: int = 0  # Сделки, пропущенные из-за runner reset
-    
-    # Runner reset tracking (по XN)
-    runner_reset_count: int = 0  # Количество срабатываний runner reset (по XN)
-    last_runner_reset_time: Optional[datetime] = None  # Время последнего runner reset
+    trades_skipped_by_reset: int = 0  # Сделки, пропущенные из-за reset guard
     
     # Portfolio-level reset tracking (по equity threshold и capacity)
     portfolio_reset_count: int = 0  # Количество срабатываний portfolio-level reset (profit + capacity)
@@ -366,7 +365,7 @@ class PortfolioEngine:
         raw_exit_price = get_mark_price_for_position(pos, current_time)
         
         # Применяем slippage (используем reason="manual" для forced close)
-        effective_exit_price = self.execution_model.apply_exit(raw_exit_price, reason="manual")
+        effective_exit_price = self.execution_model.apply_exit(raw_exit_price, reason="manual_close")
         
         # Вычисляем PnL на основе исполненных цен
         exec_entry_price = pos.meta.get("exec_entry_price", pos.entry_price) if pos.meta else pos.entry_price
@@ -393,6 +392,7 @@ class PortfolioEngine:
             "fees_total_sol": fees_total,
             "closed_by_reset": True,
             "reset_reason": reset_reason,
+            "close_reason": reset_reason,
         }
         
         # Добавляем дополнительные поля если есть
@@ -403,16 +403,8 @@ class PortfolioEngine:
             pos.meta.update(meta_updates)
             pos.meta["network_fee_sol"] = pos.meta.get("network_fee_sol", 0.0) + network_fee_exit
         
-        # Эмитим событие закрытия (v1.9)
+        # Эмитим событие закрытия (v2.0)
         if portfolio_events is not None:
-            event_type_map = {
-                "capacity_prune": PortfolioEventType.CLOSED_BY_CAPACITY_PRUNE,
-                "profit": PortfolioEventType.CLOSED_BY_PROFIT_RESET,
-                "capacity": PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL,
-                "capacity_close_all": PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL,
-            }
-            event_type = event_type_map.get(reset_reason, PortfolioEventType.EXECUTED_CLOSE)
-            
             event_meta = {
                 "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
                 "exit_time": current_time.isoformat(),
@@ -423,50 +415,17 @@ class PortfolioEngine:
             }
             if additional_meta:
                 event_meta.update(additional_meta)
-            
-            # Используем фабрики для создания событий закрытия (v1.9)
+
             strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
-            if event_type == PortfolioEventType.CLOSED_BY_CAPACITY_PRUNE:
-                portfolio_events.append(
-                    PortfolioEvent.create_closed_by_prune(
-                        timestamp=current_time,
-                        strategy=strategy_name,
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        meta=event_meta,
-                    )
-                )
-            elif event_type == PortfolioEventType.CLOSED_BY_PROFIT_RESET:
-                portfolio_events.append(
-                    PortfolioEvent.create_closed_by_profit_reset(
-                        timestamp=current_time,
-                        strategy=strategy_name,
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        meta=event_meta,
-                    )
-                )
-            elif event_type == PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL:
-                portfolio_events.append(
-                    PortfolioEvent.create_closed_by_capacity_close_all(
-                        timestamp=current_time,
-                        strategy=strategy_name,
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        meta=event_meta,
-                    )
-                )
-            else:
-                # Fallback на обычное закрытие
-                portfolio_events.append(
-                    PortfolioEvent.create_executed_close(
-                        timestamp=current_time,
-                        strategy=strategy_name,
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        reason=reset_reason,
-                        meta=event_meta,
-                    )
+            portfolio_events.append(
+                PortfolioEvent.create_position_closed(
+                    timestamp=current_time,
+                    strategy=strategy_name,
+                    signal_id=pos.signal_id,
+                    contract_address=pos.contract_address,
+                    position_id=pos.position_id,
+                    reason=reset_reason,
+                    meta=event_meta,
                 )
             
             # Эмитим каноническое событие POSITION_CLOSED с position_id
@@ -574,7 +533,7 @@ class PortfolioEngine:
         ]
         
         context = PortfolioResetContext(
-            reason=ResetReason.CAPACITY_PRESSURE,
+            reason=ResetReason.CAPACITY_PRUNE,
             reset_time=current_time,
             marker_position=marker_position,
             positions_to_force_close=positions_to_force_close,
@@ -619,7 +578,7 @@ class PortfolioEngine:
                 mark_price = last_seen_price
         
         # Применяем ExecutionModel для реалистичной цены выхода (slippage)
-        effective_mark_exit_price = self.execution_model.apply_exit(mark_price, reason="manual")
+        effective_mark_exit_price = self.execution_model.apply_exit(mark_price, reason="manual_close")
         
         # Получаем цену входа (исполненную, с slippage)
         entry_price = pos.meta.get("exec_entry_price") if pos.meta else None
@@ -759,55 +718,18 @@ class PortfolioEngine:
         if open_ratio < self.config.capacity_open_ratio_threshold:
             return False
         
-        # Переписываем capacity window на события (v1.9)
-        if portfolio_events is None or len(portfolio_events) == 0:
+        blocked_window = capacity_tracking.get("blocked_by_capacity_in_window", 0)
+        signals_in_window = capacity_tracking.get("signals_in_window", 0)
+        if signals_in_window == 0:
             return False
-        
-        # Строим окно из событий для capacity_window_type="signals"
-        window_events = self._build_capacity_window_from_events(
-            portfolio_events=portfolio_events,
-            current_time=current_time,
-            window_size=self.config.capacity_window_size,
-            window_type=self.config.capacity_window_type,
-        )
-        
-        # Считаем метрики из событий (v1.9 канон)
-        accepted_open_count = sum(
-            1 for e in window_events 
-            if e.event_type == PortfolioEventType.ATTEMPT_ACCEPTED_OPEN
-        )
-        rejected_capacity_count = sum(
-            1 for e in window_events 
-            if e.event_type == PortfolioEventType.ATTEMPT_REJECTED_CAPACITY
-        )
-        
-        # attempted = accepted_open + rejected_capacity (v1.9 канон)
-        attempted = accepted_open_count + rejected_capacity_count
-        
-        if attempted == 0:
-            return False
-        
-        blocked_ratio = rejected_capacity_count / attempted
+        blocked_ratio = blocked_window / signals_in_window
         if blocked_ratio < self.config.capacity_max_blocked_ratio:
             return False
         
-        # avg_hold_days считается напрямую из открытых позиций (v1.9 канон, без capacity_tracking)
-        if state.open_positions:
-            total_hold_seconds = sum(
-                (current_time - p.entry_time).total_seconds() 
-                for p in state.open_positions 
-                if p.entry_time is not None
-            )
-            avg_hold_days = total_hold_seconds / len(state.open_positions) / (24 * 3600)
-        else:
-            avg_hold_days = 0.0
+        avg_hold_days = capacity_tracking.get("avg_hold_time_open_positions", 0.0)
         
         if avg_hold_days < self.config.capacity_max_avg_hold_days:
             return False
-        
-        # Сохраняем метрики для эмиссии события
-        blocked_window = rejected_capacity_count
-        signals_in_window = attempted
         
         # Все условия capacity pressure выполнены - выбираем кандидатов для prune
         candidates = self._select_capacity_prune_candidates(state, current_time)
@@ -851,26 +773,27 @@ class PortfolioEngine:
         # Берем top-K кандидатов
         positions_to_prune = [item[0] for item in candidate_scores[:prune_count]]
         
-        # Trigger эмитится только если реально есть позиции для закрытия (v1.9 инвариант)
+        # Trigger эмитится только если реально есть позиции для закрытия
         if len(positions_to_prune) == 0:
             return False
-        
-        # Эмитим событие CAPACITY_PRUNE_TRIGGERED (v1.9) ПЕРЕД закрытием позиций
-        if portfolio_events is not None:
+
+        if portfolio_events is not None and positions_to_prune:
+            marker_position = positions_to_prune[0]
             portfolio_events.append(
-                PortfolioEvent.create_capacity_prune_triggered(
+                PortfolioEvent.create_portfolio_reset_triggered(
                     timestamp=current_time,
-                    candidates_count=len(candidates),
-                    closed_count=len(positions_to_prune),
-                    blocked_ratio=blocked_ratio,
+                    strategy=marker_position.meta.get("strategy", "unknown") if marker_position.meta else "unknown",
+                    signal_id=marker_position.signal_id,
+                    contract_address=marker_position.contract_address,
+                    position_id=marker_position.position_id,
+                    reason="capacity_prune",
                     meta={
                         "open_ratio": open_ratio,
-                        "blocked_window": rejected_capacity_count,
-                        "attempted": attempted,
-                        "accepted_open_count": accepted_open_count,
-                        "rejected_capacity_count": rejected_capacity_count,
+                        "blocked_window": blocked_window,
+                        "signals_in_window": signals_in_window,
                         "avg_hold_days": avg_hold_days,
                         "signal_index": signal_index,
+                        "closed_positions_count": len(positions_to_prune),
                     },
                 )
             )
@@ -948,15 +871,15 @@ class PortfolioEngine:
             state.capacity_prune_cooldown_until_time = current_time + timedelta(days=self.config.prune_cooldown_days)
         
         # Сохраняем статистику для observability (hardening v1.7.1)
-        # Примечание: blocked_window теперь считается из событий (v1.9)
+        # Примечание: blocked_window теперь считается из capacity_tracking
         prune_event = {
             "trigger_time": current_time.isoformat(),
             "signal_index": signal_index,
             "candidates_count": len(candidates),
             "pruned_count": len(positions_to_prune),
             "open_ratio": open_ratio,
-            "blocked_window": rejected_capacity_count,  # Из событий
-            "attempted": attempted,  # Из событий
+            "blocked_window": blocked_window,
+            "signals_in_window": signals_in_window,
             "avg_hold_days": avg_hold_days,
             "pruned_hold_days": [item[2] for item in candidate_scores[:len(positions_to_prune)]],  # hold_days закрытых
             "pruned_current_pnl_pct": [item[4] for item in candidate_scores[:len(positions_to_prune)]],  # current_pnl_pct закрытых
@@ -968,66 +891,11 @@ class PortfolioEngine:
         logger.info(
             f"[CAPACITY_PRUNE] Triggered at {current_time.isoformat()}: "
             f"candidates={len(candidates)}, pruned={len(positions_to_prune)}, "
-            f"open_ratio={open_ratio:.2f}, blocked_window={rejected_capacity_count}, "
+            f"open_ratio={open_ratio:.2f}, blocked_window={blocked_window}, "
             f"avg_hold_days={avg_hold_days:.2f}, cooldown_until_signal={state.capacity_prune_cooldown_until_signal_index}"
         )
-        
-        # Событие CAPACITY_PRUNE_TRIGGERED уже эмитилось перед закрытием позиций (см. выше)
-        
+
         return True
-    
-    def _build_capacity_window_from_events(
-        self,
-        portfolio_events: List[PortfolioEvent],
-        current_time: datetime,
-        window_size: Union[int, str],
-        window_type: Literal["time", "signals"],
-    ) -> List[PortfolioEvent]:
-        """
-        Строит окно событий для capacity pressure (v1.9).
-        
-        Для capacity_window_type="signals":
-        - Берем последние N событий типа ATTEMPT_ACCEPTED_OPEN или ATTEMPT_REJECTED_CAPACITY
-        - N = capacity_window_size
-        
-        Для capacity_window_type="time":
-        - Берем события за последние N дней до current_time
-        - N = capacity_window_size (в днях)
-        
-        Returns:
-            Список событий в окне (отсортированных по timestamp, старые первыми)
-        """
-        if window_type == "time":
-            # Окно по времени
-            if isinstance(window_size, str) and window_size.endswith("d"):
-                days = int(window_size[:-1])
-            else:
-                days = int(window_size)
-            window_start = current_time - timedelta(days=days)
-            
-            # Фильтруем события по времени и типу
-            window_events = [
-                e for e in portfolio_events
-                if e.timestamp >= window_start 
-                and e.event_type in (
-                    PortfolioEventType.ATTEMPT_ACCEPTED_OPEN,
-                    PortfolioEventType.ATTEMPT_REJECTED_CAPACITY,
-                )
-            ]
-        else:
-            # Окно по сигналам: берем последние N событий типа attempt
-            window_size_int = int(window_size)
-            attempt_events = [
-                e for e in portfolio_events
-                if e.event_type in (
-                    PortfolioEventType.ATTEMPT_ACCEPTED_OPEN,
-                    PortfolioEventType.ATTEMPT_REJECTED_CAPACITY,
-                )
-            ]
-            # Берем последние N событий
-            window_events = attempt_events[-window_size_int:] if len(attempt_events) > window_size_int else attempt_events
-        
-        return window_events
     
     def _update_capacity_tracking(
         self,
@@ -1218,14 +1086,15 @@ class PortfolioEngine:
         )
         apply_portfolio_reset(context, state, self.execution_model)
         
-        # Эмитим события reset (v1.9)
+        # Эмитим события reset (v2.0)
         if portfolio_events is not None:
-            # Маппинг ResetReason -> event_type для TRIGGERED событий
-            trigger_event_type_map = {
-                ResetReason.EQUITY_THRESHOLD: PortfolioEventType.PROFIT_RESET_TRIGGERED,
-                ResetReason.CAPACITY_PRESSURE: PortfolioEventType.CAPACITY_CLOSE_ALL_TRIGGERED,
-                # CAPACITY_PRUNE не обрабатывается здесь (он в _maybe_apply_capacity_prune)
-                # RUNNER_XN не portfolio-level reset (он runner-level)
+            reset_reason = "profit_reset" if reason == ResetReason.PROFIT_RESET else "capacity_prune"
+            trigger_meta = {
+                "reset_time": reset_time.isoformat(),
+                "cycle_start_equity": state.cycle_start_equity,
+                "equity_peak_in_cycle": state.equity_peak_in_cycle,
+                "current_balance": state.balance,
+                "closed_positions_count": len(positions_to_force_close) + 1,
             }
             
             # Эмитим общее событие PORTFOLIO_RESET_TRIGGERED
@@ -1257,30 +1126,15 @@ class PortfolioEngine:
                 trigger_meta = {
                     "reset_time": reset_time.isoformat(),
                 }
-                if reason == ResetReason.EQUITY_THRESHOLD:
-                    # Для profit reset добавляем equity метрики
-                    trigger_meta["cycle_start_equity"] = state.cycle_start_equity  # type: ignore
-                    trigger_meta["equity_peak_in_cycle"] = state.equity_peak_in_cycle  # type: ignore
-                    trigger_meta["current_balance"] = state.balance  # type: ignore
-                    portfolio_events.append(
-                        PortfolioEvent.create_profit_reset_triggered(
-                            timestamp=reset_time,
-                            marker_signal_id=marker_position.signal_id,
-                            marker_contract_address=marker_position.contract_address,
-                            closed_positions_count=len(positions_to_force_close),
-                            meta=trigger_meta,
-                        )
-                    )
-                elif reason == ResetReason.CAPACITY_PRESSURE:
-                    # Для capacity close-all
-                    portfolio_events.append(
-                        PortfolioEvent.create_capacity_close_all_triggered(
-                            timestamp=reset_time,
-                            marker_signal_id=marker_position.signal_id,
-                            marker_contract_address=marker_position.contract_address,
-                            closed_positions_count=len(positions_to_force_close),
-                            meta=trigger_meta,
-                        )
+                portfolio_events.append(
+                    PortfolioEvent.create_position_closed(
+                        timestamp=reset_time,
+                        strategy=strategy_name,
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        position_id=pos.position_id,
+                        reason=reset_reason,
+                        meta=close_meta,
                     )
             
             # Эмитим события закрытий для каждой закрытой позиции
@@ -1456,8 +1310,8 @@ class PortfolioEngine:
             # Вычисляем цену выхода (entry_price * xn)
             exit_price_raw = pos.entry_price * xn
             
-            # Применяем slippage к цене выхода (для TP используем reason="tp")
-            effective_exit_price = self.execution_model.apply_exit(exit_price_raw, "tp")
+            # Применяем slippage к цене выхода (для TP используем reason="ladder_tp")
+            effective_exit_price = self.execution_model.apply_exit(exit_price_raw, "ladder_tp")
             
             # Вычисляем PnL для этой части - используем exec_entry_price из meta для правильного расчета баланса
             exec_entry_price = pos.meta.get("exec_entry_price", pos.entry_price)
@@ -1492,6 +1346,29 @@ class PortfolioEngine:
                 "fees_sol": fees_partial,
                 "network_fee_sol": network_fee_exit,
             })
+            if portfolio_events is not None:
+                event = PortfolioEvent.create_position_partial_exit(
+                    timestamp=hit_time,
+                    strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                    signal_id=pos.signal_id,
+                    contract_address=pos.contract_address,
+                    position_id=pos.position_id,
+                    reason="ladder_tp",
+                    meta={
+                        "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                        "exit_time": hit_time.isoformat(),
+                        "xn": xn,
+                        "fraction": fraction,
+                        "exit_size": exit_size,
+                        "exit_price": effective_exit_price,
+                        "pnl_pct": exit_pnl_pct,
+                        "pnl_sol": exit_pnl_sol,
+                        "fees_sol": fees_partial,
+                        "network_fee_sol": network_fee_exit,
+                    },
+                )
+                pos.meta["partial_exits"][-1]["event_id"] = event.event_id
+                portfolio_events.append(event)
             
             # Обновляем общие fees
             if "fees_total_sol" in pos.meta:
@@ -1544,8 +1421,8 @@ class PortfolioEngine:
                 # Остаток уже закрыт
                 pass
             elif pos.exit_price is not None:
-                # Применяем slippage для timeout - используем raw exit_price для расчета slippage
-                effective_exit_price = self.execution_model.apply_exit(pos.exit_price, "timeout")
+                # Применяем slippage для time_stop - используем raw exit_price для расчета slippage
+                effective_exit_price = self.execution_model.apply_exit(pos.exit_price, "time_stop")
                 
                 # Вычисляем PnL для остатка - используем exec_entry_price из meta для правильного расчета баланса
                 exec_entry_price = pos.meta.get("exec_entry_price", pos.entry_price)
@@ -1576,6 +1453,30 @@ class PortfolioEngine:
                     "network_fee_sol": network_fee_exit,
                     "is_remainder": True,
                 })
+                if portfolio_events is not None:
+                    event = PortfolioEvent.create_position_partial_exit(
+                        timestamp=pos.exit_time or current_time,
+                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        position_id=pos.position_id,
+                        reason="time_stop",
+                        meta={
+                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                            "exit_time": pos.exit_time.isoformat() if pos.exit_time else None,
+                            "xn": pos.exit_price / pos.entry_price if pos.entry_price else 1.0,
+                            "fraction": pos.size / original_size if original_size else 0.0,
+                            "exit_size": pos.size,
+                            "exit_price": effective_exit_price,
+                            "pnl_pct": exit_pnl_pct,
+                            "pnl_sol": exit_pnl_sol,
+                            "fees_sol": fees_remainder,
+                            "network_fee_sol": network_fee_exit,
+                            "is_remainder": True,
+                        },
+                    )
+                    pos.meta["partial_exits"][-1]["event_id"] = event.event_id
+                    portfolio_events.append(event)
                 
                 # Обновляем fees
                 pos.meta["fees_total_sol"] = pos.meta.get("fees_total_sol", 0.0) + fees_remainder + network_fee_exit
@@ -1596,6 +1497,11 @@ class PortfolioEngine:
             # Обновляем общий PnL позиции
             total_pnl_sol = sum(exit.get("pnl_sol", 0.0) for exit in pos.meta.get("partial_exits", []))
             pos.meta["pnl_sol"] = total_pnl_sol
+            fractions = pos.meta.get("fractions_exited", {})
+            realized_multiple = sum(float(xn) * float(frac) for xn, frac in fractions.items()) if fractions else pos.meta.get("realized_multiple", 1.0)
+            pos.meta["realized_multiple"] = realized_multiple
+            pos.pnl_pct = float(realized_multiple) - 1.0
+            pos.meta["close_reason"] = "time_stop" if pos.meta.get("time_stop_triggered") else "ladder_tp"
             # НЕ добавляем в closed_positions - это будет сделано в _process_position_exit
         
         return {"balance": balance}
@@ -1681,53 +1587,32 @@ class PortfolioEngine:
                 state.open_positions = [p for p in state.open_positions if p.signal_id != pos.signal_id]
                 if pos.signal_id in positions_by_signal_id:
                     del positions_by_signal_id[pos.signal_id]
+                if portfolio_events is not None:
+                    close_reason = pos.meta.get("close_reason", "ladder_tp") if pos.meta else "ladder_tp"
+                    pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
+                    fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
+                    event = PortfolioEvent.create_position_closed(
+                        timestamp=current_time,
+                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        position_id=pos.position_id,
+                        reason=close_reason,
+                        meta={
+                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                            "exit_time": current_time.isoformat(),
+                            "pnl_pct": pos.pnl_pct,
+                            "pnl_sol": pnl_sol,
+                            "fees_total_sol": fees_total,
+                            "close_reason": close_reason,
+                        },
+                    )
+                    portfolio_events.append(event)
+                    pos.meta["close_event_id"] = event.event_id
                 return
         
-        # Обычная обработка для RR/RRD (полное закрытие)
+        # Обычная обработка для Runner (полное закрытие)
         if pos.exit_time is not None and current_time >= pos.exit_time:
-            # Проверка runner reset: если позиция достигает XN, закрываем все позиции
-            trigger_position: Optional[Position] = None
-            reset_time_current: Optional[datetime] = None
-            if self.config.runner_reset_enabled:
-                raw_entry_price = pos.meta.get("raw_entry_price")
-                raw_exit_price = pos.meta.get("raw_exit_price")
-                if raw_entry_price and raw_exit_price and raw_entry_price > 0:
-                    multiplying_return = raw_exit_price / raw_entry_price
-                    if multiplying_return >= self.config.runner_reset_multiple:
-                        trigger_position = pos
-                        reset_time_current = pos.exit_time
-            
-            # Если есть runner reset по XN, применяем его
-            if trigger_position is not None and reset_time_current is not None:
-                # Формируем список позиций для принудительного закрытия (кроме триггерной)
-                positions_to_force_close = [
-                    p for p in state.open_positions 
-                    if p.signal_id != trigger_position.signal_id and p.status == "open"
-                ]
-                
-                # Применяем runner reset через единый механизм
-                self._apply_reset(
-                    state=state,
-                    marker_position=trigger_position,
-                    reset_time=reset_time_current,
-                    positions_to_force_close=positions_to_force_close,
-                    reason=ResetReason.RUNNER_XN,
-                    portfolio_events=portfolio_events,
-                )
-                
-                # Обновляем positions_by_signal_id после reset
-                for p in positions_to_force_close:
-                    if p.signal_id in positions_by_signal_id:
-                        del positions_by_signal_id[p.signal_id]
-                
-                self._dbg(
-                    "runner_reset_count_incremented",
-                    old_reset_count=state.runner_reset_count - 1,
-                    new_reset_count=state.runner_reset_count,
-                    reset_time=reset_time_current,
-                    trigger_pos=trigger_position,
-                )
-            
             # Закрываем позицию нормально
             network_fee_exit = self.execution_model.network_fee()
             trade_pnl_sol = pos.size * (pos.pnl_pct or 0.0)
@@ -1755,7 +1640,7 @@ class PortfolioEngine:
             if pos.signal_id in positions_by_signal_id:
                 del positions_by_signal_id[pos.signal_id]
 
-            # Эмитим событие EXECUTED_CLOSE (v1.9) - обычное закрытие
+            # Эмитим событие POSITION_CLOSED - обычное закрытие
             if portfolio_events is not None:
                 close_reason = pos.meta.get("close_reason", pos.meta.get("ladder_reason", "tp")) if pos.meta else "tp"
                 pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
@@ -1852,18 +1737,6 @@ class PortfolioEngine:
                 signal_blocked_by_capacity=True,
                 position_closed=False,
             )
-            # Эмитим событие ATTEMPT_REJECTED_CAPACITY (v1.9)
-            portfolio_events.append(
-                PortfolioEvent.create_attempt_rejected_capacity(
-                    timestamp=current_time,
-                    strategy=strategy_name,
-                    signal_id=trade_data["signal_id"],
-                    contract_address=trade_data["contract_address"],
-                    result=out,
-                    reason="meta_blocked_by_capacity",
-                    meta={"open_positions": len(state.open_positions), "max_open_positions": self.config.max_open_positions},
-                )
-            )
             return None
         
         # лимит по количеству позиций
@@ -1876,18 +1749,6 @@ class PortfolioEngine:
                 state=state,
                 signal_blocked_by_capacity=True,
                 position_closed=False,
-            )
-            # Эмитим событие ATTEMPT_REJECTED_CAPACITY (v1.9)
-            portfolio_events.append(
-                PortfolioEvent.create_attempt_rejected_capacity(
-                    timestamp=current_time,
-                    strategy=strategy_name,
-                    signal_id=trade_data["signal_id"],
-                    contract_address=trade_data["contract_address"],
-                    result=out,
-                    reason="max_open_positions",
-                    meta={"open_positions": len(state.open_positions), "max_open_positions": self.config.max_open_positions},
-                )
             )
             return None
 
@@ -1930,18 +1791,6 @@ class PortfolioEngine:
                 signal_blocked_by_capacity=True,
                 position_closed=False,
             )
-            # Эмитим событие ATTEMPT_REJECTED_RISK (v1.9) - это риск-правило
-            portfolio_events.append(
-                PortfolioEvent.create_attempt_rejected_risk(
-                    timestamp=current_time,
-                    strategy=strategy_name,
-                    signal_id=trade_data["signal_id"],
-                    contract_address=trade_data["contract_address"],
-                    result=out,
-                    reason="max_exposure",
-                    meta={"desired_size": desired_size, "max_allowed_notional": max_allowed_notional},
-                )
-            )
             return None
         
         size = desired_size
@@ -1954,18 +1803,6 @@ class PortfolioEngine:
                 state=state,
                 signal_blocked_by_capacity=True,
                 position_closed=False,
-            )
-            # Эмитим событие ATTEMPT_REJECTED_RISK (v1.9) - это риск-правило
-            portfolio_events.append(
-                PortfolioEvent.create_attempt_rejected_risk(
-                    timestamp=current_time,
-                    strategy=strategy_name,
-                    signal_id=trade_data["signal_id"],
-                    contract_address=trade_data["contract_address"],
-                    result=out,
-                    reason="size_too_small",
-                    meta={"size": size},
-                )
             )
             return None
         
@@ -1984,18 +1821,6 @@ class PortfolioEngine:
         raw_exit_price = out.exit_price or 0.0
         
         if raw_entry_price <= 0 or raw_exit_price <= 0:
-            # Эмитим событие ATTEMPT_REJECTED_INVALID_INPUT (v1.9)
-            portfolio_events.append(
-                PortfolioEvent.create_attempt_rejected_invalid_input(
-                    timestamp=current_time,
-                    strategy=strategy_name,
-                    signal_id=trade_data["signal_id"],
-                    contract_address=trade_data["contract_address"],
-                    result=out,
-                    reason="invalid_price",
-                    meta={"entry_price": raw_entry_price, "exit_price": raw_exit_price},
-                )
-            )
             return None
         
         # Применяем slippage к ценам
@@ -2009,16 +1834,16 @@ class PortfolioEngine:
         # Network fee вычитается отдельно из баланса
         network_fee = self.execution_model.network_fee()
         
-        # Итоговый PnL с учетом slippage (fees будут вычтены из нотионала при закрытии)
-        net_pnl_pct = effective_pnl_pct
-        
-        # Вычитаем размер позиции и network fee из баланса при открытии
-        state.balance -= size  # Платим полный размер позиции
-        state.balance -= network_fee  # Network fee при входе
-        
         # Создаем Position с эффективными ценами
         # Проверяем, является ли стратегия Runner
         is_runner = out.meta.get("runner_ladder", False)
+
+        # Итоговый PnL (Runner uses realized_multiple, not exit_price)
+        net_pnl_pct = out.pnl if is_runner else effective_pnl_pct
+
+        # Вычитаем размер позиции и network fee из баланса при открытии
+        state.balance -= size  # Платим полный размер позиции
+        state.balance -= network_fee  # Network fee при входе
         
         pos_meta = {
             "strategy": strategy_name,
@@ -2033,6 +1858,7 @@ class PortfolioEngine:
             # Исполненные цены (с slippage) для расчета PnL и баланса
             "exec_entry_price": effective_entry_price,
             "exec_exit_price": effective_exit_price,
+            "close_reason": out.reason,
         }
         
         # Для Runner сохраняем данные о частичных выходах и original_size
@@ -2066,17 +1892,17 @@ class PortfolioEngine:
             meta=pos_meta,
         )
         
-        # Эмитим событие ATTEMPT_ACCEPTED_OPEN (v1.9) - позиция успешно открыта
-        portfolio_events.append(
-            PortfolioEvent.create_attempt_accepted(
-                timestamp=current_time,
-                strategy=strategy_name,
-                signal_id=trade_data["signal_id"],
-                contract_address=trade_data["contract_address"],
-                result=out,
-                meta={"size": size, "open_positions": len(state.open_positions) + 1},
-            )
+        # Эмитим событие POSITION_OPENED
+        event = PortfolioEvent.create_position_opened(
+            timestamp=current_time,
+            strategy=strategy_name,
+            signal_id=trade_data["signal_id"],
+            contract_address=trade_data["contract_address"],
+            position_id=pos.position_id,
+            meta={"size": size, "open_positions": len(state.open_positions) + 1},
         )
+        portfolio_events.append(event)
+        pos.meta["open_event_id"] = event.event_id
         
         # Эмитим событие POSITION_OPENED с position_id
         portfolio_events.append(
@@ -2108,11 +1934,11 @@ class PortfolioEngine:
             "result": StrategyOutput
         }
         """
-        # 1. Отфильтровать по стратегии (но НЕ по entry/exit - attempts должны эмитить события)
+        # 1. Отфильтровать по стратегии (Runner-only: только исполненные сделки)
         trades: List[Dict[str, Any]] = []
         total_results = len(all_results)
         filtered_by_strategy = 0
-        filtered_by_entry = 0  # Считаем для статистики, но не фильтруем
+        filtered_by_entry = 0
         filtered_by_window = 0
         
         for r in all_results:
@@ -2123,11 +1949,9 @@ class PortfolioEngine:
             if not isinstance(out_result, StrategyOutput):
                 continue
             
-            # v1.9: НЕ фильтруем по entry_time/exit_time здесь - attempts должны эмитить события
-            # Считаем для статистики, но не пропускаем
             if out_result.entry_time is None or out_result.exit_time is None:
                 filtered_by_entry += 1
-                # Продолжаем обработку - эти attempts будут обработаны в цикле событий
+                continue
             
             # Фильтрация по окну по entry_time (только для executed trades с entry_time)
             # Для attempts без entry_time используем timestamp сигнала
@@ -2177,25 +2001,20 @@ class PortfolioEngine:
             trade_output: StrategyOutput = trade["result"]
             trade_entry_time: Optional[datetime] = trade_output.entry_time
             trade_exit_time: Optional[datetime] = trade_output.exit_time
-            
-            # v1.9: для no_candles/corrupt создаём ENTRY событие с timestamp сигнала (для эмиссии событий)
-            # event_time для TradeEvent: используем entry_time если есть, иначе timestamp сигнала
-            event_timestamp = trade_entry_time if trade_entry_time is not None else trade.get("timestamp", datetime.now(timezone.utc))
-            
-            # Создаем ENTRY событие (даже если entry_time is None - для эмиссии ATTEMPT_REJECTED_*)
+            if trade_entry_time is None or trade_exit_time is None:
+                continue
+
             events.append(TradeEvent(
                 event_type=EventType.ENTRY,
-                event_time=event_timestamp,  # Используем timestamp сигнала для no_candles/corrupt
-                trade_data=trade
+                event_time=trade_entry_time,
+                trade_data=trade,
             ))
-            
-            # Создаем EXIT событие только если есть exit_time
-            if trade_exit_time is not None:
-                events.append(TradeEvent(
-                    event_type=EventType.EXIT,
-                    event_time=trade_exit_time,
-                    trade_data=trade
-                ))
+
+            events.append(TradeEvent(
+                event_type=EventType.EXIT,
+                event_time=trade_exit_time,
+                trade_data=trade,
+            ))
         
         # Сортируем события по времени (EXIT перед ENTRY на одном timestamp)
         events.sort()
@@ -2277,89 +2096,8 @@ class PortfolioEngine:
                 contract_address = trade_data["contract_address"]
                 strategy_name = trade_data.get("strategy", "unknown")
                 
-                # Определяем timestamp для события (fallback на event_time если entry_time отсутствует)
-                event_timestamp = entry_time if entry_time is not None else event.event_time
-                
-                # Проверяем причину отсутствия entry_time (no_candles/corrupt) - канонические значения v1.9
-                meta_detail = entry_output.meta.get("detail", "") if entry_output.meta else ""
-                is_no_candles = (
-                    entry_time is None and
-                    entry_output.reason == "no_entry" and
-                    meta_detail == "no_candles"
-                )
-                is_corrupt = (
-                    entry_time is None and
-                    entry_output.reason == "no_entry" and
-                    meta_detail == "corrupt_candles"
-                )
-                
-                # Эмитим ATTEMPT_RECEIVED событие (v1.9)
-                attempt_received = PortfolioEvent.create_attempt_received(
-                    timestamp=event_timestamp,
-                    strategy=strategy_name,
-                    signal_id=signal_id,
-                    contract_address=contract_address,
-                    result=entry_output,
-                )
-                portfolio_events.append(attempt_received)
-                
-                # Эмитим события для no_candles/corrupt (v1.9) - до проверки reset
-                if is_no_candles:
-                    portfolio_events.append(
-                        PortfolioEvent.create_attempt_rejected_no_candles(
-                            timestamp=event_timestamp,
-                            strategy=strategy_name,
-                            signal_id=signal_id,
-                            contract_address=contract_address,
-                            result=entry_output,
-                            meta=entry_output.meta or {},
-                        )
-                    )
-                    continue  # Не обрабатываем дальше
-                
-                if is_corrupt:
-                    portfolio_events.append(
-                        PortfolioEvent.create_attempt_rejected_corrupt_candles(
-                            timestamp=event_timestamp,
-                            strategy=strategy_name,
-                            signal_id=signal_id,
-                            contract_address=contract_address,
-                            result=entry_output,
-                            meta=entry_output.meta or {},
-                        )
-                    )
-                    continue  # Не обрабатываем дальше
-                
-                # Если entry_time отсутствует но это не no_candles/corrupt - эмитим STRATEGY_NO_ENTRY (v1.9)
-                # Это обычный no_entry от стратегии (неизвестный или пустой detail)
                 if entry_time is None:
-                    portfolio_events.append(
-                        PortfolioEvent.create_attempt_rejected_strategy_no_entry(
-                            timestamp=event_timestamp,
-                            strategy=strategy_name,
-                            signal_id=signal_id,
-                            contract_address=contract_address,
-                            result=entry_output,
-                            reason="strategy_no_entry",
-                            meta=entry_output.meta or {},
-                        )
-                    )
-                    continue  # Не обрабатываем дальше
-                
-                # Проверка: игнорируем входы до следующего сигнала после reset
-                if self.config.runner_reset_enabled and state.reset_until is not None and entry_time <= state.reset_until:
-                    skipped_by_reset += 1
-                    # Эмитим событие ATTEMPT_REJECTED_STRATEGY_NO_ENTRY (или специальный тип для reset)
-                    portfolio_events.append(
-                        PortfolioEvent.create_attempt_rejected_strategy_no_entry(
-                            timestamp=entry_time,
-                            strategy=strategy_name,
-                            signal_id=signal_id,
-                            contract_address=contract_address,
-                            result=entry_output,
-                            reason="runner_reset_cooldown",
-                        )
-                    )
+                    skipped_by_risk += 1
                     continue
                 
                 # Попытка открыть позицию
@@ -2382,7 +2120,7 @@ class PortfolioEngine:
                 trades_executed += 1  # Инкрементируем счетчик только при открытии позиции
                 signal_index += 1  # Инкрементируем signal_index для cooldown tracking (hardening v1.7.1)
                 state.equity_curve.append({"timestamp": entry_time, "balance": state.balance})
-                # Событие ATTEMPT_ACCEPTED_OPEN уже эмитировано в _try_open_position
+                # Событие POSITION_OPENED уже эмитировано в _try_open_position
             
             # После обработки всех событий на текущем timestamp: проверяем profit reset ПЕРЕД capacity
             # Порядок приоритетов: profit reset > capacity (hardening v1.7.1)
@@ -2415,7 +2153,7 @@ class PortfolioEngine:
                             marker_position=marker_position,
                             reset_time=current_time,
                             positions_to_force_close=other_positions_to_force_close,
-                            reason=ResetReason.EQUITY_THRESHOLD,
+                            reason=ResetReason.PROFIT_RESET,
                             portfolio_events=portfolio_events,
                         )
                         self._dbg_meta(marker_position, "AFTER_profit_reset_at_timestamp")
@@ -2458,7 +2196,7 @@ class PortfolioEngine:
                             marker_position=capacity_reset_context.marker_position,
                             reset_time=capacity_reset_context.reset_time,
                             positions_to_force_close=capacity_reset_context.positions_to_force_close,
-                            reason=ResetReason.CAPACITY_PRESSURE,
+                            reason=ResetReason.CAPACITY_PRUNE,
                             portfolio_events=portfolio_events,
                         )
                         # Обновляем positions_by_signal_id после reset
@@ -2534,7 +2272,7 @@ class PortfolioEngine:
                         marker_position=marker_position,
                         reset_time=reset_time_portfolio,
                         positions_to_force_close=positions_to_force_close,
-                        reason=ResetReason.EQUITY_THRESHOLD,
+                        reason=ResetReason.PROFIT_RESET,
                         portfolio_events=portfolio_events,
                     )
                     self._dbg_meta(marker_position, "AFTER_process_portfolio_level_reset_final_close")
@@ -2565,54 +2303,27 @@ class PortfolioEngine:
         # Сохраняем prune events для observability (hardening v1.7.1)
         capacity_prune_events = getattr(state, 'capacity_prune_events', [])
         
-        # Пересчет BC счетчиков из событий (v1.9)
+        # Пересчет счетчиков из событий (v2.0)
         if portfolio_events:
-            # Capacity prune счетчики
+            reset_events = [
+                e for e in portfolio_events
+                if e.event_type == PortfolioEventType.PORTFOLIO_RESET_TRIGGERED
+            ]
+            profit_reset_events = [e for e in reset_events if e.reason == "profit_reset"]
+            capacity_reset_events = [e for e in reset_events if e.reason == "capacity_prune"]
+            state.portfolio_reset_profit_count = len(profit_reset_events)
+            state.portfolio_reset_capacity_count = len(capacity_reset_events)
+            state.portfolio_reset_count = state.portfolio_reset_profit_count + state.portfolio_reset_capacity_count
+            if reset_events:
+                state.last_portfolio_reset_time = max(e.timestamp for e in reset_events)
+
             prune_close_events = [
-                e for e in portfolio_events 
-                if e.event_type == PortfolioEventType.CLOSED_BY_CAPACITY_PRUNE
+                e for e in portfolio_events
+                if e.event_type == PortfolioEventType.POSITION_CLOSED and e.reason == "capacity_prune"
             ]
             if prune_close_events:
                 state.portfolio_capacity_prune_count = len(prune_close_events)
                 state.last_capacity_prune_time = max(e.timestamp for e in prune_close_events)
-            
-            # Capacity close-all счетчики
-            capacity_close_all_events = [
-                e for e in portfolio_events 
-                if e.event_type == PortfolioEventType.CAPACITY_CLOSE_ALL_TRIGGERED
-            ]
-            if capacity_close_all_events:
-                # Считаем количество закрытых позиций из событий закрытий
-                capacity_close_all_closed = [
-                    e for e in portfolio_events 
-                    if e.event_type == PortfolioEventType.CLOSED_BY_CAPACITY_CLOSE_ALL
-                ]
-                state.portfolio_reset_capacity_count = len(capacity_close_all_events)
-                if capacity_close_all_closed:
-                    state.last_portfolio_reset_time = max(e.timestamp for e in capacity_close_all_closed)
-            
-            # Profit reset счетчики
-            profit_reset_events = [
-                e for e in portfolio_events 
-                if e.event_type == PortfolioEventType.PROFIT_RESET_TRIGGERED
-            ]
-            if profit_reset_events:
-                # Считаем количество закрытых позиций из событий закрытий
-                profit_reset_closed = [
-                    e for e in portfolio_events 
-                    if e.event_type == PortfolioEventType.CLOSED_BY_PROFIT_RESET
-                ]
-                state.portfolio_reset_profit_count = len(profit_reset_events)
-                # Обновляем общий portfolio_reset_count
-                state.portfolio_reset_count = (
-                    state.portfolio_reset_profit_count + 
-                    state.portfolio_reset_capacity_count
-                )
-                if profit_reset_closed:
-                    profit_reset_time = max(e.timestamp for e in profit_reset_closed)
-                    # Обновляем last_portfolio_reset_time если profit reset был позже
-                    if state.last_portfolio_reset_time is None or profit_reset_time > state.last_portfolio_reset_time:
-                        state.last_portfolio_reset_time = profit_reset_time
         
         stats = PortfolioStats(
             final_balance_sol=final_balance,
@@ -2621,8 +2332,6 @@ class PortfolioEngine:
             trades_executed=trades_executed,  # Используем счетчик открытых позиций, а не len(closed_positions)
             trades_skipped_by_risk=skipped_by_risk,
             trades_skipped_by_reset=skipped_by_reset,
-            runner_reset_count=state.runner_reset_count,
-            last_runner_reset_time=state.last_runner_reset_time,
             portfolio_reset_count=state.portfolio_reset_count,
             last_portfolio_reset_time=state.last_portfolio_reset_time,
             portfolio_reset_profit_count=getattr(state, 'portfolio_reset_profit_count', 0),
@@ -2646,7 +2355,6 @@ class PortfolioEngine:
             positions_count=len(state.closed_positions),
             reset_positions_count=len(reset_positions),
             reset_positions_signal_ids=[p.signal_id for p in reset_positions],
-            runner_reset_count=state.runner_reset_count,
             portfolio_reset_count=state.portfolio_reset_count,
             cycle_start_equity=state.cycle_start_equity,
             equity_peak_in_cycle=state.equity_peak_in_cycle,
@@ -2661,7 +2369,3 @@ class PortfolioEngine:
             positions=state.closed_positions,
             stats=stats,
         )
-
-
-
-

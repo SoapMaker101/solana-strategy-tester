@@ -1,5 +1,6 @@
 # backtester/domain/position.py
 from dataclasses import dataclass, field
+from uuid import uuid4
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -40,6 +41,8 @@ class Position:
         """Гарантируем, что meta всегда существует."""
         if self.meta is None:
             self.meta = {}
+        if not self.position_id:
+            self.position_id = uuid4().hex
     
     def mark_closed_by_reset(self) -> None:
         """
