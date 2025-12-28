@@ -1,12 +1,22 @@
 # Changelog
 
-## [Feature: Portfolio Events v1.9] - 2025-01-XX
+## [Release: Portfolio Events v1.9] - 2025-01-XX
 
-### Portfolio Events: Canonical event-driven architecture
+### Portfolio Events: Canonical event-driven architecture (RELEASE)
 
 #### 🎯 Цель изменений
 
 Ввести каноническую семантику Portfolio Events как "источник истины" для всех решений портфеля. Четко разделить ATTEMPT (попытка входа) и EXECUTED (реальная позиция), устранить двусмысленность "trade == attempt".
+
+#### ✅ Релизные изменения (v1.9 final)
+
+- **PortfolioEvents append-only**: События только добавляются, не удаляются (канонический источник истины)
+- **Capacity pressure из событий**: Рассчитывается из `ATTEMPT_ACCEPTED_OPEN` + `ATTEMPT_REJECTED_CAPACITY` (не из legacy счетчиков)
+- **include_skipped_attempts в Runner**: Параметр `include_skipped_attempts=True` в `main.py` для эмиссии событий no_candles/corrupt
+- **meta.detail канонизирован**: Стандартные значения `"no_candles"`, `"corrupt_candles"` для детерминированного маппинга
+- **Детерминированный маппинг**: `PortfolioEngine.simulate()` всегда эмитит `ATTEMPT_RECEIVED` и корректные rejected события по `meta.detail`
+- **Исправления prune-candidates**: None-friendly фильтры для `mcap_usd` и `current_pnl_pct`
+- **Strategy filter убран из signals-window**: Capacity window строится только из attempt событий, не учитывает strategy filtering
 
 #### ✨ Основные изменения
 

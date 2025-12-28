@@ -1952,11 +1952,11 @@ class PortfolioEngine:
             "result": StrategyOutput
         }
         """
-        # 1. Отфильтровать по стратегии и backtest window
+        # 1. Отфильтровать по стратегии (но НЕ по entry/exit - attempts должны эмитить события)
         trades: List[Dict[str, Any]] = []
         total_results = len(all_results)
         filtered_by_strategy = 0
-        filtered_by_entry = 0
+        filtered_by_entry = 0  # Считаем для статистики, но не фильтруем
         filtered_by_window = 0
         
         for r in all_results:
@@ -1966,17 +1966,23 @@ class PortfolioEngine:
             out_result = r.get("result")  # type: ignore
             if not isinstance(out_result, StrategyOutput):
                 continue
+            
+            # v1.9: НЕ фильтруем по entry_time/exit_time здесь - attempts должны эмитить события
+            # Считаем для статистики, но не пропускаем
             if out_result.entry_time is None or out_result.exit_time is None:
                 filtered_by_entry += 1
-                continue
-
-            # Фильтрация по окну по entry_time
-            if self.config.backtest_start and out_result.entry_time < self.config.backtest_start:
-                filtered_by_window += 1
-                continue
-            if self.config.backtest_end and out_result.entry_time > self.config.backtest_end:
-                filtered_by_window += 1
-                continue
+                # Продолжаем обработку - эти attempts будут обработаны в цикле событий
+            
+            # Фильтрация по окну по entry_time (только для executed trades с entry_time)
+            # Для attempts без entry_time используем timestamp сигнала
+            trade_timestamp = out_result.entry_time if out_result.entry_time is not None else r.get("timestamp")
+            if trade_timestamp:
+                if self.config.backtest_start and trade_timestamp < self.config.backtest_start:
+                    filtered_by_window += 1
+                    continue
+                if self.config.backtest_end and trade_timestamp > self.config.backtest_end:
+                    filtered_by_window += 1
+                    continue
             
             # Дополнительная проверка: если exit_time выходит за backtest_end, 
             # обрезаем exit_time до backtest_end (но это требует доступа к ценам, пока пропускаем)
