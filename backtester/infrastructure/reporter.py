@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import List, Dict, Any, Optional
 import json
+import csv
 import statistics
 from pathlib import Path
 from datetime import datetime
@@ -1434,15 +1435,16 @@ class Reporter:
             
             summary_rows.append(row)
         
-        # Создаем DataFrame и сохраняем
+        # Определяем путь к файлу
+        summary_path = self.output_dir / "portfolio_policy_summary.csv"
+        
+        # Определяем колонки (используем из первого элемента или фиксированный список)
         if summary_rows:
-            df = pd.DataFrame(summary_rows)
-            summary_path = self.output_dir / "portfolio_policy_summary.csv"
-            df.to_csv(summary_path, index=False)
-            print(f"📊 Saved portfolio policy summary to {summary_path}")
+            # Берем ключи из первого элемента
+            fieldnames = list(summary_rows[0].keys())
         else:
-            # Создаем пустой файл с правильными колонками
-            df = pd.DataFrame([], columns=[
+            # Фиксированный список колонок для пустого файла
+            fieldnames = [
                 "strategy",
                 "portfolio_reset_profit_count",
                 "portfolio_reset_capacity_count",
@@ -1451,9 +1453,17 @@ class Reporter:
                 "median_pruned_hold_days",
                 "median_pruned_current_pnl_pct",
                 "pruned_positions_share_of_all_closed",
-            ])
-            summary_path = self.output_dir / "portfolio_policy_summary.csv"
-            df.to_csv(summary_path, index=False)
+            ]
+        
+        # Записываем CSV с использованием стандартной библиотеки
+        with open(summary_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(summary_rows)
+        
+        if summary_rows:
+            print(f"📊 Saved portfolio policy summary to {summary_path}")
+        else:
             print(f"📊 Saved empty portfolio policy summary to {summary_path}")
     
     def save_report_pack_xlsx(
