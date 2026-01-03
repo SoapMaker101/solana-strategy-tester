@@ -66,7 +66,6 @@ def test_runner_partial_exit_reduces_exposure():
             "levels_hit": {"2.0": level_2x_time.isoformat()},
             "fractions_exited": {"2.0": 0.4},  # 40% закрыто на 2x
             "realized_multiple": 2.0,  # Итоговый multiple
-            "time_stop_triggered": False,
         }
     )
     
@@ -155,7 +154,6 @@ def test_runner_max_open_positions_limit():
                 "levels_hit": {},
                 "fractions_exited": {},
                 "realized_multiple": 2.0,
-                "time_stop_triggered": False,
             }
         )
         
@@ -220,7 +218,6 @@ def test_runner_dynamic_allocation_changes_notional():
             "levels_hit": {},
             "fractions_exited": {},
             "realized_multiple": 2.0,
-            "time_stop_triggered": False,
         }
     )
     
@@ -240,7 +237,6 @@ def test_runner_dynamic_allocation_changes_notional():
             "levels_hit": {},
             "fractions_exited": {},
             "realized_multiple": 2.0,
-            "time_stop_triggered": False,
         }
     )
     
@@ -290,83 +286,6 @@ def test_runner_dynamic_allocation_changes_notional():
         f"а не быть фиксированным как первая ({original_size_1})"
 
 
-def test_runner_time_stop_closes_remainder():
-    """
-    Тест: time_stop закрывает остаток корректно.
-    
-    Сценарий:
-    - Открываем позицию Runner
-    - Достигаем уровня 2x, закрываем 40%
-    - Time_stop срабатывает, закрываем остаток 60%
-    """
-    initial_balance = 10.0
-    
-    config = PortfolioConfig(
-        initial_balance_sol=initial_balance,
-        allocation_mode="dynamic",
-        percent_per_trade=0.1,
-        max_exposure=1.0,
-        max_open_positions=10,
-        fee_model=FeeModel(
-            swap_fee_pct=0.003,
-            lp_fee_pct=0.001,
-            slippage_pct=0.0,
-            network_fee_sol=0.0005
-        )
-    )
-    
-    engine = PortfolioEngine(config)
-    
-    entry_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    level_2x_time = entry_time + timedelta(minutes=10)
-    time_stop_time = entry_time + timedelta(hours=1)
-    
-    # Runner с time_stop
-    strategy_output = StrategyOutput(
-        entry_time=entry_time,
-        entry_price=100.0,
-        exit_time=time_stop_time,
-        exit_price=150.0,  # Цена на момент time_stop
-        pnl=0.5,  # 50% для остатка
-        reason="time_stop",
-        meta={
-            "runner_ladder": True,
-            "levels_hit": {"2.0": level_2x_time.isoformat()},
-            "fractions_exited": {"2.0": 0.4},  # 40% закрыто на 2x
-            "realized_multiple": 1.7,  # 0.4 * 2.0 + 0.6 * 1.5 = 0.8 + 0.9 = 1.7
-            "time_stop_triggered": True,
-        }
-    )
-    
-    all_results = [{
-        "signal_id": "test_runner_time_stop",
-        "contract_address": "TESTTOKEN",
-        "strategy": "runner_strategy",
-        "timestamp": entry_time,
-        "result": strategy_output
-    }]
-    
-    result = engine.simulate(all_results, strategy_name="runner_strategy")
-    
-    # Проверки
-    assert result.stats.trades_executed == 1
-    position = result.positions[0]
-    
-    # Проверяем, что позиция полностью закрыта
-    assert position.status == "closed"
-    assert position.size <= 1e-6
-    
-    # Проверяем частичные выходы
-    assert "partial_exits" in position.meta
-    partial_exits = position.meta["partial_exits"]
-    
-    # Должен быть частичный выход на 2x
-    exit_2x = next((e for e in partial_exits if abs(e.get("xn", 0) - 2.0) < 0.01), None)
-    assert exit_2x is not None
-    
-    # Должен быть остаток, закрытый по time_stop
-    remainder_exit = next((e for e in partial_exits if e.get("is_remainder", False)), None)
-    assert remainder_exit is not None, "Должен быть остаток, закрытый по time_stop"
     assert remainder_exit["exit_size"] == pytest.approx(0.6, rel=1e-3)  # 60% остаток
 
 
@@ -422,7 +341,6 @@ def test_runner_fees_applied_to_each_partial_exit():
                 "5.0": 0.4,  # 40% на 5x
             },
             "realized_multiple": 4.8,  # 0.4 * 2.0 + 0.4 * 5.0 + 0.2 * 5.0 = 4.8
-            "time_stop_triggered": False,
         }
     )
     
@@ -514,7 +432,6 @@ def test_runner_isoformat_datetime_parsing():
                 "3.0": 0.3,  # 30% на 3x
             },
             "realized_multiple": 2.5,
-            "time_stop_triggered": False,
         }
     )
     
@@ -553,6 +470,7 @@ def test_runner_isoformat_datetime_parsing():
             # Проверяем, что парсинг прошел успешно, проверяя наличие других полей
             assert "exit_size" in exit_info
             assert "exit_price" in exit_info
+
 
 
 

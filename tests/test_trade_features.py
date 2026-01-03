@@ -175,7 +175,6 @@ def test_runner_strategy_includes_features_in_meta():
             RunnerTakeProfitLevel(xn=5.0, fraction=0.3),
             RunnerTakeProfitLevel(xn=10.0, fraction=0.2),
         ],
-        time_stop_minutes=None,
         use_high_for_targets=True,
         exit_on_first_tp=False,
         allow_partial_fills=True

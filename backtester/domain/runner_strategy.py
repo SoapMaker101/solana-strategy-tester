@@ -127,7 +127,6 @@ class RunnerStrategy(Strategy):
         # Преобразуем reason из RunnerTradeResult в StrategyOutput.reason
         # Для ladder используем "ladder_tp" вместо "tp"
         reason_map: dict[str, Literal["ladder_tp", "tp", "sl", "timeout", "no_entry", "error"]] = {
-            "time_stop": "timeout",
             "all_levels_hit": "ladder_tp",  # Все уровни достигнуты = ladder take profit
             "no_data": "no_entry"
         }
@@ -161,12 +160,11 @@ class RunnerStrategy(Strategy):
             "levels_hit": {str(k): v.isoformat() for k, v in ladder_result.levels_hit.items()},
             "fractions_exited": {str(k): v for k, v in ladder_result.fractions_exited.items()},
             "realized_multiple": ladder_result.realized_multiple,
-            "time_stop_triggered": ladder_result.reason == "time_stop",
             # Дополнительная информация
             "runner_ladder": True,
             "entry_idx": 0,
-            # Сохраняем канонический reason для ladder (ladder_tp вместо tp)
-            "ladder_reason": reason_str,  # "ladder_tp" или "timeout" или "no_entry"
+            # Сохраняем канонический reason для ladder (ladder_tp или no_entry)
+            "ladder_reason": reason_str,  # "ladder_tp" или "no_entry"
         }
         
         # Добавляем trade features
@@ -253,13 +251,27 @@ class RunnerStrategy(Strategy):
                     )
                 )
 
-        # Создаём final_exit если стратегия сама закрыла позицию
+        # Создаём final_exit только если все уровни достигнуты и позиция полностью закрыта
+        # Если уровни не достигнуты - final_exit=None (позиция остается открытой для портфеля)
         final_exit: Optional[FinalExitBlueprint] = None
-        if ladder_result.exit_time and ladder_result.reason in ("time_stop", "all_levels_hit"):
-            final_exit = FinalExitBlueprint(
-                timestamp=ladder_result.exit_time,
-                reason=ladder_result.reason
-            )
+        if ladder_result.exit_time and ladder_result.reason == "all_levels_hit":
+            # Проверяем, что позиция действительно полностью закрыта (нет остатка)
+            # Это значит, что все частичные выходы выполнены и remaining_position = 0
+            # В ladder_result это можно определить по тому, что realized_multiple соответствует полной позиции
+            # или по тому, что все уровни были достигнуты и закрыты
+            # Для простоты: если reason == "all_levels_hit", значит все уровни достигнуты
+            # Но если есть остаток - позиция не полностью закрыта стратегией
+            # На самом деле, если reason == "all_levels_hit", позиция может быть не полностью закрыта
+            # если не все уровни были достигнуты, но мы дошли до конца данных
+            # Поэтому лучше не создавать final_exit, если позиция не полностью закрыта
+            # Для надежности: создаем final_exit только если все частичные выходы выполнены
+            # (проверяем, что сумма fractions_exited близка к 1.0 или levels_hit содержит все уровни)
+            total_fraction_exited = sum(ladder_result.fractions_exited.values())
+            if total_fraction_exited >= 0.99:  # Практически вся позиция закрыта
+                final_exit = FinalExitBlueprint(
+                    timestamp=ladder_result.exit_time,
+                    reason="all_levels_hit"
+                )
 
         # Вычисляем max_xn_reached (максимальный xn из достигнутых уровней)
         max_xn_reached = max(ladder_result.levels_hit.keys()) if ladder_result.levels_hit else 0.0

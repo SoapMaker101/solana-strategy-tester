@@ -100,11 +100,11 @@ def sample_blueprints(base_time):
         partial_exits=[],
         final_exit=FinalExitBlueprint(
             timestamp=base_time + timedelta(minutes=40),
-            reason="time_stop"
+            reason="all_levels_hit"
         ),
         realized_multiple=1.5,
         max_xn_reached=1.5,
-        reason="time_stop"
+        reason="all_levels_hit"
     ))
     
     return blueprints
@@ -130,7 +130,6 @@ def test_replay_two_configs_same_blueprints_different_equity(base_time, fee_mode
         max_exposure=1.0,
         max_open_positions=10,
         fee_model=fee_model,
-        use_replay_mode=True,
     )
     
     # Config 2: dynamic allocation
@@ -141,7 +140,6 @@ def test_replay_two_configs_same_blueprints_different_equity(base_time, fee_mode
         max_exposure=1.0,
         max_open_positions=10,
         fee_model=fee_model,
-        use_replay_mode=True,
     )
     
     # Replay с fixed config
@@ -216,7 +214,6 @@ def test_replay_capacity_blocking_skips_positions(base_time, fee_model):
         max_exposure=1.0,
         max_open_positions=2,  # Только 2 позиции одновременно
         fee_model=fee_model,
-        use_replay_mode=True,
     )
     
     result = PortfolioReplay.replay(

@@ -107,35 +107,35 @@ def test_reporter_saves_portfolio_artifacts_in_output_dir(sample_portfolio_resul
 
 
 def test_reporter_files_not_mixed_between_dirs(sample_blueprint, sample_portfolio_result):
-    """Тест: файлы не смешиваются между разными reports_dir (legacy vs replay)."""
+    """Тест: файлы не смешиваются между разными reports_dir."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        legacy_dir = Path(tmpdir) / "legacy"
-        replay_dir = Path(tmpdir) / "replay"
+        reports_dir_1 = Path(tmpdir) / "reports_1"
+        reports_dir_2 = Path(tmpdir) / "reports_2"
         
         # Создаем два репортера с разными директориями
-        legacy_reporter = Reporter(output_dir=str(legacy_dir))
-        replay_reporter = Reporter(output_dir=str(replay_dir))
+        reporter_1 = Reporter(output_dir=str(reports_dir_1))
+        reporter_2 = Reporter(output_dir=str(reports_dir_2))
         
-        # Сохраняем strategy_trades.csv в legacy
-        legacy_reporter.save_strategy_trades([sample_blueprint])
+        # Сохраняем strategy_trades.csv в reports_dir_1
+        reporter_1.save_strategy_trades([sample_blueprint])
         
-        # Сохраняем portfolio артефакты в replay
+        # Сохраняем portfolio артефакты в reports_dir_2
         portfolio_results = {"test_strategy": sample_portfolio_result}
-        replay_reporter.save_portfolio_positions_table(portfolio_results)
+        reporter_2.save_portfolio_positions_table(portfolio_results)
         
         # Проверяем, что файлы в правильных директориях
-        legacy_strategy_trades = legacy_dir / "strategy_trades.csv"
-        replay_positions = replay_dir / "portfolio_positions.csv"
+        strategy_trades_1 = reports_dir_1 / "strategy_trades.csv"
+        positions_2 = reports_dir_2 / "portfolio_positions.csv"
         
-        assert legacy_strategy_trades.exists(), "strategy_trades.csv должен быть в legacy_dir"
-        assert replay_positions.exists(), "portfolio_positions.csv должен быть в replay_dir"
+        assert strategy_trades_1.exists(), "strategy_trades.csv должен быть в reports_dir_1"
+        assert positions_2.exists(), "portfolio_positions.csv должен быть в reports_dir_2"
         
         # Проверяем, что файлы НЕ в неправильных директориях
-        replay_strategy_trades = replay_dir / "strategy_trades.csv"
-        legacy_positions = legacy_dir / "portfolio_positions.csv"
+        strategy_trades_2 = reports_dir_2 / "strategy_trades.csv"
+        positions_1 = reports_dir_1 / "portfolio_positions.csv"
         
-        assert not replay_strategy_trades.exists(), "strategy_trades.csv НЕ должен быть в replay_dir"
-        assert not legacy_positions.exists(), "portfolio_positions.csv НЕ должен быть в legacy_dir (на этом этапе)"
+        assert not strategy_trades_2.exists(), "strategy_trades.csv НЕ должен быть в reports_dir_2"
+        assert not positions_1.exists(), "portfolio_positions.csv НЕ должен быть в reports_dir_1"
 
 
 def test_reporter_all_artifacts_in_same_dir(sample_blueprint, sample_portfolio_result):

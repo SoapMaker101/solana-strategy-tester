@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Literal
 
 import pandas as pd
@@ -17,12 +17,16 @@ class RunnerTradeResult:
     Attributes:
         entry_time: Время входа в позицию
         entry_price: Цена входа
-        exit_time: Финальное время выхода (когда закрыли последнюю долю или time_stop)
+        exit_time: Финальное время выхода (когда закрыли последнюю долю или кончились данные)
         realized_multiple: Итоговый multiple на позицию (например, 3.2x)
         realized_pnl_pct: Реализованная прибыль/убыток в процентах
         levels_hit: Словарь {xn: hit_time} - когда был достигнут каждый уровень
         fractions_exited: Словарь {xn: fraction} - какая доля была закрыта на каждом уровне
-        reason: Причина завершения ("time_stop" | "all_levels_hit" | "no_data")
+        reason: Причина завершения ("all_levels_hit" | "no_data")
+    
+    Note:
+        Временное закрытие позиций выполняется только на уровне портфеля
+        через PortfolioConfig.max_hold_minutes, а не на уровне стратегии.
     """
     entry_time: datetime
     entry_price: float
@@ -31,7 +35,7 @@ class RunnerTradeResult:
     realized_pnl_pct: float
     levels_hit: Dict[float, datetime]
     fractions_exited: Dict[float, float]
-    reason: Literal["time_stop", "all_levels_hit", "no_data"]
+    reason: Literal["all_levels_hit", "no_data"]
 
 
 class RunnerLadderEngine:
@@ -41,7 +45,10 @@ class RunnerLadderEngine:
     Не зависит от PortfolioEngine и работает только с чистой логикой:
     - Отслеживание уровней тейк-профита
     - Частичное закрытие позиций
-    - Обработка time_stop
+    
+    Note:
+        Временное закрытие позиций выполняется только на уровне портфеля
+        через PortfolioConfig.max_hold_minutes, а не на уровне стратегии.
     """
     
     @staticmethod
@@ -105,11 +112,6 @@ class RunnerLadderEngine:
         fractions_exited: Dict[float, float] = {}
         total_realized_value = 0.0  # Суммарная стоимость закрытых долей
         
-        # Вычисляем time_stop если задан
-        time_stop_time = None
-        if config.time_stop_minutes is not None:
-            time_stop_time = entry_time + timedelta(minutes=config.time_stop_minutes)
-        
         # Проходим по свечам
         for idx in range(len(candles_after_entry)):
             # Используем iloc для получения скалярных значений
@@ -140,26 +142,6 @@ class RunnerLadderEngine:
                 except (ValueError, TypeError):
                     # Если не удалось преобразовать, пропускаем свечу
                     continue
-            
-            # Проверяем time_stop
-            if time_stop_time is not None and candle_time >= time_stop_time:
-                # Закрываем остаток по close последней доступной свечи
-                if remaining_position > 0:
-                    exit_price = float(candles_after_entry.iloc[idx]["close"])
-                    exit_multiple = exit_price / entry_price
-                    total_realized_value += remaining_position * exit_multiple
-                    remaining_position = 0.0
-                
-                return RunnerTradeResult(
-                    entry_time=entry_time,
-                    entry_price=entry_price,
-                    exit_time=candle_time,
-                    realized_multiple=total_realized_value,
-                    realized_pnl_pct=(total_realized_value - 1.0) * 100.0,
-                    levels_hit=levels_hit,
-                    fractions_exited=fractions_exited,
-                    reason="time_stop"
-                )
             
             # Проверяем достижение уровней
             high_val = candles_after_entry.iloc[idx]["high"]
@@ -247,11 +229,9 @@ class RunnerLadderEngine:
             exit_multiple = exit_price / entry_price
             total_realized_value += remaining_position * exit_multiple
             
-            # Определяем причину: time_stop или просто конец данных
-            if time_stop_time is not None and exit_time_dt >= time_stop_time:
-                reason: Literal["time_stop", "all_levels_hit", "no_data"] = "time_stop"
-            else:
-                reason = "all_levels_hit"  # Фактически все уровни пройдены или данных нет
+            # Если остался остаток - все уровни не достигнуты, позиция остается открытой
+            # Временное закрытие выполняется только на уровне портфеля
+            reason: Literal["all_levels_hit", "no_data"] = "all_levels_hit"
         else:
             reason = "all_levels_hit"
         
@@ -269,6 +249,7 @@ class RunnerLadderEngine:
             fractions_exited=fractions_exited,
             reason=reason
         )
+
 
 
 

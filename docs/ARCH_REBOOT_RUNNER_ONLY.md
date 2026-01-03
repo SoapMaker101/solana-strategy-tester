@@ -4,6 +4,8 @@
 
 **Статус:** Архитектурный документ (не реализация).
 
+**Обновление:** Legacy путь удален. Система использует единый путь: signals → blueprints → PortfolioReplay → reports.
+
 ---
 
 ## 1. Проблема текущей версии
@@ -21,10 +23,10 @@
    - Это связывает trade blueprint с портфельным состоянием
    - Невозможно применить один набор стратегических трейдов к разным портфельным конфигурациям
 
-3. **Time_stop_minutes — правило стратегии, но логика закрытия смешана:**
-   - `RunnerLadderEngine` проверяет `time_stop_minutes` и закрывает остаток по времени
-   - Portfolio также может закрывать позиции по reset/prune
-   - Нет четкого контракта: кто и когда закрывает позицию
+3. **Time_stop_minutes — правило стратегии, но логика закрытия смешана (РЕШЕНО):**
+   - ~~`RunnerLadderEngine` проверяет `time_stop_minutes` и закрывает остаток по времени~~ — **удалено**
+   - Теперь: стратегия не закрывает по времени, только портфель через `max_hold_minutes`
+   - Четкий контракт: стратегия определяет ladder logic, портфель — временные ограничения
 
 ### 1.2 Проблемы тестируемости
 
@@ -232,31 +234,31 @@ total_pnl_sol = sum(executions[].pnl_sol_delta) - sum(executions[].fees_sol)
 
 ### 3.1 Удаление time_stop из стратегии
 
+**Реализовано:**
+
+- ✅ `RunnerConfig.time_stop_minutes` — **удалено из стратегии**
+- ✅ `RunnerLadderEngine` больше не проверяет время — только ladder logic
+- ✅ Четкое разделение: стратегия определяет ladder, портфель — временные ограничения
+
 **Текущее состояние:**
 
-- `RunnerConfig.time_stop_minutes` — параметр стратегии
-- `RunnerLadderEngine` проверяет `time_stop_time = entry_time + time_stop_minutes` и закрывает остаток
-- Это смешивает стратегию (логика ladder) с портфельным правилом (максимальное время удержания)
-
-**Новое состояние:**
-
 - **Стратегия Runner НЕ закрывает по времени**
-- Стратегия определяет только ladder logic (fractions, уровни), но не обязательное закрытие по минутам
-- Если все уровни достигнуты → `final_exit` с `reason="ladder_tp"`
-- Если уровни не достигнуты → `final_exit = None` (портфель решает, когда закрывать)
+- Стратегия определяет только ladder logic (fractions, уровни)
+- Если все уровни достигнуты → `final_exit` с `reason="all_levels_hit"`
+- Если уровни не достигнуты → `final_exit = None` (портфель закрывает по `max_hold_minutes`)
 
-**Изменения в RunnerLadderEngine:**
+**Реализация:**
 
 ```python
-# СТАРО (удалить):
-time_stop_time = entry_time + timedelta(minutes=config.time_stop_minutes)
-if candle_time >= time_stop_time:
-    # закрываем остаток
-
-# НОВО (только ladder):
+# Стратегия (RunnerLadderEngine):
 # Проходим по свечам и закрываем доли на достигнутых уровнях
-# Если все уровни достигнуты → final_exit с reason="ladder_tp"
-# Если не достигнуты → final_exit = None (портфель решает)
+# Если все уровни достигнуты → final_exit с reason="all_levels_hit"
+# Если не достигнуты → final_exit = None
+
+# Портфель (PortfolioReplay):
+if blueprint.final_exit is None and max_hold_minutes:
+    if current_time - entry_time > max_hold_minutes:
+        # закрываем позицию с reason="max_hold_minutes"
 ```
 
 ### 3.2 Portfolio-level close rules
@@ -376,7 +378,7 @@ for blueprint in blueprints:
 
 ### 3.3 Рекомендация default режима
 
-**Рекомендация: Режим B (Close on ladder completion OR reset/prune OR portfolio max_hold_minutes)**
+**Реализовано: Режим B (Close on ladder completion OR reset/prune OR portfolio max_hold_minutes)**
 
 **Обоснование:**
 
@@ -396,10 +398,12 @@ for blueprint in blueprints:
 
 ```yaml
 portfolio:
-  max_hold_minutes: 20160  # 14 дней (как было в стратегии time_stop_minutes)
+  max_hold_minutes: 20160  # 14 дней (время закрытия на уровне портфеля, не стратегии)
   # или
   max_hold_minutes: null  # Режим A (без safety limit)
 ```
+
+**Важно:** `time_stop_minutes` удален из стратегии. Временное закрытие выполняется только на уровне портфеля через `max_hold_minutes`.
 
 ---
 
@@ -1146,22 +1150,22 @@ def update_equity_curve(
   - [ ] Методы: `replay()`, `apply_allocation()`, `apply_fees_slippage()`, `create_executions()`, `create_events()`
   - [ ] Тесты: `tests/domain/test_portfolio_replay.py`
 
-- [ ] **Добавить feature flag**
-  - [ ] Файл: `backtester/domain/portfolio.py`
-  - [ ] Параметр: `PortfolioConfig.use_replay_mode: bool = False`
-  - [ ] Логика: `PortfolioEngine.simulate()` → если `use_replay_mode=True`, использует `PortfolioReplay.replay()`
+- [x] **Добавить feature flag** ✅ ВЫПОЛНЕНО (потом удалено в Этапе 3)
+  - [x] Файл: `backtester/domain/portfolio.py` — feature flag удален
+  - [x] `PortfolioEngine.simulate()` всегда использует `PortfolioReplay.replay()`
+  - [x] `PortfolioEngine` теперь является оберткой над `PortfolioReplay`
 
-- [ ] **Убрать time_stop_minutes из стратегии (только для replay mode)**
-  - [ ] Файл: `backtester/domain/runner_ladder.py`
-  - [ ] Убрать проверку `time_stop_time` в `RunnerLadderEngine.simulate()`
-  - [ ] Если все уровни достигнуты → `final_exit` с `reason="ladder_tp"`
-  - [ ] Если не достигнуты → `final_exit = None`
+- [x] **Убрать time_stop_minutes из стратегии** ✅ ВЫПОЛНЕНО
+  - [x] Файл: `backtester/domain/runner_ladder.py` — проверка `time_stop_time` удалена
+  - [x] Файл: `backtester/domain/runner_config.py` — поле `time_stop_minutes` удалено
+  - [x] Если все уровни достигнуты → `final_exit` с `reason="all_levels_hit"`
+  - [x] Если не достигнуты → `final_exit = None` (портфель закрывает по `max_hold_minutes`)
 
-- [ ] **Добавить portfolio-level close rules**
-  - [ ] Файл: `backtester/domain/portfolio_config.py`
-  - [ ] Параметр: `max_hold_minutes: Optional[int] = None`
-  - [ ] Логика: в `PortfolioReplay.replay()` проверять max_hold_minutes и закрывать позиции
-  - [ ] Тесты: `test_portfolio_replay_max_hold_minutes()`
+- [x] **Добавить portfolio-level close rules** ✅ ВЫПОЛНЕНО
+  - [x] Файл: `backtester/domain/portfolio_config.py` — параметр `max_hold_minutes` добавлен
+  - [x] Параметр: `max_hold_minutes: Optional[int] = None`
+  - [x] Логика: в `PortfolioReplay.replay()` проверяется max_hold_minutes и закрываются позиции
+  - [x] Тесты: `test_portfolio_replay_max_hold_minutes()` создан
 
 - [ ] **Интегрировать в BacktestRunner**
   - [ ] Файл: `backtester/application/runner.py`
@@ -1173,26 +1177,26 @@ def update_equity_curve(
   - [ ] `test_portfolio_replay_profit_reset()`
   - [ ] `test_portfolio_replay_max_hold_minutes()`
 
-### Этап 3: Удалить legacy путь
+### Этап 3: Удалить legacy путь ✅ ВЫПОЛНЕНО
 
-- [ ] **Сравнить результаты legacy и replay**
-  - [ ] Скрипт: `scripts/compare_legacy_vs_replay.py` (новый)
-  - [ ] Запустить оба режима на одних данных
-  - [ ] Сравнить CSV файлы
-  - [ ] Убедиться, что различия ожидаемы
+- [x] **Сравнить результаты legacy и replay**
+  - [x] Скрипт: `scripts/compare_legacy_vs_replay.py` создан
+  - [x] Результаты сравнены, различия объяснены
 
-- [ ] **Удалить legacy код**
-  - [ ] Убрать `PortfolioConfig.use_replay_mode` (всегда True)
-  - [ ] Удалить старую логику из `PortfolioEngine.simulate()`
-  - [ ] Удалить `time_stop_minutes` из `RunnerConfig` (breaking change)
+- [x] **Удалить legacy код**
+  - [x] Убрать `PortfolioConfig.use_replay_mode` (всегда используется PortfolioReplay)
+  - [x] Удалить старую логику из `PortfolioEngine.simulate()`
+  - [x] `PortfolioEngine` теперь является оберткой над `PortfolioReplay`
+  - [x] Удалить `time_stop_minutes` из `RunnerConfig` (breaking change)
 
-- [ ] **Обновить тесты**
-  - [ ] Удалить тесты для legacy режима
-  - [ ] Обновить тесты для replay режима (теперь по умолчанию)
+- [x] **Обновить тесты**
+  - [x] Удалить тесты для legacy режима
+  - [x] Обновить тесты для единого пути через PortfolioReplay
 
-- [ ] **Обновить документацию**
-  - [ ] `docs/ARCHITECTURE.md` — обновить описание архитектуры
-  - [ ] `docs/PIPELINE_GUIDE.md` — обновить примеры конфигурации
+- [x] **Обновить документацию**
+  - [x] `docs/ARCHITECTURE.md` — обновлено описание архитектуры
+  - [x] `docs/PIPELINE_GUIDE.md` — обновлены примеры конфигурации
+  - [x] `README.md` — убраны упоминания legacy/replay режимов
   - [ ] `README.md` — обновить описание
 
 ### Общие задачи

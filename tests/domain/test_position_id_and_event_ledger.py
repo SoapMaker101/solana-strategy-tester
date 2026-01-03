@@ -202,7 +202,6 @@ def test_runner_ladder_event_ledger_correctness():
             "levels_hit": levels_hit,
             "fractions_exited": fractions_exited,
             "realized_multiple": realized_multiple,
-            "time_stop_triggered": False,
             "ladder_reason": "ladder_tp",
         }
     )
@@ -373,7 +372,6 @@ def test_runner_ladder_exit_price_not_synthetic():
                 {"xn": 5.0, "fraction": 0.4},
                 {"xn": 10.0, "fraction": 0.2},
             ],
-            "time_stop_minutes": None,
             "use_high_for_targets": True,
         }
     )

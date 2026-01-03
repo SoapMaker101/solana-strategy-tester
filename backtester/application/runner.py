@@ -358,8 +358,7 @@ class BacktestRunner:
         prune_min_candidates = capacity_reset_cfg.get("prune_min_candidates", 3)
         prune_protect_min_max_xn = capacity_reset_cfg.get("prune_protect_min_max_xn", 2.0)
         
-        # PortfolioReplay конфигурация (ЭТАП 2)
-        use_replay_mode = bool(portfolio_cfg.get("use_replay_mode", False))
+        # PortfolioReplay конфигурация
         max_hold_minutes = None
         if "max_hold_minutes" in portfolio_cfg and portfolio_cfg.get("max_hold_minutes") is not None:
             max_hold_minutes = int(portfolio_cfg.get("max_hold_minutes"))
@@ -396,7 +395,6 @@ class BacktestRunner:
             prune_cooldown_days=float(prune_cooldown_days) if prune_cooldown_days is not None else None,
             prune_min_candidates=int(prune_min_candidates),
             prune_protect_min_max_xn=float(prune_protect_min_max_xn) if prune_protect_min_max_xn is not None else None,
-            use_replay_mode=use_replay_mode,
             max_hold_minutes=max_hold_minutes,
         )
 

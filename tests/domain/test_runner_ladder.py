@@ -55,7 +55,6 @@ def test_single_level_hit(base_time, entry_price):
             "take_profit_levels": [
                 {"xn": 2.0, "fraction": 0.4}
             ],
-            "time_stop_minutes": None,
             "use_high_for_targets": True
         }
     )
@@ -94,7 +93,6 @@ def test_two_levels_hit(base_time, entry_price):
                 {"xn": 2.0, "fraction": 0.4},
                 {"xn": 5.0, "fraction": 0.4}
             ],
-            "time_stop_minutes": None,
             "use_high_for_targets": True
         }
     )
@@ -126,27 +124,26 @@ def test_two_levels_hit(base_time, entry_price):
     assert result.reason == "all_levels_hit"
 
 
-def test_time_stop_closes_remainder(base_time, entry_price):
-    """Тест: time_stop закрывает остаток"""
+def test_partial_exit_keeps_remainder_open(base_time, entry_price):
+    """Тест: частичное закрытие оставляет остаток открытым (без time_stop)"""
     config = create_runner_config_from_dict(
         "test",
         {
             "take_profit_levels": [
                 {"xn": 2.0, "fraction": 0.4}
             ],
-            "time_stop_minutes": 5,  # 5 минут
             "use_high_for_targets": True
         }
     )
     
-    # Свечи: цена растет до 2x, но не достигает полного закрытия до time_stop
+    # Свечи: цена растет до 2x, но не закрывает всю позицию
     candles_df = create_candles_df(base_time, [
         {"minutes_offset": 0, "open": 100, "high": 150, "low": 95, "close": 150},
         {"minutes_offset": 1, "open": 150, "high": 200, "low": 145, "close": 190},  # Достигли 2x
         {"minutes_offset": 2, "open": 190, "high": 210, "low": 185, "close": 200},
         {"minutes_offset": 3, "open": 200, "high": 220, "low": 195, "close": 210},
         {"minutes_offset": 4, "open": 210, "high": 230, "low": 205, "close": 220},
-        {"minutes_offset": 5, "open": 220, "high": 240, "low": 215, "close": 230},  # time_stop срабатывает здесь
+        {"minutes_offset": 5, "open": 220, "high": 240, "low": 215, "close": 230},
     ])
     
     result = RunnerLadderEngine.simulate(
@@ -156,10 +153,10 @@ def test_time_stop_closes_remainder(base_time, entry_price):
         config=config
     )
     
-    # Проверки
-    assert result.reason == "time_stop"
-    assert result.exit_time == base_time + timedelta(minutes=5)
-    # 40% закрыто на 2x, 60% закрыто по time_stop на цене 230 (2.3x)
+    # Проверки: позиция остается открытой (remainder не закрывается стратегией)
+    assert result.reason == "all_levels_hit"  # Стратегия доходит до конца данных
+    assert result.exit_time == base_time + timedelta(minutes=5)  # Последняя свеча
+    # 40% закрыто на 2x, 60% остается открытым и закрывается по close последней свечи (2.3x)
     # realized_multiple = 0.4 * 2.0 + 0.6 * 2.3 = 0.8 + 1.38 = 2.18
     assert result.realized_multiple == pytest.approx(2.18, rel=1e-3)
 
@@ -174,7 +171,6 @@ def test_fractions_sum_validation(base_time, entry_price):
                 {"xn": 5.0, "fraction": 0.4},
                 {"xn": 10.0, "fraction": 0.2}  # Сумма = 1.0
             ],
-            "time_stop_minutes": None,
             "use_high_for_targets": True
         }
     )
@@ -213,7 +209,6 @@ def test_levels_sorted_correctly(base_time, entry_price):
                 {"xn": 2.0, "fraction": 0.4},   # Самый низкий
                 {"xn": 5.0, "fraction": 0.4}   # Средний
             ],
-            "time_stop_minutes": None,
             "use_high_for_targets": True
         }
     )
@@ -256,7 +251,6 @@ def test_use_close_instead_of_high(base_time, entry_price):
             "take_profit_levels": [
                 {"xn": 2.0, "fraction": 0.4}
             ],
-            "time_stop_minutes": None,
             "use_high_for_targets": False  # Используем close
         }
     )
@@ -288,7 +282,6 @@ def test_exit_on_first_tp(base_time, entry_price):
                 {"xn": 2.0, "fraction": 0.4},
                 {"xn": 5.0, "fraction": 0.4}
             ],
-            "time_stop_minutes": None,
             "use_high_for_targets": True,
             "exit_on_first_tp": True  # Закрываем всю позицию на первом TP
         }
@@ -323,7 +316,6 @@ def test_no_data(base_time, entry_price):
             "take_profit_levels": [
                 {"xn": 2.0, "fraction": 0.4}
             ],
-            "time_stop_minutes": None,
             "use_high_for_targets": True
         }
     )
@@ -352,7 +344,6 @@ def test_no_candles_after_entry(base_time, entry_price):
             "take_profit_levels": [
                 {"xn": 2.0, "fraction": 0.4}
             ],
-            "time_stop_minutes": None,
             "use_high_for_targets": True
         }
     )
@@ -373,6 +364,7 @@ def test_no_candles_after_entry(base_time, entry_price):
     # Проверки
     assert result.reason == "no_data"
     assert result.realized_multiple == pytest.approx(1.0, rel=1e-3)
+
 
 
 

@@ -17,7 +17,6 @@ def runner_strategy():
             "take_profit_levels": [
                 {"xn": 2.0, "fraction": 0.5}
             ],
-            "time_stop_minutes": None,
             "use_high_for_targets": True
         }
     )
@@ -69,8 +68,6 @@ def test_runner_strategy_basic(runner_strategy, sample_signal):
     assert "realized_multiple" in result.meta
     assert "levels_hit" in result.meta
     assert "fractions_exited" in result.meta
-    assert "time_stop_triggered" in result.meta
-    assert result.meta["time_stop_triggered"] == False
 
 
 def test_runner_strategy_empty_candles(runner_strategy, sample_signal):
