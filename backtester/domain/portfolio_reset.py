@@ -222,18 +222,18 @@ def apply_portfolio_reset(
         ResetReason.MANUAL: "manual_close",
     }.get(context.reason, context.reason.value)
         
-        pos.meta.update({
-            "pnl_sol": exit_pnl_sol,
-            "fees_total_sol": fees_total,
-            "closed_by_reset": True,
-            "reset_reason": reset_reason_str,
-            "close_reason": reset_reason_str,
-        })
-        pos.meta["network_fee_sol"] = pos.meta.get("network_fee_sol", 0.0) + network_fee_exit
-        
-        state.closed_positions.append(pos)
-        state.peak_balance = max(state.peak_balance, state.balance)
-        state.equity_curve.append({"timestamp": context.reset_time, "balance": state.balance})
+    pos.meta.update({
+        "pnl_sol": exit_pnl_sol,
+        "fees_total_sol": fees_total,
+        "closed_by_reset": True,
+        "reset_reason": reset_reason_str,
+        "close_reason": reset_reason_str,
+    })
+    pos.meta["network_fee_sol"] = pos.meta.get("network_fee_sol", 0.0) + network_fee_exit
+    
+    state.closed_positions.append(pos)
+    state.peak_balance = max(state.peak_balance, state.balance)
+    state.equity_curve.append({"timestamp": context.reset_time, "balance": state.balance})
     
     # Удаляем закрытые позиции из open_positions
     state.open_positions = [
