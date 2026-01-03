@@ -21,8 +21,9 @@ from .portfolio import (
     PortfolioStats,
     Position,
     PortfolioEvent,
-    ExecutionModel,
 )
+# ExecutionModel lives in execution_model.py; portfolio.py holds ledger types.
+from .execution_model import ExecutionModel
 from .portfolio_reset import (
     PortfolioState,
     PortfolioResetContext,

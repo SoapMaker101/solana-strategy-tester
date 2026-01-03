@@ -299,7 +299,6 @@ def test_replay_profit_reset_emits_chain(base_time, fee_model):
         max_exposure=1.0,
         max_open_positions=10,
         fee_model=fee_model,
-        use_replay_mode=True,
         profit_reset_enabled=True,
         profit_reset_multiple=1.3,  # Reset при equity >= 13 SOL
     )
@@ -390,7 +389,6 @@ def test_replay_max_hold_closes_positions(base_time, fee_model):
         max_exposure=1.0,
         max_open_positions=10,
         fee_model=fee_model,
-        use_replay_mode=True,
         max_hold_minutes=60,  # 60 минут
     )
     

@@ -1586,5 +1586,6 @@ class Reporter:
             df = pd.DataFrame([], columns=columns)  # type: ignore[arg-type]
         
         # Сохраняем CSV
-        df.to_csv(path, index=False)
+        # Важно: na_rep='' чтобы пустые строки (для final_exit_json) не конвертировались в 'nan'
+        df.to_csv(path, index=False, na_rep='')
         print(f"[report] Saved strategy_trades.csv to {path} ({len(csv_rows)} blueprints)")

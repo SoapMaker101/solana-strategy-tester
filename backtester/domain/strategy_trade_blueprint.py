@@ -76,7 +76,11 @@ class StrategyTradeBlueprint:
         sorted_partial_exits = sorted(self.partial_exits, key=lambda x: x.timestamp)
         partial_exits_json = json.dumps([exit.to_dict() for exit in sorted_partial_exits])
 
-        final_exit_json = json.dumps(self.final_exit.to_dict()) if self.final_exit else ""
+        # final_exit_json must be empty string when final_exit is None, not "null" or "{}"
+        if self.final_exit is None:
+            final_exit_json = ""
+        else:
+            final_exit_json = json.dumps(self.final_exit.to_dict())
 
         return {
             "signal_id": self.signal_id,

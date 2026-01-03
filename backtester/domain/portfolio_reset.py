@@ -9,9 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 
 from .position import Position
+from .execution_model import ExecutionModel
 
 
 class ResetReason(Enum):
@@ -153,7 +154,7 @@ def get_mark_price_for_position(pos: Position, reset_time: datetime) -> float:
 def apply_portfolio_reset(
     context: PortfolioResetContext,
     state: PortfolioState,
-    execution_model: Any,  # ExecutionModel, избегаем циклического импорта
+    execution_model: ExecutionModel,  # ExecutionModel from execution_model.py
 ) -> None:
     """
     Применяет portfolio reset согласно контексту.

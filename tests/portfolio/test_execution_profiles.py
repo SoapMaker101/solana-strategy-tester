@@ -72,7 +72,7 @@ def test_round_trip_realistic_profile():
         exit_time=exit_time,
         exit_price=1.0,  # Нет движения цены
         pnl=0.0,
-        reason="time_stop"
+        reason="max_hold_minutes"
     )
     
     all_results = [{
@@ -177,7 +177,7 @@ def test_round_trip_stress_profile():
         exit_time=exit_time,
         exit_price=1.0,
         pnl=0.0,
-        reason="time_stop"
+        reason="max_hold_minutes"
     )
     
     all_results = [{
