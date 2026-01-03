@@ -35,7 +35,7 @@ class DummyStrategy(Strategy):
             exit_time=data.candles[-1].timestamp,
             exit_price=data.candles[-1].close,
             pnl=0.0,
-            reason="time_stop",
+            reason="exit_manual",
             meta={}
         )
 
