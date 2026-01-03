@@ -141,7 +141,7 @@ class PortfolioConfig:
     prune_protect_min_max_xn: Optional[float] = 2.0  # Защита позиций с max_xn >= этого значения (None = отключено)
     
     # PortfolioReplay конфигурация (ЭТАП 2)
-    use_replay_mode: bool = False  # Если True, использует PortfolioReplay вместо legacy PortfolioEngine
+    use_replay_mode: bool = True  # Если True, использует PortfolioReplay вместо legacy PortfolioEngine
     max_hold_minutes: Optional[int] = None  # Максимальное время удержания позиции в минутах (используется ТОЛЬКО в Replay, режим B)
     
     def resolved_profit_reset_enabled(self) -> bool:

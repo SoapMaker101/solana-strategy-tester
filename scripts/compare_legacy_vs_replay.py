@@ -728,6 +728,45 @@ def format_diff(key: str, legacy_value: Any, replay_value: Any) -> str:
         return f"{key:30s} | Legacy: {str(legacy_value):20s} | Replay: {str(replay_value):20s}"
 
 
+def analyze_strategy_trades_csv(csv_path: Path) -> Optional[Dict[str, Any]]:
+    """
+    Анализирует strategy_trades.csv и подсчитывает метрики по blueprints.
+    
+    Args:
+        csv_path: Путь к strategy_trades.csv
+        
+    Returns:
+        Словарь с метриками или None, если файл не найден/ошибка
+    """
+    if not csv_path.exists():
+        return None
+    
+    try:
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            blueprints = list(reader)
+    except Exception:
+        return None
+    
+    total_blueprints = len(blueprints)
+    with_final_exit = 0
+    without_final_exit = 0
+    
+    for row in blueprints:
+        final_exit_json = row.get("final_exit_json", "")
+        # Проверяем, что final_exit_json не пустой (не "" и не пустая строка после strip)
+        if final_exit_json and final_exit_json.strip():
+            with_final_exit += 1
+        else:
+            without_final_exit += 1
+    
+    return {
+        "total": total_blueprints,
+        "with_final_exit": with_final_exit,
+        "without_final_exit": without_final_exit,
+    }
+
+
 def print_summary_diff(
     legacy_metrics: Dict[str, Any],
     replay_metrics: Dict[str, Any],
@@ -736,6 +775,7 @@ def print_summary_diff(
     reasons_comparison: Optional[Dict[str, Any]] = None,
     verbose: bool = False,
     sanity_warnings: List[str] = None,
+    blueprints_stats: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Выводит summary diff в читаемом формате.
@@ -777,6 +817,14 @@ def print_summary_diff(
     output_lines.append(format_metric("resets", legacy_metrics["number_of_resets"], replay_metrics["number_of_resets"]))
     output_lines.append(format_metric("max_drawdown", legacy_metrics["max_drawdown_pct"], replay_metrics["max_drawdown_pct"], "%"))
     output_lines.append("")
+    
+    # Blueprints статистика (если указан --strategy-trades)
+    if blueprints_stats:
+        output_lines.append("Blueprints:")
+        output_lines.append(f"- total: {blueprints_stats['total']}")
+        output_lines.append(f"- with final_exit: {blueprints_stats['with_final_exit']}")
+        output_lines.append(f"- without final_exit: {blueprints_stats['without_final_exit']}")
+        output_lines.append("")
     
     # Close reasons (упрощенный формат)
     if reasons_comparison:
@@ -882,6 +930,7 @@ def compare_legacy_vs_replay(
     replay_dir: Path,
     strategy: Optional[str] = None,
     verbose: bool = False,
+    strategy_trades_path: Optional[Path] = None,
 ) -> str:
     """
     Основная логика сравнения legacy vs replay.
@@ -891,6 +940,7 @@ def compare_legacy_vs_replay(
         replay_dir: Директория с replay отчетами
         strategy: Опциональный фильтр по имени стратегии
         verbose: Выводить детальную информацию
+        strategy_trades_path: Опциональный путь к strategy_trades.csv для анализа blueprints
     
     Returns:
         Строка с summary diff
@@ -979,10 +1029,15 @@ def compare_legacy_vs_replay(
         )
         sanity_warnings.extend(replay_consistency_warnings)
     
+    # Анализируем strategy_trades.csv (если указан путь)
+    blueprints_stats = None
+    if strategy_trades_path:
+        blueprints_stats = analyze_strategy_trades_csv(strategy_trades_path)
+    
     # Выводим summary diff
     diff_output = print_summary_diff(
         legacy_metrics, replay_metrics, legacy_dir, replay_dir,
-        reasons_comparison, verbose, sanity_warnings
+        reasons_comparison, verbose, sanity_warnings, blueprints_stats
     )
     
     return diff_output
@@ -1021,12 +1076,18 @@ def main():
         action="store_true",
         help="Вывести детальную информацию"
     )
+    parser.add_argument(
+        "--strategy-trades",
+        type=Path,
+        default=None,
+        help="Путь к strategy_trades.csv для анализа blueprints (опционально)"
+    )
     
     args = parser.parse_args()
     
     try:
         diff_output = compare_legacy_vs_replay(
-            args.legacy_dir, args.replay_dir, args.strategy, args.verbose
+            args.legacy_dir, args.replay_dir, args.strategy, args.verbose, args.strategy_trades
         )
         print(diff_output)
         
