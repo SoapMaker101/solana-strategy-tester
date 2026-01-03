@@ -1083,12 +1083,10 @@ class PortfolioEngine:
         if portfolio_events is not None:
             # Маппинг ResetReason -> канонический reason
             reset_reason_str = {
-                ResetReason.EQUITY_THRESHOLD: "profit_reset",
-                ResetReason.CAPACITY_PRESSURE: "capacity_prune",
+                ResetReason.PROFIT_RESET: "profit_reset",
                 ResetReason.CAPACITY_PRUNE: "capacity_prune",
-                ResetReason.RUNNER_XN: "manual_close",
                 ResetReason.MANUAL: "manual_close",
-            }.get(reason, "manual_close")
+            }.get(reason, reason.value if hasattr(reason, 'value') else "manual_close")
             
             # 1. Эмитим PORTFOLIO_RESET_TRIGGERED (1 событие)
             portfolio_events.append(
@@ -1272,6 +1270,12 @@ class PortfolioEngine:
                     signal_id=pos.signal_id,
                     contract_address=pos.contract_address,
                     position_id=pos.position_id,
+                    level_xn=xn,
+                    fraction=fraction,
+                    raw_price=exit_price_raw,
+                    exec_price=effective_exit_price,
+                    pnl_pct_contrib=exit_pnl_pct * 100.0,
+                    pnl_sol_contrib=exit_pnl_sol,
                     reason="ladder_tp",
                     meta={
                         "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
@@ -1302,31 +1306,6 @@ class PortfolioEngine:
             
             # Помечаем уровень как обработанный
             pos.meta[processed_key] = True
-            
-            # Эмитим событие POSITION_PARTIAL_EXIT
-            if portfolio_events is not None:
-                strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
-                pnl_pct_contrib = exit_pnl_pct * 100.0  # В процентах для события
-                portfolio_events.append(
-                    PortfolioEvent.create_position_partial_exit(
-                        timestamp=hit_time,
-                        strategy=strategy_name,
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        position_id=pos.position_id,
-                        level=xn,
-                        fraction=fraction,
-                        raw_price=exit_price_raw,
-                        exec_price=effective_exit_price,
-                        pnl_pct_contrib=pnl_pct_contrib,
-                        pnl_sol_contrib=exit_pnl_sol,
-                        meta={
-                            "exit_size": exit_size,
-                            "fees_sol": fees_partial,
-                            "network_fee_sol": network_fee_exit,
-                        },
-                    )
-                )
             
             # Обновляем equity curve
             equity_curve.append({"timestamp": hit_time, "balance": balance})
@@ -1373,18 +1352,26 @@ class PortfolioEngine:
                     "is_remainder": True,
                 })
                 if portfolio_events is not None:
+                    final_xn = pos.exit_price / pos.entry_price if pos.entry_price else 1.0
+                    final_fraction = pos.size / original_size if original_size else 0.0
                     event = PortfolioEvent.create_position_partial_exit(
                         timestamp=pos.exit_time or current_time,
                         strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
                         signal_id=pos.signal_id,
                         contract_address=pos.contract_address,
                         position_id=pos.position_id,
+                        level_xn=final_xn,
+                        fraction=final_fraction,
+                        raw_price=pos.exit_price or effective_exit_price,
+                        exec_price=effective_exit_price,
+                        pnl_pct_contrib=(exit_pnl_pct * 100.0) if exit_pnl_pct is not None else 0.0,
+                        pnl_sol_contrib=exit_pnl_sol,
                         reason="time_stop",
                         meta={
                             "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
                             "exit_time": pos.exit_time.isoformat() if pos.exit_time else None,
-                            "xn": pos.exit_price / pos.entry_price if pos.entry_price else 1.0,
-                            "fraction": pos.size / original_size if original_size else 0.0,
+                            "xn": final_xn,
+                            "fraction": final_fraction,
                             "exit_size": pos.size,
                             "exit_price": effective_exit_price,
                             "pnl_pct": exit_pnl_pct,

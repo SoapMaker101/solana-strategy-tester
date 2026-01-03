@@ -101,6 +101,7 @@ class PortfolioEvent:
         exec_price: float,
         pnl_pct_contrib: float,
         pnl_sol_contrib: float,
+        reason: Optional[str] = None,
         meta: Optional[Dict[str, Any]] = None,
     ) -> "PortfolioEvent":
         """
@@ -113,6 +114,7 @@ class PortfolioEvent:
             exec_price: Execution price (after slippage)
             pnl_pct_contrib: PnL contribution in percent (e.g., 80.0 for 80%)
             pnl_sol_contrib: PnL contribution in SOL
+            reason: Optional reason (defaults to "ladder_tp" if not provided)
         """
         event_meta = meta or {}
         event_meta.update({
@@ -130,7 +132,7 @@ class PortfolioEvent:
             contract_address=contract_address,
             position_id=position_id,
             event_type=PortfolioEventType.POSITION_PARTIAL_EXIT,
-            reason="ladder_tp",
+            reason=reason or "ladder_tp",
             meta=event_meta,
         )
 
