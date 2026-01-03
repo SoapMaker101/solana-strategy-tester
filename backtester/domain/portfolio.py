@@ -6,8 +6,11 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union, TYPE_CHECKING
 from enum import Enum
+
+if TYPE_CHECKING:
+    from .strategy_trade_blueprint import StrategyTradeBlueprint
 
 from .position import Position as PositionModel
 
@@ -136,6 +139,10 @@ class PortfolioConfig:
     prune_cooldown_days: Optional[float] = None  # Cooldown по времени в днях (None = отключен)
     prune_min_candidates: int = 3  # Минимальное количество кандидатов для выполнения prune
     prune_protect_min_max_xn: Optional[float] = 2.0  # Защита позиций с max_xn >= этого значения (None = отключено)
+    
+    # PortfolioReplay конфигурация (ЭТАП 2)
+    use_replay_mode: bool = False  # Если True, использует PortfolioReplay вместо legacy PortfolioEngine
+    max_hold_minutes: Optional[int] = None  # Максимальное время удержания позиции в минутах (используется ТОЛЬКО в Replay, режим B)
     
     def resolved_profit_reset_enabled(self) -> bool:
         """
@@ -1826,6 +1833,7 @@ class PortfolioEngine:
         self,
         all_results: List[Dict[str, Any]],
         strategy_name: str,
+        blueprints: Optional[List['StrategyTradeBlueprint']] = None,
     ) -> PortfolioResult:
         """
         Основной метод симуляции по одной стратегии.
@@ -1837,7 +1845,29 @@ class PortfolioEngine:
             "timestamp": datetime (время сигнала),
             "result": StrategyOutput
         }
+        
+        blueprints: опциональный список StrategyTradeBlueprint для Replay режима (ЭТАП 2)
         """
+        # Проверка use_replay_mode (ЭТАП 2)
+        if self.config.use_replay_mode:
+            from .portfolio_replay import PortfolioReplay
+            
+            # Фильтруем blueprints по strategy_name
+            filtered_blueprints = []
+            if blueprints is not None:
+                filtered_blueprints = [
+                    bp for bp in blueprints
+                    if bp.strategy_id == strategy_name
+                ]
+            
+            # Вызываем PortfolioReplay.replay()
+            return PortfolioReplay.replay(
+                blueprints=filtered_blueprints,
+                portfolio_config=self.config,
+                market_data=None,  # TODO: передать market_data если будет доступно
+            )
+        
+        # Legacy path (без изменений)
         # 1. Отфильтровать по стратегии (Runner-only: только исполненные сделки)
         trades: List[Dict[str, Any]] = []
         total_results = len(all_results)
