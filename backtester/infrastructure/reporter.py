@@ -12,6 +12,7 @@ from collections import Counter
 import numpy as np
 from .xlsx_writer import save_xlsx
 from .reporting.report_pack import build_report_pack_xlsx
+from ..domain.strategy_trade_blueprint import StrategyTradeBlueprint
 
 
 class Reporter:
@@ -1522,3 +1523,58 @@ class Reporter:
             runner_stats=runner_stats,
             include_skipped_attempts=include_skipped_attempts,
         )
+    
+    def save_strategy_trades(self, blueprints: List[StrategyTradeBlueprint], path: Optional[Path] = None) -> None:
+        """
+        Сохраняет strategy_trades.csv с blueprints стратегий.
+        
+        Если список blueprints пуст, файл всё равно создаётся с header.
+        Файл сохраняется в self.output_dir рядом с остальными отчётами, если path не указан.
+        
+        :param blueprints: Список StrategyTradeBlueprint для экспорта.
+        :param path: Путь к файлу (опционально, по умолчанию output_dir / "strategy_trades.csv").
+        """
+        import pandas as pd
+        
+        # Определяем путь к файлу
+        if path is None:
+            path = self.output_dir / "strategy_trades.csv"
+        else:
+            path = Path(path)
+        
+        # Определяем порядок колонок
+        columns = [
+            "signal_id",
+            "strategy_id",
+            "contract_address",
+            "entry_time",
+            "entry_price_raw",
+            "entry_mcap_proxy",
+            "partial_exits_json",
+            "final_exit_json",
+            "realized_multiple",
+            "max_xn_reached",
+            "reason",
+        ]
+        
+        # Преобразуем blueprints в строки CSV через to_row()
+        csv_rows = []
+        for bp in blueprints:
+            row = bp.to_row()
+            csv_rows.append(row)
+        
+        # Создаём DataFrame
+        if csv_rows:
+            df = pd.DataFrame(csv_rows)
+            # Убеждаемся, что колонки в правильном порядке
+            for col in columns:
+                if col not in df.columns:
+                    df[col] = None
+            df = df[columns]
+        else:
+            # Создаём пустой DataFrame с header
+            df = pd.DataFrame([], columns=columns)  # type: ignore[arg-type]
+        
+        # Сохраняем CSV
+        df.to_csv(path, index=False)
+        print(f"[report] Saved strategy_trades.csv to {path} ({len(csv_rows)} blueprints)")

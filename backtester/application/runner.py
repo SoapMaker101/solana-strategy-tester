@@ -3,6 +3,7 @@ from __future__ import annotations  # Позволяет использоват�
 from datetime import timedelta, datetime
 from typing import Any, Dict, List, Sequence, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Импорты компонентов системы
 from ..infrastructure.signal_loader import SignalLoader  # Интерфейс загрузки торговых сигналов
@@ -12,6 +13,7 @@ from ..domain.models import StrategyInput, StrategyOutput, Signal, Candle  # О�
 from ..domain.portfolio import PortfolioConfig, PortfolioEngine, FeeModel, PortfolioResult  # Портфельный слой
 from ..domain.execution_model import ExecutionProfileConfig  # Execution profiles
 from ..utils.warn_dedup import WarnDedup  # Потокобезопасный класс для дедупликации предупреждений
+from ..domain.strategy_trade_blueprint import StrategyTradeBlueprint
 
 class BacktestRunner:
     """
@@ -59,6 +61,10 @@ class BacktestRunner:
         
         # Портфельные результаты (по стратегиям)
         self.portfolio_results: Dict[str, PortfolioResult] = {}
+        
+        # Blueprints для strategy_trades.csv (Этап 1)
+        self.blueprints: List[StrategyTradeBlueprint] = []
+        self._blueprints_lock = threading.Lock()  # Thread-safety для параллельной обработки
 
     def _load_signals(self) -> List[Signal]:
         """
@@ -177,6 +183,18 @@ class BacktestRunner:
                     "result": out,
                 }
             )
+            
+            # Собираем blueprint для strategy_trades.csv (Этап 1)
+            # Вызываем on_signal_blueprint только если метод существует
+            if hasattr(strategy, 'on_signal_blueprint'):
+                try:
+                    blueprint = strategy.on_signal_blueprint(data)
+                    with self._blueprints_lock:
+                        self.blueprints.append(blueprint)
+                except Exception as e:
+                    # Warning и continue - не падаем всем прогоном
+                    print(f"[WARNING] Failed to create blueprint for signal {sig.id}, strategy {strategy.config.name}: {e}")
+                    # Продолжаем обработку без blueprint
 
         return results
 
