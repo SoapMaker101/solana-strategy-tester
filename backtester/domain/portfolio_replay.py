@@ -250,6 +250,38 @@ class PortfolioReplay:
         return True
     
     @staticmethod
+    def _calc_fees_sol_entry(execution_model: ExecutionModel) -> float:
+        """
+        Вычисляет комиссии для entry execution.
+        
+        Для entry: только network fee (swap+LP fees применяются при exit).
+        
+        Returns:
+            Комиссии в SOL (network fee для entry)
+        """
+        return execution_model.network_fee()
+    
+    @staticmethod
+    def _calc_fees_sol_exit(execution_model: ExecutionModel, notional_sol: float) -> float:
+        """
+        Вычисляет комиссии для exit execution.
+        
+        Для exit: swap + LP + network fees.
+        
+        Args:
+            execution_model: ExecutionModel для доступа к fee_model
+            notional_sol: Нотионал в SOL (size + pnl_sol)
+            
+        Returns:
+            Комиссии в SOL (swap + LP + network)
+        """
+        # Swap + LP fees как процент от нотионала
+        swap_lp_fees = notional_sol * (execution_model.fee_model.swap_fee_pct + execution_model.fee_model.lp_fee_pct)
+        # Network fee (фиксированная)
+        network_fee = execution_model.network_fee()
+        return swap_lp_fees + network_fee
+    
+    @staticmethod
     def _open_position(
         blueprint: StrategyTradeBlueprint,
         config: PortfolioConfig,
@@ -282,8 +314,12 @@ class PortfolioReplay:
         entry_price_raw = blueprint.entry_price_raw
         entry_price_effective = execution_model.apply_entry(entry_price_raw)
         
-        # Вычитаем размер позиции из баланса
+        # Вычисляем комиссии для entry (только network fee)
+        fees_sol = PortfolioReplay._calc_fees_sol_entry(execution_model)
+        
+        # Вычитаем размер позиции и network fee из баланса
         state.balance -= size_sol
+        state.balance -= fees_sol
         
         # Создаем позицию
         position = Position(
@@ -302,7 +338,7 @@ class PortfolioReplay:
             },
         )
         
-        # Создаем POSITION_OPENED event
+        # Создаем POSITION_OPENED event с execution данными в meta
         event = PortfolioEvent.create_position_opened(
             timestamp=blueprint.entry_time,
             strategy=blueprint.strategy_id,
@@ -310,10 +346,12 @@ class PortfolioReplay:
             contract_address=blueprint.contract_address,
             position_id=position.position_id,
             meta={
-                "entry_price_raw": entry_price_raw,
-                "entry_price_effective": entry_price_effective,
-                "size_sol": size_sol,
-                "execution_type": "entry",  # EXECUTION: entry
+                "execution_type": "entry",
+                "raw_price": entry_price_raw,
+                "exec_price": entry_price_effective,
+                "qty_delta": size_sol,
+                "fees_sol": fees_sol,
+                "pnl_sol_delta": 0.0,
             },
         )
         portfolio_events.append(event)
@@ -357,13 +395,19 @@ class PortfolioReplay:
             pnl_pct = (exit_price_effective / position.entry_price - 1.0) * 100.0
             pnl_sol = exit_size * (exit_price_effective / position.entry_price - 1.0)
             
-            # Обновляем баланс
-            state.balance += exit_size + pnl_sol
+            # Вычисляем комиссии для exit (swap + LP + network)
+            notional_returned = exit_size + pnl_sol
+            fees_sol = PortfolioReplay._calc_fees_sol_exit(execution_model, notional_returned)
+            
+            # Обновляем баланс (возвращаем нотионал после комиссий)
+            notional_after_fees = execution_model.apply_fees(notional_returned)
+            state.balance += notional_after_fees
+            state.balance -= execution_model.network_fee()  # Network fee вычитается отдельно
             
             # Уменьшаем размер позиции
             remaining_size -= exit_size
             
-            # Создаем POSITION_PARTIAL_EXIT event (EXECUTION фиксируется в meta)
+            # Создаем POSITION_PARTIAL_EXIT event с execution данными в meta
             event = PortfolioEvent.create_position_partial_exit(
                 timestamp=partial_exit.timestamp,
                 strategy=blueprint.strategy_id,
@@ -377,8 +421,12 @@ class PortfolioReplay:
                 pnl_pct_contrib=pnl_pct,
                 pnl_sol_contrib=pnl_sol,
                 meta={
-                    "execution_type": "partial_exit",  # EXECUTION: partial exit
-                    "exit_size_sol": exit_size,
+                    "execution_type": "partial_exit",
+                    "raw_price": exit_price_raw,
+                    "exec_price": exit_price_effective,
+                    "qty_delta": -exit_size,
+                    "fees_sol": fees_sol,
+                    "pnl_sol_delta": pnl_sol,
                 },
             )
             portfolio_events.append(event)
@@ -429,8 +477,14 @@ class PortfolioReplay:
         pnl_pct = (exit_price_effective / position.entry_price - 1.0) * 100.0
         pnl_sol = position.size * (exit_price_effective / position.entry_price - 1.0)
         
-        # Обновляем баланс
-        state.balance += position.size + pnl_sol
+        # Вычисляем комиссии для exit (swap + LP + network)
+        notional_returned = position.size + pnl_sol
+        fees_sol = PortfolioReplay._calc_fees_sol_exit(execution_model, notional_returned)
+        
+        # Обновляем баланс (возвращаем нотионал после комиссий)
+        notional_after_fees = execution_model.apply_fees(notional_returned)
+        state.balance += notional_after_fees
+        state.balance -= execution_model.network_fee()  # Network fee вычитается отдельно
         
         # Закрываем позицию
         position.status = "closed"
@@ -438,7 +492,7 @@ class PortfolioReplay:
         position.exit_price = exit_price_effective
         position.pnl_pct = pnl_pct
         
-        # Создаем POSITION_CLOSED event (EXECUTION фиксируется в meta)
+        # Создаем POSITION_CLOSED event с execution данными в meta
         event = PortfolioEvent.create_position_closed(
             timestamp=blueprint.final_exit.timestamp,
             strategy=blueprint.strategy_id,
@@ -451,8 +505,12 @@ class PortfolioReplay:
             pnl_pct=pnl_pct,
             pnl_sol=pnl_sol,
             meta={
-                "execution_type": "final_exit",  # EXECUTION: final exit
-                "exit_size_sol": position.size,
+                "execution_type": "final_exit",
+                "raw_price": exit_price_raw,
+                "exec_price": exit_price_effective,
+                "qty_delta": -position.size,
+                "fees_sol": fees_sol,
+                "pnl_sol_delta": pnl_sol,
             },
         )
         portfolio_events.append(event)
@@ -547,8 +605,14 @@ class PortfolioReplay:
         pnl_pct = (exit_price_effective / position.entry_price - 1.0) * 100.0
         pnl_sol = position.size * (exit_price_effective / position.entry_price - 1.0)
         
-        # Обновляем баланс
-        state.balance += position.size + pnl_sol
+        # Вычисляем комиссии для exit (swap + LP + network)
+        notional_returned = position.size + pnl_sol
+        fees_sol = PortfolioReplay._calc_fees_sol_exit(execution_model, notional_returned)
+        
+        # Обновляем баланс (возвращаем нотионал после комиссий)
+        notional_after_fees = execution_model.apply_fees(notional_returned)
+        state.balance += notional_after_fees
+        state.balance -= execution_model.network_fee()  # Network fee вычитается отдельно
         
         # Закрываем позицию
         position.status = "closed"
@@ -559,7 +623,7 @@ class PortfolioReplay:
         # Получаем strategy_id из meta
         strategy_id = position.meta.get("strategy", "unknown") if position.meta else "unknown"
         
-        # Создаем POSITION_CLOSED event (EXECUTION фиксируется в meta)
+        # Создаем POSITION_CLOSED event с execution данными в meta
         event = PortfolioEvent.create_position_closed(
             timestamp=close_time,
             strategy=strategy_id,
@@ -572,8 +636,12 @@ class PortfolioReplay:
             pnl_pct=pnl_pct,
             pnl_sol=pnl_sol,
             meta={
-                "execution_type": "forced_close",  # EXECUTION: forced close
-                "exit_size_sol": position.size,
+                "execution_type": "forced_close",
+                "raw_price": exit_price_raw,
+                "exec_price": exit_price_effective,
+                "qty_delta": -position.size,
+                "fees_sol": fees_sol,
+                "pnl_sol_delta": pnl_sol,
                 "forced_reason": "max_hold_minutes",
             },
         )
@@ -649,10 +717,17 @@ class PortfolioReplay:
             pnl_pct = position.pnl_pct if position.pnl_pct is not None else 0.0
             pnl_sol = position.meta.get("pnl_sol", 0.0) if position.meta else 0.0
             
+            # Получаем fees из meta (apply_portfolio_reset установил fees_total_sol = swap+LP fees)
+            fees_total_sol = position.meta.get("fees_total_sol", 0.0) if position.meta else 0.0
+            # network_fee для exit (фиксированное значение)
+            network_fee_exit = execution_model.network_fee()
+            # fees_sol = swap+LP fees + network fee для exit
+            fees_sol = fees_total_sol + network_fee_exit
+            
             # Получаем strategy_id из meta
             strategy_id = position.meta.get("strategy", "unknown") if position.meta else "unknown"
             
-            # Создаем POSITION_CLOSED event для каждой закрытой позиции
+            # Создаем POSITION_CLOSED event с execution данными в meta
             event = PortfolioEvent.create_position_closed(
                 timestamp=current_time,
                 strategy=strategy_id,
@@ -665,8 +740,12 @@ class PortfolioReplay:
                 pnl_pct=pnl_pct,
                 pnl_sol=pnl_sol,
                 meta={
-                    "execution_type": "forced_close",  # EXECUTION: forced close
-                    "exit_size_sol": position.size,
+                    "execution_type": "forced_close",
+                    "raw_price": exit_price_raw,
+                    "exec_price": exec_exit_price,
+                    "qty_delta": -position.size,
+                    "fees_sol": fees_sol,
+                    "pnl_sol_delta": pnl_sol,
                     "forced_reason": "profit_reset",
                     "closed_by_reset": True,
                 },
