@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Literal, Optional, cast
+from typing import List, Literal, cast
 
 import pandas as pd
 
@@ -11,12 +11,6 @@ from .trade_features import (
     get_total_supply,
     calc_window_features,
     calc_trade_mcap_features,
-    calc_mcap_proxy,
-)
-from .strategy_trade_blueprint import (
-    StrategyTradeBlueprint,
-    PartialExitBlueprint,
-    FinalExitBlueprint,
 )
 
 
@@ -106,6 +100,14 @@ class RunnerStrategy(Strategy):
         # config уже проверен в on_signal, используем cast для типизации
         config = cast(RunnerConfig, self.config)
 
+<<<<<<< HEAD
+        # Рассчитываем exit_price как close свечи, на которой произошло финальное закрытие
+        exit_candle = next(
+            (c for c in candles if c.timestamp == ladder_result.exit_time),
+            candles[-1],
+        )
+        exit_price = exit_candle.close
+=======
         # Находим свечу на момент exit_time для получения рыночной цены закрытия
         # exit_price должен быть market close, а НЕ синтетика entry * realized_multiple
         exit_price = entry_candle.close  # Fallback на entry price если не найдена свеча
@@ -119,14 +121,26 @@ class RunnerStrategy(Strategy):
                 # Если не нашли свечу >= exit_time, берем последнюю доступную
                 if candles:
                     exit_price = candles[-1].close
+>>>>>>> origin/main
 
         # PnL уже рассчитан в ladder_result.realized_pnl_pct (в процентах)
         # Преобразуем в десятичную форму
         pnl = ladder_result.realized_pnl_pct / 100.0
 
         # Преобразуем reason из RunnerTradeResult в StrategyOutput.reason
+<<<<<<< HEAD
+        reason_map: dict[str, Literal["ladder_tp", "time_stop", "no_entry", "error"]] = {
+            "time_stop": "time_stop",
+            "all_levels_hit": "ladder_tp",
+            "no_data": "no_entry",
+        }
+        reason_str = reason_map.get(ladder_result.reason, "error")
+        reason: Literal["ladder_tp", "time_stop", "no_entry", "error"] = cast(
+            Literal["ladder_tp", "time_stop", "no_entry", "error"], reason_str
+=======
         # Для ladder используем "ladder_tp" вместо "tp"
         reason_map: dict[str, Literal["ladder_tp", "tp", "sl", "timeout", "no_entry", "error"]] = {
+            "time_stop": "timeout",
             "all_levels_hit": "ladder_tp",  # Все уровни достигнуты = ladder take profit
             "no_data": "no_entry"
         }
@@ -136,6 +150,7 @@ class RunnerStrategy(Strategy):
         reason: Literal["tp", "sl", "timeout", "no_entry", "error"] = cast(
             Literal["tp", "sl", "timeout", "no_entry", "error"], 
             "tp" if reason_str == "ladder_tp" else reason_str
+>>>>>>> origin/main
         )
 
         # Вычисляем trade features
@@ -160,11 +175,12 @@ class RunnerStrategy(Strategy):
             "levels_hit": {str(k): v.isoformat() for k, v in ladder_result.levels_hit.items()},
             "fractions_exited": {str(k): v for k, v in ladder_result.fractions_exited.items()},
             "realized_multiple": ladder_result.realized_multiple,
+            "time_stop_triggered": ladder_result.reason == "time_stop",
             # Дополнительная информация
             "runner_ladder": True,
             "entry_idx": 0,
-            # Сохраняем канонический reason для ladder (ladder_tp или no_entry)
-            "ladder_reason": reason_str,  # "ladder_tp" или "no_entry"
+            # Сохраняем канонический reason для ladder (ladder_tp вместо tp)
+            "ladder_reason": reason_str,  # "ladder_tp" или "timeout" или "no_entry"
         }
         
         # Добавляем trade features
@@ -179,113 +195,4 @@ class RunnerStrategy(Strategy):
             pnl=pnl,
             reason=reason,  # "tp" для обратной совместимости, но meta["ladder_reason"] содержит "ladder_tp"
             meta=meta
-        )
-
-    def on_signal_blueprint(self, data: StrategyInput) -> StrategyTradeBlueprint:
-        """
-        Blueprint path: strategy intent only, portfolio untouched.
-        
-        Returns StrategyTradeBlueprint describing strategy intent without portfolio execution.
-        Uses the same ladder logic as on_signal but returns blueprint instead of StrategyOutput.
-        """
-        signal_time = data.signal.timestamp
-        
-        # Проверяем, что config является RunnerConfig
-        if not isinstance(self.config, RunnerConfig):
-            raise ValueError(f"RunnerStrategy requires RunnerConfig, got {type(self.config)}")
-        config = self.config
-
-        # Отбираем свечи, начиная с момента сигнала (или позже)
-        candles: List[Candle] = sorted(
-            [c for c in data.candles if c.timestamp >= signal_time],
-            key=lambda c: c.timestamp
-        )
-
-        # Если свечей нет — невозможно войти в позицию
-        if not candles:
-            return StrategyTradeBlueprint(
-                signal_id=data.signal.id,
-                strategy_id=config.name,
-                contract_address=data.signal.contract_address,
-                entry_time=signal_time,
-                entry_price_raw=0.0,
-                entry_mcap_proxy=None,
-                partial_exits=[],
-                final_exit=None,
-                realized_multiple=0.0,
-                max_xn_reached=0.0,
-                reason="no_entry"
-            )
-
-        # Первая доступная свеча после сигнала — вход
-        entry_candle = candles[0]
-        entry_time = entry_candle.timestamp
-        entry_price = entry_candle.close
-
-        # Преобразуем List[Candle] в DataFrame для RunnerLadderEngine
-        candles_df = self._candles_to_dataframe(candles)
-
-        # Запускаем симуляцию Runner Ladder (та же логика, что в on_signal)
-        ladder_result = RunnerLadderEngine.simulate(
-            entry_time=entry_time,
-            entry_price=entry_price,
-            candles_df=candles_df,
-            config=config
-        )
-
-        # Вычисляем entry_mcap_proxy
-        total_supply = get_total_supply(data.signal)
-        entry_mcap_proxy = calc_mcap_proxy(entry_price, total_supply) if entry_price > 0 else None
-
-        # Собираем partial_exits из levels_hit и fractions_exited
-        partial_exits: List[PartialExitBlueprint] = []
-        for xn in sorted(ladder_result.levels_hit.keys()):
-            if xn in ladder_result.fractions_exited and ladder_result.fractions_exited[xn] > 0:
-                exit_timestamp = ladder_result.levels_hit[xn]
-                fraction = ladder_result.fractions_exited[xn]
-                partial_exits.append(
-                    PartialExitBlueprint(
-                        timestamp=exit_timestamp,
-                        xn=xn,
-                        fraction=fraction
-                    )
-                )
-
-        # Создаём final_exit только если все уровни достигнуты и позиция полностью закрыта
-        # Если уровни не достигнуты - final_exit=None (позиция остается открытой для портфеля)
-        final_exit: Optional[FinalExitBlueprint] = None
-        if ladder_result.exit_time and ladder_result.reason == "all_levels_hit":
-            # Проверяем, что позиция действительно полностью закрыта (нет остатка)
-            # Это значит, что все частичные выходы выполнены и remaining_position = 0
-            # В ladder_result это можно определить по тому, что realized_multiple соответствует полной позиции
-            # или по тому, что все уровни были достигнуты и закрыты
-            # Для простоты: если reason == "all_levels_hit", значит все уровни достигнуты
-            # Но если есть остаток - позиция не полностью закрыта стратегией
-            # На самом деле, если reason == "all_levels_hit", позиция может быть не полностью закрыта
-            # если не все уровни были достигнуты, но мы дошли до конца данных
-            # Поэтому лучше не создавать final_exit, если позиция не полностью закрыта
-            # Для надежности: создаем final_exit только если все частичные выходы выполнены
-            # (проверяем, что сумма fractions_exited близка к 1.0 или levels_hit содержит все уровни)
-            total_fraction_exited = sum(ladder_result.fractions_exited.values())
-            if total_fraction_exited >= 0.99:  # Практически вся позиция закрыта
-                final_exit = FinalExitBlueprint(
-                    timestamp=ladder_result.exit_time,
-                    reason="all_levels_hit"
-                )
-
-        # Вычисляем max_xn_reached (максимальный xn из достигнутых уровней)
-        max_xn_reached = max(ladder_result.levels_hit.keys()) if ladder_result.levels_hit else 0.0
-
-        return StrategyTradeBlueprint(
-            signal_id=data.signal.id,
-            strategy_id=config.name,
-            contract_address=data.signal.contract_address,
-            entry_time=ladder_result.entry_time,
-            entry_price_raw=ladder_result.entry_price,
-            entry_mcap_proxy=entry_mcap_proxy,
-            partial_exits=partial_exits,
-            final_exit=final_exit,
-            realized_multiple=ladder_result.realized_multiple,
-            max_xn_reached=max_xn_reached,
-            reason=ladder_result.reason
         )

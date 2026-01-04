@@ -1,9 +1,9 @@
 # Solana Strategy Tester — Runner-only v2.0.1
 
-Runner-only backtesting framework for Solana signals. The system is fully
-event-driven and uses a single, canonical Runner ladder contract with blueprint-based portfolio simulation.
+Runner-only backtesting framework for Solana signals. The system is now fully
+event-driven and uses a single, canonical Runner ladder contract.
 
-**Version 2.0.1** includes unified architecture: signals → blueprints → PortfolioReplay → portfolio reports.
+**Version 2.0.1** includes full refactor with unified event contract and enhanced audit layer.
 
 ## Quick start
 
@@ -16,28 +16,25 @@ pip install -r requirements.txt
 Run a backtest:
 
 ```bash
-python main.py --signals signals/example_signals.csv --strategies-config config/runner_baseline.yaml --backtest-config config/backtest_example.yaml --reports-dir output/reports
+python main.py \
+  --signals signals/example_signals.csv \
+  --strategies-config config/runner_baseline.yaml \
+  --backtest-config config/backtest_example.yaml \
+  --reports-dir output/reports
 ```
 
-## Pipeline architecture
+## Runner-only pipeline
 
-The pipeline follows a clear separation of concerns:
+Pipeline order:
 
-1. **Signals** → Strategy generates **blueprints** (`strategy_trades.csv`)
-   - Strategy intent only (ladder levels, partial exits)
-   - No portfolio logic (no position sizing, fees, time limits)
-   
-2. **Blueprints** → **PortfolioReplay** simulates portfolio execution
-   - Applies portfolio rules (position sizing, capacity, resets)
-   - Handles time-based closes via `max_hold_minutes` (portfolio-level)
-   - Generates portfolio reports (positions, events, executions)
+1. **Backtest** → `main.py`
+2. **Audit** → `python -m backtester.audit.run_audit`
+3. **Stage A** → `python -m backtester.research.run_stage_a`
+4. **Stage B** → `python -m backtester.decision.run_stage_b`
 
-3. **Portfolio Reports** → Analysis pipeline (audit, Stage A, Stage B)
-
-Full pipeline:
+Example:
 
 ```bash
-python main.py --signals signals/example_signals.csv --strategies-config config/runner_baseline.yaml --backtest-config config/backtest_example.yaml --reports-dir output/reports
 python -m backtester.audit.run_audit --reports-dir output/reports
 python -m backtester.research.run_stage_a --reports-dir output/reports
 python -m backtester.decision.run_stage_b --stability-csv output/reports/strategy_stability.csv
@@ -45,54 +42,19 @@ python -m backtester.decision.run_stage_b --stability-csv output/reports/strateg
 
 Stage A/B refuse to run when the audit reports any P0 anomalies.
 
-## Outputs
+## Outputs (Runner-only v2.0.1)
 
-All reports live in `output/reports/`:
+All research outputs live in `output/reports/`:
 
-**Strategy artifacts:**
-- `strategy_trades.csv` — trade blueprints (strategy intent without portfolio)
-
-**Portfolio reports:**
-- `portfolio_positions.csv` — positions-level source of truth
-- `portfolio_events.csv` — canonical event ledger
-- `portfolio_executions.csv` — execution ledger
-- `portfolio_stats.json` — portfolio summary statistics
-
-**Analysis outputs:**
+- `portfolio_positions.csv` (positions-level source of truth)
+- `portfolio_events.csv` (canonical event ledger)
+- `portfolio_executions.csv` (execution ledger)
 - `strategy_stability.csv` (Stage A)
 - `strategy_selection.csv` (Stage B)
+- `portfolio_summary.csv` / `strategy_summary.csv`
 
 See:
 
-- `docs/ARCHITECTURE.md` — domain contracts and event chain
-- `docs/PIPELINE_GUIDE.md` — configuration and Runner ladder fields
-- `docs/RELEASE_NOTES.md` — v2.0 notes and breaking changes
-
-## Verify
-
-### Run tests
-
-```bash
-pytest -q
-```
-
-### Run backtest
-
-```bash
-python main.py --signals "C:\Прочее\Крипта\Тестер соланы\signals\example_signals.csv" --backtest-config "C:\Прочее\Крипта\Тестер соланы\config\backtest_example.yaml" --reports-dir "C:\Прочее\Крипта\Тестер соланы\output\reports"
-```
-
-### Expected artifacts
-
-After a successful backtest run, the following files should be created in the `--reports-dir`:
-
-**Strategy artifacts:**
-- `strategy_trades.csv` — trade blueprints (strategy intent)
-
-**Portfolio reports:**
-- `portfolio_positions.csv` — positions-level source of truth
-- `portfolio_events.csv` — canonical event ledger
-- `portfolio_executions.csv` — execution ledger
-- `portfolio_stats.json` — portfolio summary statistics (one per strategy: `{strategy_name}_portfolio_stats.json`)
-- `portfolio_policy_summary.csv` — aggregated portfolio policy statistics
-- `{strategy_name}_equity_curve.csv` — equity curve over time (one per strategy)
+- `docs/ARCHITECTURE.md` for domain contracts and event chain
+- `docs/PIPELINE_GUIDE.md` for configs and Runner ladder fields
+- `docs/RELEASE_NOTES.md` for v2.0 notes and breaking changes

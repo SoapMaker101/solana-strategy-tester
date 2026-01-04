@@ -3,7 +3,6 @@ from __future__ import annotations  # Позволяет использоват�
 from datetime import timedelta, datetime
 from typing import Any, Dict, List, Sequence, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 
 # Импорты компонентов системы
 from ..infrastructure.signal_loader import SignalLoader  # Интерфейс загрузки торговых сигналов
@@ -13,7 +12,6 @@ from ..domain.models import StrategyInput, StrategyOutput, Signal, Candle  # О�
 from ..domain.portfolio import PortfolioConfig, PortfolioEngine, FeeModel, PortfolioResult  # Портфельный слой
 from ..domain.execution_model import ExecutionProfileConfig  # Execution profiles
 from ..utils.warn_dedup import WarnDedup  # Потокобезопасный класс для дедупликации предупреждений
-from ..domain.strategy_trade_blueprint import StrategyTradeBlueprint
 
 class BacktestRunner:
     """
@@ -61,10 +59,6 @@ class BacktestRunner:
         
         # Портфельные результаты (по стратегиям)
         self.portfolio_results: Dict[str, PortfolioResult] = {}
-        
-        # Blueprints для strategy_trades.csv (Этап 1)
-        self.blueprints: List[StrategyTradeBlueprint] = []
-        self._blueprints_lock = threading.Lock()  # Thread-safety для параллельной обработки
 
     def _load_signals(self) -> List[Signal]:
         """
@@ -183,18 +177,6 @@ class BacktestRunner:
                     "result": out,
                 }
             )
-            
-            # Собираем blueprint для strategy_trades.csv (Этап 1)
-            # Вызываем on_signal_blueprint только если метод существует
-            if hasattr(strategy, 'on_signal_blueprint'):
-                try:
-                    blueprint = strategy.on_signal_blueprint(data)
-                    with self._blueprints_lock:
-                        self.blueprints.append(blueprint)
-                except Exception as e:
-                    # Warning и continue - не падаем всем прогоном
-                    print(f"[WARNING] Failed to create blueprint for signal {sig.id}, strategy {strategy.config.name}: {e}")
-                    # Продолжаем обработку без blueprint
 
         return results
 
@@ -358,11 +340,6 @@ class BacktestRunner:
         prune_min_candidates = capacity_reset_cfg.get("prune_min_candidates", 3)
         prune_protect_min_max_xn = capacity_reset_cfg.get("prune_protect_min_max_xn", 2.0)
         
-        # PortfolioReplay конфигурация
-        max_hold_minutes = None
-        if "max_hold_minutes" in portfolio_cfg and portfolio_cfg.get("max_hold_minutes") is not None:
-            max_hold_minutes = int(portfolio_cfg.get("max_hold_minutes"))
-        
         return PortfolioConfig(
             initial_balance_sol=float(portfolio_cfg.get("initial_balance_sol", 10.0)),
             allocation_mode=portfolio_cfg.get("allocation_mode", "dynamic"),
@@ -395,7 +372,6 @@ class BacktestRunner:
             prune_cooldown_days=float(prune_cooldown_days) if prune_cooldown_days is not None else None,
             prune_min_candidates=int(prune_min_candidates),
             prune_protect_min_max_xn=float(prune_protect_min_max_xn) if prune_protect_min_max_xn is not None else None,
-            max_hold_minutes=max_hold_minutes,
         )
 
     def run_portfolio(self) -> Dict[str, PortfolioResult]:

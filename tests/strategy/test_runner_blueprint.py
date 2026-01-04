@@ -20,6 +20,7 @@ def runner_strategy():
                 {"xn": 5.0, "fraction": 0.4},
                 {"xn": 10.0, "fraction": 0.3},
             ],
+            "time_stop_minutes": None,
             "use_high_for_targets": True
         }
     )

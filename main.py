@@ -739,15 +739,6 @@ def main():
         # Сохраняем сводный отчет по политике reset/prune (hardening v1.7.1)
         base_reporter.save_portfolio_policy_summary(portfolio_results)
         
-        # Сохраняем strategy_trades.csv (Этап 1: Blueprints)
-        if runner.blueprints:
-            base_reporter.save_strategy_trades(runner.blueprints)
-            print(f"📋 Saved strategy_trades.csv with {len(runner.blueprints)} blueprints")
-        else:
-            # Создаём пустой файл с header если blueprints пуст
-            base_reporter.save_strategy_trades([])
-            print(f"📋 Saved strategy_trades.csv (empty)")
-        
         # v1.10: Создаем единый XLSX-отчёт (report_pack.xlsx)
         reporting_cfg = backtest_cfg.get("reporting", {})
         if reporting_cfg.get("export_xlsx", True):
