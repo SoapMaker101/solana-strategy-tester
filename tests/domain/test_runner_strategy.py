@@ -8,6 +8,17 @@ from backtester.domain.runner_config import create_runner_config_from_dict
 from backtester.domain.models import Signal, Candle, StrategyInput
 
 
+def test_runner_strategy_import():
+    """Тест импорта RunnerStrategy."""
+    from backtester.domain.runner_strategy import RunnerStrategy
+    from backtester.domain.runner_ladder import RunnerLadderEngine, RunnerTradeResult
+    
+    # Проверяем, что классы доступны
+    assert RunnerStrategy is not None
+    assert RunnerLadderEngine is not None
+    assert RunnerTradeResult is not None
+
+
 @pytest.fixture
 def runner_strategy():
     """Создает Runner стратегию"""
@@ -65,7 +76,9 @@ def test_runner_strategy_basic(runner_strategy, sample_signal):
     result = runner_strategy.on_signal(data)
     
     assert result.entry_price == entry_price
-    assert result.reason == "ladder_tp"  # Все уровни достигнуты = take profit
+    # reason маппится в "tp" для обратной совместимости, но meta["ladder_reason"] содержит "ladder_tp"
+    assert result.reason == "tp"  # Все уровни достигнуты = take profit (обратная совместимость)
+    assert result.meta.get("ladder_reason") == "ladder_tp"  # Канонический reason в meta
     assert "realized_multiple" in result.meta
     assert "levels_hit" in result.meta
     assert "fractions_exited" in result.meta
