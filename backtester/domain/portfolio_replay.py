@@ -947,8 +947,14 @@ class PortfolioReplay:
         # Reset нужен даже если нет открытых позиций (для обновления cycle_start_equity)
         # Но если нет открытых позиций, создаем временный marker
         if state.open_positions:
+            # Все открытые позиции должны быть закрыты
+            # Marker - первая позиция, остальные - positions_to_force_close
             marker_position = state.open_positions[0]
             positions_to_force_close = state.open_positions[1:] if len(state.open_positions) > 1 else []
+            # ВАЖНО: marker_position тоже должна быть закрыта
+            # Но она не в positions_to_force_close (архитектурный инвариант PortfolioResetContext)
+            # Закроем её отдельно после apply_portfolio_reset
+            all_positions_to_close = [marker_position] + positions_to_force_close
         else:
             # Нет открытых позиций, но reset нужен для обновления cycle_start_equity
             # Создаем временную позицию для marker (она не будет реально закрыта)
@@ -963,6 +969,7 @@ class PortfolioReplay:
                 meta={"strategy": "reset_marker"},
             )
             positions_to_force_close = []
+            all_positions_to_close = []
         
         # Создаем контекст для reset
         reset_context = PortfolioResetContext(
@@ -972,13 +979,44 @@ class PortfolioReplay:
             positions_to_force_close=positions_to_force_close,
         )
         
-        # Применяем reset (закрывает все позиции и обновляет state)
+        # Применяем reset (закрывает позиции из positions_to_force_close и обновляет state)
+        # marker_position закрывается отдельно (она не в positions_to_force_close)
         apply_portfolio_reset(reset_context, state, execution_model)
+        
+        # Закрываем marker_position отдельно, если она реальная позиция
+        if state.open_positions and marker_position in state.open_positions:
+            # Принудительно закрываем marker_position
+            from .portfolio_reset import get_mark_price_for_position
+            raw_exit_price = get_mark_price_for_position(marker_position, current_time)
+            effective_exit_price = execution_model.apply_exit(raw_exit_price, "manual_close")
+            exec_entry_price = marker_position.meta.get("exec_entry_price", marker_position.entry_price)
+            exit_pnl_pct = (effective_exit_price - exec_entry_price) / exec_entry_price if exec_entry_price > 0 else 0.0
+            exit_pnl_sol = marker_position.size * exit_pnl_pct
+            notional_returned = marker_position.size + exit_pnl_sol
+            notional_after_fees = execution_model.apply_fees(notional_returned)
+            fees_total = notional_returned - notional_after_fees
+            network_fee_exit = execution_model.network_fee()
+            state.balance += notional_after_fees
+            state.balance -= network_fee_exit
+            marker_position.size = 0.0
+            marker_position.status = "closed"
+            marker_position.exit_time = current_time
+            marker_position.exit_price = effective_exit_price
+            marker_position.pnl_pct = exit_pnl_pct
+            m = marker_position.meta
+            m["pnl_sol"] = exit_pnl_sol
+            m["fees_total_sol"] = fees_total
+            m["network_fee_sol"] = m.get("network_fee_sol", 0.0) + network_fee_exit
+            m["closed_by_reset"] = True
+            m["triggered_portfolio_reset"] = True
+            state.open_positions.remove(marker_position)
+            if marker_position not in state.closed_positions:
+                state.closed_positions.append(marker_position)
         
         # Создаем POSITION_CLOSED events для всех закрытых позиций
         # (apply_portfolio_reset закрывает позиции, но не создает PortfolioEvent)
-        # Используем только реальные позиции из positions_to_force_close (marker исключаем)
-        real_closed_positions = reset_context.positions_to_force_close
+        # Используем все позиции, которые должны быть закрыты (включая marker, если он реальная позиция)
+        real_closed_positions = all_positions_to_close
         
         for position in real_closed_positions:
             # apply_portfolio_reset уже установил exit_price, pnl_pct, pnl_sol в position и meta

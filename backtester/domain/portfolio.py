@@ -1071,6 +1071,9 @@ class PortfolioEngine:
             reason: Причина reset
             portfolio_events: Список событий для эмиссии (v1.9)
         """
+        # Сохраняем статус marker_position до reset (для эмиссии событий)
+        marker_was_open = marker_position.status == "open"
+        
         context = PortfolioResetContext(
             reason=reason,
             reset_time=reset_time,
@@ -1080,6 +1083,7 @@ class PortfolioEngine:
         apply_portfolio_reset(context, state, self.execution_model)
         
         # Эмитим события reset (v2.0.1) - канонический контракт
+        # Порядок: сначала все POSITION_CLOSED, потом PORTFOLIO_RESET_TRIGGERED
         if portfolio_events is not None:
             # Маппинг ResetReason -> канонический reason
             reset_reason_str = {
@@ -1088,27 +1092,14 @@ class PortfolioEngine:
                 ResetReason.MANUAL: "manual_close",
             }.get(reason, "manual_close")
             
-            # 1. Эмитим PORTFOLIO_RESET_TRIGGERED (1 событие)
-            portfolio_events.append(
-                PortfolioEvent.create_portfolio_reset_triggered(
-                    timestamp=reset_time,
-                    reason=reset_reason_str,
-                    closed_positions_count=len(positions_to_force_close),
-                    position_id=marker_position.position_id,
-                    signal_id=marker_position.signal_id,
-                    contract_address=marker_position.contract_address,
-                    strategy=marker_position.meta.get("strategy", "portfolio") if marker_position.meta else "portfolio",
-                    meta={
-                        "reset_time": reset_time.isoformat(),
-                        "cycle_start_equity": state.cycle_start_equity,
-                        "equity_peak_in_cycle": state.equity_peak_in_cycle,
-                        "current_balance": state.balance,
-                    },
-                )
-            )
+            # Собираем все позиции для закрытия: positions_to_force_close + marker_position (если он был открыт)
+            all_positions_to_close = list(positions_to_force_close)
+            # Marker position тоже должна быть закрыта и для неё эмитится POSITION_CLOSED, если она была открыта
+            if marker_was_open and marker_position not in all_positions_to_close:
+                all_positions_to_close.append(marker_position)
             
-            # 2. Эмитим POSITION_CLOSED для каждой закрытой позиции (N событий)
-            for pos in positions_to_force_close:
+            # 1. Эмитим POSITION_CLOSED для каждой закрытой позиции (N событий) - ПЕРВЫМИ
+            for pos in all_positions_to_close:
                 strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
                 raw_exit_price = pos.exit_price
                 exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
@@ -1138,6 +1129,25 @@ class PortfolioEngine:
                         meta=close_meta,
                     )
                 )
+            
+            # 2. Эмитим PORTFOLIO_RESET_TRIGGERED (1 событие) - ПОСЛЕ всех POSITION_CLOSED
+            portfolio_events.append(
+                PortfolioEvent.create_portfolio_reset_triggered(
+                    timestamp=reset_time,
+                    reason=reset_reason_str,
+                    closed_positions_count=len(all_positions_to_close),
+                    position_id=marker_position.position_id,
+                    signal_id=marker_position.signal_id,
+                    contract_address=marker_position.contract_address,
+                    strategy=marker_position.meta.get("strategy", "portfolio") if marker_position.meta else "portfolio",
+                    meta={
+                        "reset_time": reset_time.isoformat(),
+                        "cycle_start_equity": state.cycle_start_equity,
+                        "equity_peak_in_cycle": state.equity_peak_in_cycle,
+                        "current_balance": state.balance,
+                    },
+                )
+            )
 
     def _process_runner_partial_exits(
         self,
