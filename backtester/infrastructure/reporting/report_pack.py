@@ -94,7 +94,7 @@ def _create_summary_sheet(
     # Блок A: Run metadata
     rows.append({"key": "=== Run Metadata ===", "value": ""})
     rows.append({"key": "run_timestamp_utc", "value": datetime.now(timezone.utc).isoformat()})
-    rows.append({"key": "project_version", "value": "v2.0.1"})
+    rows.append({"key": "project_version", "value": "v2.1.9"})
     
     # Git commit (если доступно)
     try:

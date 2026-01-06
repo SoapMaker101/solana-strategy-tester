@@ -1,5 +1,39 @@
 # Changelog
 
+## v2.1.9 (Runner-only) — Stable Baseline / Frozen
+
+**Дата:** 2025-01-06  
+**Статус:** ✅ Stable / Frozen  
+**Тесты:** 306 passed, 0 warnings
+
+### Changes
+- **Stable baseline:** Зафиксированы все контракты, добавлены guard-тесты
+- **Warnings as errors:** Настроен `pytest.ini` для строгого контроля качества
+- **Resource leaks fixed:** Исправлены утечки файловых дескрипторов в XLSX тестах
+- **Documentation:** Полная документация релиза, известных проблем, контрактов
+
+### Fixed
+- Исправлены утечки файловых дескрипторов в `tests/infrastructure/test_xlsx_writer.py`
+- Исправлены утечки файловых дескрипторов в `tests/infrastructure/test_report_pack_xlsx.py`
+- Все `pd.ExcelFile` теперь используют контекст-менеджер `with`
+- Все `load_workbook` обернуты в `try/finally` с `wb.close()`
+
+### Documentation
+- Создан `docs/RELEASE_2.1.9.md` — полное описание релиза
+- Создан `docs/KNOWN_ISSUES_2.1.9.md` — известные проблемы (отложены для 2.2+)
+- Обновлен `README.md` — упоминание версии 2.1.9
+- Обновлен `docs/RELEASE_NOTES.md` — добавлена информация о версии 2.1.9
+- Обновлен `backtester/infrastructure/reporting/report_pack.py` — версия в метаданных
+
+### Known Issues (Deferred to 2.2+)
+- Basedpyright typing warnings (см. `docs/KNOWN_ISSUES_2.1.9.md`)
+- V2-хак в `select_strategies` (см. `docs/KNOWN_ISSUES_2.1.9.md`)
+- Pandas type hints неполные (см. `docs/KNOWN_ISSUES_2.1.9.md`)
+
+**См. также:** `docs/RELEASE_2.1.9.md` для полного описания релиза.
+
+---
+
 ## v2.0.1 (Runner-only) — Full Refactor + Audit Contract
 
 ### Changes
