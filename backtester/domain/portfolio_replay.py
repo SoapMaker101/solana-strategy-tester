@@ -228,32 +228,14 @@ class PortfolioReplay:
         # Формируем equity_curve (упрощенная версия)
         equity_curve = PortfolioReplay._build_equity_curve(state, portfolio_events)
         
-        # ВРЕМЕННЫЙ DEBUG: Reset events analysis
-        print("=== RESET DEBUG (PortfolioReplay) ===")
-        reset_events = [
-            e for e in portfolio_events
-            if e.event_type in (PortfolioEventType.POSITION_CLOSED, PortfolioEventType.PORTFOLIO_RESET_TRIGGERED)
-        ]
-        for e in reset_events:
-            print(f"  {e.event_type.value} | reason={e.reason} | timestamp={e.timestamp} | position_id={e.position_id}")
-        
-        # Количество open_positions в момент reset (из reset events)
-        reset_triggered_events = [
-            e for e in portfolio_events
-            if e.event_type == PortfolioEventType.PORTFOLIO_RESET_TRIGGERED
-        ]
-        if reset_triggered_events:
-            for reset_event in reset_triggered_events:
-                closed_count = reset_event.meta.get("closed_positions_count", 0) if reset_event.meta else 0
-                print(f"  Reset at {reset_event.timestamp}: closed_positions_count={closed_count}")
-        
-        # Список причин для всех POSITION_CLOSED
-        position_closed_reasons = set()
-        for e in portfolio_events:
-            if e.event_type == PortfolioEventType.POSITION_CLOSED:
-                position_closed_reasons.add(e.reason)
-        print(f"  POSITION_CLOSED reasons: {sorted(position_closed_reasons)}")
-        print("=== END RESET DEBUG ===")
+        # Debug: Reset events diagnostics (only if BACKTESTER_RESET_DEBUG=1)
+        from ..debug.reset_debug import dump_reset_debug, reset_debug_enabled
+        if reset_debug_enabled():
+            dump_reset_debug(
+                "PortfolioReplay",
+                events=portfolio_events,
+                portfolio_event_type_engine=PortfolioEventType,
+            )
         
         return PortfolioResult(
             equity_curve=equity_curve,

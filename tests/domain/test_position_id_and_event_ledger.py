@@ -112,6 +112,8 @@ def test_positions_csv_includes_position_id():
             )
         }
     ]
+
+  
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     
@@ -295,6 +297,17 @@ def test_reset_emits_full_event_chain():
     
     engine = PortfolioEngine(config)
     
+    # Debug: Enum comparison (only if BACKTESTER_RESET_DEBUG=1)
+    from backtester.debug.reset_debug import reset_debug_enabled
+    if reset_debug_enabled():
+        import backtester.domain.portfolio_events as pe
+        print("=== TEST DEBUG: Enum Comparison ===")
+        print(f"PortfolioEventType.__module__={PortfolioEventType.__module__}, id(PortfolioEventType)={id(PortfolioEventType)}")
+        print(f"pe.PortfolioEventType.__module__={pe.PortfolioEventType.__module__}, id(pe.PortfolioEventType)={id(pe.PortfolioEventType)}")
+        print(f"PortfolioEventType is pe.PortfolioEventType={PortfolioEventType is pe.PortfolioEventType}")
+        print(f"PortfolioEventType.POSITION_CLOSED == pe.PortfolioEventType.POSITION_CLOSED={PortfolioEventType.POSITION_CLOSED == pe.PortfolioEventType.POSITION_CLOSED}")
+        print("=== END TEST DEBUG ===")
+    
     base_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     
     # Create trades with high profit to trigger reset
@@ -322,6 +335,17 @@ def test_reset_emits_full_event_chain():
         })
     
     result = engine.simulate(trades, strategy_name="test_strategy")
+    
+    # Debug: Reset events diagnostics (only if BACKTESTER_RESET_DEBUG=1)
+    from backtester.debug.reset_debug import dump_reset_debug, reset_debug_enabled
+    if reset_debug_enabled():
+        import backtester.domain.portfolio_events as pe
+        dump_reset_debug(
+            "TEST:test_reset_emits_full_event_chain",
+            events=result.stats.portfolio_events,
+            portfolio_event_type_test=PortfolioEventType,
+            portfolio_event_type_engine=pe.PortfolioEventType,
+        )
     
     # Get events
     events = result.stats.portfolio_events
