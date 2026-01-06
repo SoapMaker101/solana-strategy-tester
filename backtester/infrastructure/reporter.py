@@ -1573,15 +1573,10 @@ class Reporter:
         ]
         
         # Преобразуем blueprints в строки CSV через to_row()
+        # to_row() уже гарантирует, что final_exit_json = "" при None, и json.dumps(...) при наличии
         csv_rows = []
         for bp in blueprints:
             row = bp.to_row()
-            # Гарантируем, что final_exit_json всегда строка
-            if "final_exit_json" in row:
-                if row["final_exit_json"] is None:
-                    row["final_exit_json"] = ""
-                else:
-                    row["final_exit_json"] = str(row["final_exit_json"])
             csv_rows.append(row)
         
         # Создаём DataFrame
@@ -1595,15 +1590,13 @@ class Reporter:
             
             # Критически важно: final_exit_json должен быть пустой строкой, а не NaN
             if "final_exit_json" in df.columns:
-                # Заполняем NaN пустыми строками и конвертируем в str
-                df["final_exit_json"] = df["final_exit_json"].fillna("").astype(str)
-                # Убеждаемся, что "nan" (строка) тоже становится пустой строкой
-                df.loc[df["final_exit_json"] == "nan", "final_exit_json"] = ""
+                # Используем pandas nullable string dtype и заполняем NaN пустыми строками
+                df["final_exit_json"] = df["final_exit_json"].astype("string").fillna("")
         else:
             # Создаём пустой DataFrame с header
             df = pd.DataFrame(columns=columns)  # type: ignore[arg-type]
         
-        # Сохраняем CSV
-        # Важно: na_rep='' чтобы пустые строки (для final_exit_json) не конвертировались в 'nan'
-        df.to_csv(path, index=False, na_rep='')
+        # Сохраняем CSV с quoting=csv.QUOTE_ALL, чтобы пустая строка записалась как "" (quoted empty string)
+        # Это гарантирует, что pandas всегда прочитает пустую строку как "", а не NaN
+        df.to_csv(path, index=False, na_rep='', quoting=csv.QUOTE_ALL)
         print(f"[report] Saved strategy_trades.csv to {path} ({len(csv_rows)} blueprints)")
