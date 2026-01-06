@@ -1372,16 +1372,22 @@ class InvariantChecker:
         
         if not executions_rows:
             # Возвращаем пустой DataFrame с правильными колонками
-            # Используем pd.DataFrame.from_dict для обхода проблем с типами
+            # Используем pd.Index для корректной типизации columns
             column_names = [
                 "signal_id", "strategy", "event_time", "event_type", "event_id",
                 "position_id", "qty_delta", "raw_price", "exec_price", "fees_sol", "pnl_sol_delta", "reason"
             ]
-            # Создаем пустой DataFrame через from_dict с пустым словарем
-            empty_dict = {col: [] for col in column_names}
-            return pd.DataFrame.from_dict(empty_dict)
+            # Создаем пустой DataFrame с явным указанием columns через pd.Index
+            columns_index = pd.Index(column_names)
+            return pd.DataFrame(data=[], columns=columns_index)
         
-        return pd.DataFrame(executions_rows)
+        # Создаем DataFrame из строк и явно указываем columns для типизации
+        column_names = [
+            "signal_id", "strategy", "event_time", "event_type", "event_id",
+            "position_id", "qty_delta", "raw_price", "exec_price", "fees_sol", "pnl_sol_delta", "reason"
+        ]
+        columns_index = pd.Index(column_names)
+        return pd.DataFrame(data=executions_rows, columns=columns_index)
     
     def _check_events_executions_consistency(
         self,
