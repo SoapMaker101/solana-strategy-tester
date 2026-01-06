@@ -12,6 +12,27 @@ import math
 import pandas as pd
 
 
+# Канонические причины закрытия позиций
+CANONICAL_REASONS = {
+    "ladder_tp",
+    "stop_loss",
+    "time_stop",
+    "capacity_prune",
+    "profit_reset",
+    "manual_close",
+    "no_entry",
+    "error",
+    "max_hold_minutes",
+}
+
+# Алиасы для legacy причин
+REASON_ALIASES = {
+    "tp": "ladder_tp",
+    "sl": "stop_loss",
+    "timeout": "time_stop",
+}
+
+
 class AnomalyType(Enum):
     """Типы аномалий, обнаруженных при аудите."""
     
@@ -290,6 +311,9 @@ class InvariantChecker:
         if events_df is not None and len(events_df) > 0:
             self._check_policy_consistency(positions_df, events_df)
         
+        # P0: Проверка неизвестных причин
+        self._check_unknown_reasons(positions_df, events_df)
+        
         # P1: Cross-check positions ↔ events ↔ executions
         if self.include_p1:
             self._check_positions_events_consistency(positions_df, indices)
@@ -441,8 +465,8 @@ class InvariantChecker:
                 details={"pnl_pct": pnl_pct, "reason": reason_str, "normalized_reason": normalized_reason},
             ))
         
-        # Проверка: reason=sl/stop_loss, но pnl >= 0 (неотрицательный) - строго < 0 согласно ТЗ
-        if normalized_reason == "sl" and pnl_pct >= 0:
+        # Проверка: reason=stop_loss, но pnl >= 0 (неотрицательный) - строго < 0 согласно ТЗ
+        if normalized_reason == "stop_loss" and pnl_pct >= 0:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
                 strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -521,6 +545,68 @@ class InvariantChecker:
                     severity="P0",
                     details={"pnl_pct": pnl_pct, "magic_value": "920%"},
                 ))
+    
+    def _check_unknown_reasons(
+        self,
+        positions_df: pd.DataFrame,
+        events_df: Optional[pd.DataFrame] = None,
+    ) -> None:
+        """
+        Проверка неизвестных причин закрытия.
+        
+        Собирает все observed reasons из positions и events,
+        нормализует их и проверяет на соответствие CANONICAL_REASONS.
+        """
+        observed_reasons = set()
+        
+        # Собираем reasons из positions
+        reason_series = self._str_series(positions_df, "reason")
+        for reason in reason_series:
+            if reason and reason.strip():
+                normalized = normalize_reason(reason)
+                if normalized:
+                    observed_reasons.add(normalized)
+        
+        # Собираем reasons из events (если есть)
+        if events_df is not None and len(events_df) > 0:
+            event_reason_series = self._str_series(events_df, "reason")
+            for reason in event_reason_series:
+                if reason and reason.strip():
+                    normalized = normalize_reason(reason)
+                    if normalized:
+                        observed_reasons.add(normalized)
+        
+        # Находим неизвестные причины
+        unknown_reasons = observed_reasons - CANONICAL_REASONS
+        
+        # Эмитим аномалии для неизвестных причин
+        for unknown_reason in unknown_reasons:
+            # Находим позиции с этой причиной
+            for _, row in positions_df.iterrows():
+                reason_val = self._safe_str(row.get("reason"))
+                if reason_val:
+                    normalized = normalize_reason(reason_val)
+                    if normalized == unknown_reason:
+                        self.anomalies.append(Anomaly(
+                            position_id=self._safe_str(row.get("position_id")) or None,
+                            strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
+                            signal_id=self._safe_str(row.get("signal_id")) or None,
+                            contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
+                            entry_time=self._safe_dt(row.get("entry_time")),
+                            exit_time=self._safe_dt(row.get("exit_time")),
+                            entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
+                            exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
+                            pnl_pct=row.get("pnl_pct") if pd.notna(row.get("pnl_pct")) else None,
+                            reason=reason_val,
+                            anomaly_type=AnomalyType.UNKNOWN_REASON,
+                            severity="P0",
+                            details={
+                                "observed_reason": reason_val,
+                                "normalized_reason": normalized,
+                                "canonical_reasons": list(CANONICAL_REASONS),
+                            },
+                        ))
+                        break  # Одна аномалия на уникальную причину
     
     def _check_events_chain(self, positions_df: pd.DataFrame, events_df: pd.DataFrame) -> None:
         """Проверка цепочки событий для каждой позиции."""
@@ -695,9 +781,10 @@ class InvariantChecker:
             
             # Проверка: несколько событий закрытия (если должно быть 1)
             if len(close_events) > 1:
-                # Для обычных закрытий (tp/sl/timeout) должно быть 1 событие
+                # Для обычных закрытий (ladder_tp/stop_loss/time_stop) должно быть 1 событие
                 reason = self._safe_str(pos_row.get("reason")) or ""
-                if reason not in ["prune", "reset", "close_all"]:
+                normalized_reason = normalize_reason(reason)
+                if normalized_reason not in ["capacity_prune", "profit_reset", "manual_close"]:
                     event_ids = [str(e.get("event_id", i)) for i, e in enumerate(close_events)]
                     self.anomalies.append(Anomaly(
                         position_id=position_id,
@@ -721,6 +808,13 @@ class InvariantChecker:
             if reason and status == "closed" and len(close_events) > 0:
                 # Нормализуем reason для консистентного маппинга
                 normalized_reason = normalize_reason(str(reason))
+                
+                # Проверяем только известные причины (из CANONICAL_REASONS)
+                if normalized_reason not in CANONICAL_REASONS:
+                    # Неизвестная причина - пропускаем проверку маппинга
+                    # (она уже будет обработана в _check_unknown_reasons)
+                    continue
+                
                 expected_event_types = self._get_expected_event_types_for_reason(normalized_reason)
                 
                 if expected_event_types:
@@ -764,20 +858,20 @@ class InvariantChecker:
                                     except (json.JSONDecodeError, TypeError):
                                         pass
                                 
-                                reset_reason = meta_dict.get("reset_reason") or meta_dict.get("close_reason")
+                                    reset_reason = meta_dict.get("reset_reason") or meta_dict.get("close_reason")
                                 if reset_reason:
                                     reset_reason_lower = str(reset_reason).lower()
-                                    # Для reason="tp" не должно быть reset_reason
-                                    if normalized_reason == "tp" and reset_reason_lower in ("profit_reset", "capacity_prune"):
+                                    # Для reason="ladder_tp" не должно быть reset_reason
+                                    if normalized_reason == "ladder_tp" and reset_reason_lower in ("profit_reset", "capacity_prune"):
                                         matches = False  # Несоответствие
                                     # Для reason="profit_reset" или "capacity_prune" проверяем reset_reason
-                                    elif normalized_reason in ("reset", "prune"):
-                                        if (normalized_reason == "reset" and "profit_reset" in reset_reason_lower) or \
-                                           (normalized_reason == "prune" and "capacity_prune" in reset_reason_lower):
+                                    elif normalized_reason in ("profit_reset", "capacity_prune"):
+                                        if (normalized_reason == "profit_reset" and "profit_reset" in reset_reason_lower) or \
+                                           (normalized_reason == "capacity_prune" and "capacity_prune" in reset_reason_lower):
                                             matches = True
                                 else:
-                                    # POSITION_CLOSED без reset_reason - подходит для tp/sl/timeout
-                                    if normalized_reason in ("tp", "sl", "timeout"):
+                                    # POSITION_CLOSED без reset_reason - подходит для ladder_tp/stop_loss/time_stop
+                                    if normalized_reason in ("ladder_tp", "stop_loss", "time_stop", "max_hold_minutes"):
                                         matches = True
                     
                     if not matches:
@@ -812,32 +906,37 @@ class InvariantChecker:
         - Канонические типы: POSITION_CLOSED (новый мир)
         - Legacy типы: closed_by_*, executed_close, capacity_prune, profit_reset и т.д.
         """
-        # reason уже должен быть нормализован
+        # reason уже должен быть нормализован (каноническая форма)
         mapping = {
-            "tp": [
+            "ladder_tp": [
                 "POSITION_CLOSED",  # Канонический тип
-                "executed_close", "position_closed",  # Legacy (убрали "close" и "exit" - слишком общие)
+                "executed_close", "position_closed",  # Legacy
                 "closed_by_take_profit", "closed_by_tp",  # Legacy варианты
             ],
-            "sl": [
+            "stop_loss": [
                 "POSITION_CLOSED",  # Канонический тип
-                "executed_close", "position_closed",  # Legacy (убрали "close" и "exit" - слишком общие)
+                "executed_close", "position_closed",  # Legacy
                 "closed_by_stop_loss", "closed_by_sl",  # Legacy варианты
             ],
-            "timeout": [
+            "time_stop": [
                 "POSITION_CLOSED",  # Канонический тип
-                "executed_close", "position_closed",  # Legacy (убрали "close" и "exit" - слишком общие)
+                "executed_close", "position_closed",  # Legacy
                 "closed_by_timeout", "closed_by_max_hold",  # Legacy варианты
             ],
-            "prune": [
+            "max_hold_minutes": [
+                "POSITION_CLOSED",  # Канонический тип
+                "executed_close", "position_closed",  # Legacy
+                "closed_by_timeout", "closed_by_max_hold",  # Legacy варианты
+            ],
+            "capacity_prune": [
                 "POSITION_CLOSED",  # Канонический тип (с reset_reason="capacity_prune" в meta)
                 "capacity_prune", "closed_by_capacity_prune", "prune",  # Legacy
             ],
-            "reset": [
+            "profit_reset": [
                 "POSITION_CLOSED",  # Канонический тип (с reset_reason="profit_reset" в meta)
                 "profit_reset", "closed_by_profit_reset", "reset",  # Legacy
             ],
-            "close_all": [
+            "manual_close": [
                 "POSITION_CLOSED",  # Канонический тип
                 "close_all", "closed_by_capacity_close_all",  # Legacy
             ],
@@ -1349,33 +1448,19 @@ class InvariantChecker:
 
 
 # Convenience functions
-def normalize_reason(reason: str) -> str:
+def normalize_reason(x: Any) -> str:
     """
     Нормализует reason для консистентной обработки.
     
     Правила нормализации:
-    - "stop_loss" -> "sl"
-    - "tp", "ladder_tp" -> "tp" (сохраняем как есть)
-    - Остальные остаются без изменений
+    - Применяет алиасы: tp -> ladder_tp, sl -> stop_loss, timeout -> time_stop
+    - Возвращает нормализованную причину в нижнем регистре
     
-    :param reason: Исходная причина закрытия
-    :return: Нормализованная причина
+    :param x: Исходная причина закрытия (может быть None, str, и т.д.)
+    :return: Нормализованная причина (строка в нижнем регистре)
     """
-    if not reason:
-        return reason
-    
-    reason_lower = str(reason).lower()
-    
-    # Нормализуем stop_loss в sl
-    if "stop_loss" in reason_lower or reason_lower == "sl":
-        return "sl"
-    
-    # tp и его варианты (ladder_tp, tp_2x и т.д.) остаются как есть
-    if "tp" in reason_lower:
-        return "tp"
-    
-    # Возвращаем исходное значение
-    return reason
+    s = "" if x is None else str(x).strip().lower()
+    return REASON_ALIASES.get(s, s)
 
 
 def check_pnl_formula(entry_price: float, exit_price: float, pnl_pct: float, epsilon: float = 1e-6) -> bool:
@@ -1401,12 +1486,12 @@ def check_reason_consistency(reason: str, pnl_pct: float, epsilon: float = 1e-6)
     """
     normalized = normalize_reason(reason)
     
-    if normalized == "tp":
-        # tp требует неотрицательный PnL (с допуском epsilon)
+    if normalized == "ladder_tp":
+        # ladder_tp требует неотрицательный PnL (с допуском epsilon)
         return pnl_pct >= -epsilon
     
-    if normalized == "sl":
-        # sl/stop_loss требует строго отрицательный PnL
+    if normalized == "stop_loss":
+        # stop_loss требует строго отрицательный PnL
         return pnl_pct < 0
     
     # Для остальных причин считаем валидным (нет ограничений)
