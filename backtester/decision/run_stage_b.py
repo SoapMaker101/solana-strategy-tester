@@ -14,7 +14,7 @@ from .strategy_selector import (
     load_stability_csv,
     select_strategies,
 )
-from .selection_rules import DEFAULT_RUNNER_CRITERIA_V1
+from .selection_rules import DEFAULT_RUNNER_CRITERIA_V1, DEFAULT_CRITERIA_V1
 from ..audit.run_audit import audit_run
 
 
@@ -97,22 +97,43 @@ def main():
     if p0_count > 0:
         print("ERROR: Audit P0 anomalies detected. Stage B blocked.")
         raise SystemExit(2)
-    print(f"Using Runner criteria v1")
-    print(f"Runner Criteria v1: min_hit_rate_x2={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x2}, "
-          f"min_hit_rate_x5={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x5}, "
-          f"max_tail_contribution={DEFAULT_RUNNER_CRITERIA_V1.max_tail_contribution}, "
-          f"max_p90_hold_days={DEFAULT_RUNNER_CRITERIA_V1.max_p90_hold_days}, "
-          f"max_drawdown_pct={DEFAULT_RUNNER_CRITERIA_V1.max_drawdown_pct}")
+    # Загружаем stability table для проверки наличия Runner метрик
+    from .strategy_selector import load_stability_csv
+    stability_df = load_stability_csv(stability_csv_path)
+    
+    # Проверяем наличие Runner метрик
+    has_runner_metrics = (
+        "hit_rate_x2" in stability_df.columns or
+        "hit_rate_x5" in stability_df.columns or
+        "tail_contribution" in stability_df.columns or
+        "tail_pnl_share" in stability_df.columns or
+        "p90_hold_days" in stability_df.columns
+    )
+    
+    if has_runner_metrics:
+        print(f"Using Runner criteria v1")
+        print(f"Runner Criteria v1: min_hit_rate_x2={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x2}, "
+              f"min_hit_rate_x5={DEFAULT_RUNNER_CRITERIA_V1.min_hit_rate_x5}, "
+              f"max_tail_contribution={DEFAULT_RUNNER_CRITERIA_V1.max_tail_contribution}, "
+              f"max_p90_hold_days={DEFAULT_RUNNER_CRITERIA_V1.max_p90_hold_days}, "
+              f"max_drawdown_pct={DEFAULT_RUNNER_CRITERIA_V1.max_drawdown_pct}")
+    else:
+        print(f"Using base criteria v1 (Runner metrics not available)")
+        print(f"Base Criteria v1: min_survival_rate={DEFAULT_CRITERIA_V1.min_survival_rate}, "
+              f"max_pnl_variance={DEFAULT_CRITERIA_V1.max_pnl_variance}, "
+              f"min_worst_window_pnl={DEFAULT_CRITERIA_V1.min_worst_window_pnl}, "
+              f"min_median_window_pnl={DEFAULT_CRITERIA_V1.min_median_window_pnl}, "
+              f"min_windows={DEFAULT_CRITERIA_V1.min_windows}")
     print("")
     
-    # Генерируем таблицу отбора (используем v1 критерии)
+    # Генерируем таблицу отбора (используем базовые критерии v1, опционально Runner критерии)
     try:
         output_path = Path(args.output_csv) if args.output_csv else None
         selection_df = generate_selection_table_from_stability(
             stability_csv_path=stability_csv_path,
             output_path=output_path,
-            criteria=DEFAULT_RUNNER_CRITERIA_V1,
-            runner_criteria=DEFAULT_RUNNER_CRITERIA_V1,
+            criteria=DEFAULT_CRITERIA_V1,  # Базовые критерии обязательны
+            runner_criteria=DEFAULT_RUNNER_CRITERIA_V1 if has_runner_metrics else None,  # Runner критерии опциональны
         )
         
         # Печатаем summary

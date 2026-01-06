@@ -8,7 +8,7 @@ from pathlib import Path
 from dataclasses import asdict
 import pandas as pd
 
-from .selection_rules import SelectionCriteria, DEFAULT_RUNNER_CRITERIA, DEFAULT_RUNNER_CRITERIA_V2
+from .selection_rules import SelectionCriteria, DEFAULT_RUNNER_CRITERIA, DEFAULT_RUNNER_CRITERIA_V2, DEFAULT_CRITERIA_V1
 import numpy as np
 import pandas as pd
 
@@ -31,126 +31,118 @@ def check_strategy_criteria(
     """
     Проверяет, проходит ли стратегия все критерии отбора.
     
-    Runner-only v2.0: применяются Runner-специфичные критерии.
+    Сначала применяет базовые критерии (SelectionCriteria v1):
+    - survival_rate >= criteria.min_survival_rate
+    - pnl_variance <= criteria.max_pnl_variance
+    - worst_window_pnl >= criteria.min_worst_window_pnl
+    - median_window_pnl >= criteria.min_median_window_pnl
+    - windows_total >= criteria.min_windows
+    
+    Затем опционально применяет Runner критерии, если они заданы и есть нужные колонки.
     
     :param row: Строка DataFrame с метриками стратегии.
-    :param criteria: (ignored) legacy criteria placeholder.
+    :param criteria: Базовые критерии отбора (SelectionCriteria v1).
     :param runner_criteria: Опциональные критерии для Runner стратегий.
-                           Если None, используется DEFAULT_RUNNER_CRITERIA.
+                           Применяются только если есть нужные колонки в row.
     :return: (passed: bool, failed_reasons: List[str])
     """
-    if runner_criteria is None:
-        runner_criteria = DEFAULT_RUNNER_CRITERIA
-    
     failed_reasons = []
-    is_v2_mode = (
-        runner_criteria is DEFAULT_RUNNER_CRITERIA_V2 or
-        (runner_criteria.min_hit_rate_x2 is None and
-         runner_criteria.min_hit_rate_x5 is None and
-         runner_criteria.min_tail_contribution is not None and
-         runner_criteria.min_tail_contribution == 0.30 and
-         runner_criteria.max_drawdown_pct == -0.60)
-    )
-
-    has_v2_metrics = (
-        "tail_pnl_share" in row or
-        "hit_rate_x4" in row or
-        "non_tail_pnl_share" in row
-    )
-
-    if is_v2_mode and has_v2_metrics:
-        if "hit_rate_x4" in row:
-            hit_rate_x4 = row.get("hit_rate_x4", 0.0)
-            if pd.isna(hit_rate_x4):
-                hit_rate_x4 = 0.0
-            if hit_rate_x4 < 0.10:
-                failed_reasons.append(
-                    f"hit_rate_x4 {hit_rate_x4:.3f} < 0.10"
-                )
-
-        tail_value = None
-        if "tail_pnl_share" in row:
-            tail_value = row.get("tail_pnl_share", 0.0)
-            if pd.isna(tail_value):
-                tail_value = 0.0
-        elif "tail_contribution" in row:
-            tail_value = row.get("tail_contribution", 0.0)
-            if pd.isna(tail_value):
-                tail_value = 0.0
-
-        if tail_value is not None:
-            metric_name = "tail_pnl_share" if "tail_pnl_share" in row else "tail_contribution"
-            if tail_value < 0.30:
-                failed_reasons.append(
-                    f"{metric_name} {tail_value:.3f} < 0.30"
-                )
-
-        if "non_tail_pnl_share" in row:
-            non_tail_value = row.get("non_tail_pnl_share", 0.0)
-            if pd.isna(non_tail_value):
-                if tail_value is not None and 0 <= tail_value <= 1:
-                    non_tail_value = 1.0 - tail_value
-                else:
-                    non_tail_value = 0.0
-            if non_tail_value < -0.20:
-                failed_reasons.append(
-                    f"non_tail_pnl_share {non_tail_value:.3f} < -0.20"
-                )
-    else:
-        if runner_criteria.min_hit_rate_x2 is not None:
-            hit_rate_x2 = row.get("hit_rate_x2", 0.0)
-            if hit_rate_x2 < runner_criteria.min_hit_rate_x2:
-                failed_reasons.append(
-                    f"hit_rate_x2 {hit_rate_x2:.3f} < {runner_criteria.min_hit_rate_x2}"
-                )
-
-        if runner_criteria.min_hit_rate_x5 is not None:
-            hit_rate_x5 = row.get("hit_rate_x5", 0.0)
-            if hit_rate_x5 < runner_criteria.min_hit_rate_x5:
-                failed_reasons.append(
-                    f"hit_rate_x5 {hit_rate_x5:.3f} < {runner_criteria.min_hit_rate_x5}"
-                )
-
-        if runner_criteria.min_tail_contribution is not None:
-            tail_share = row.get("tail_pnl_share", row.get("tail_contribution", 0.0))
-            if pd.isna(tail_share):
-                tail_share = 0.0
-            if tail_share < runner_criteria.min_tail_contribution:
-                metric_name = "tail_pnl_share" if "tail_pnl_share" in row else "tail_contribution"
-                failed_reasons.append(
-                    f"{metric_name} {tail_share:.3f} < {runner_criteria.min_tail_contribution}"
-                )
-
-    if runner_criteria.min_p90_hold_days is not None:
-        p90_hold_days = row.get("p90_hold_days", 0.0)
-        if p90_hold_days < runner_criteria.min_p90_hold_days:
-            failed_reasons.append(
-                f"p90_hold_days {p90_hold_days:.2f} < {runner_criteria.min_p90_hold_days}"
-            )
-
-    if runner_criteria.max_p90_hold_days is not None:
-        p90_hold_days = row.get("p90_hold_days", float('inf'))
-        if p90_hold_days > runner_criteria.max_p90_hold_days:
-            failed_reasons.append(
-                f"p90_hold_days {p90_hold_days:.2f} > {runner_criteria.max_p90_hold_days}"
-            )
-
-    if not (is_v2_mode and has_v2_metrics) and runner_criteria.max_tail_contribution is not None:
-        tail_contribution = row.get("tail_contribution", 0.0)
-        if tail_contribution > runner_criteria.max_tail_contribution:
-            failed_reasons.append(
-                f"tail_contribution {tail_contribution:.3f} > {runner_criteria.max_tail_contribution}"
-            )
-
-    if runner_criteria.max_drawdown_pct is not None:
-        max_drawdown_pct = row.get("max_drawdown_pct", 0.0)
-        if max_drawdown_pct < runner_criteria.max_drawdown_pct:
-            failed_reasons.append(
-                f"max_drawdown_pct {max_drawdown_pct:.3f} < {runner_criteria.max_drawdown_pct}"
-            )
     
-    passed = len(failed_reasons) == 0
-    return passed, failed_reasons
+    def get(name):
+        """Безопасное получение значения из row."""
+        if name not in row or pd.isna(row[name]):
+            failed_reasons.append(f"missing_{name}")
+            return None
+        return float(row[name])
+    
+    # Базовые критерии (SelectionCriteria v1) - обязательные
+    survival = get("survival_rate")
+    variance = get("pnl_variance")
+    worst = get("worst_window_pnl")
+    median = get("median_window_pnl")
+    
+    # windows_total может называться windows_total или windows (alias)
+    if "windows_total" in row and not pd.isna(row["windows_total"]):
+        windows_total = int(row["windows_total"])
+    elif "windows" in row and not pd.isna(row["windows"]):
+        windows_total = int(row["windows"])
+    else:
+        failed_reasons.append("missing_windows_total")
+        windows_total = None
+    
+    # Проверка базовых критериев (только если значения не missing)
+    if survival is not None and survival < criteria.min_survival_rate:
+        failed_reasons.append(f"survival_rate {survival:.3f} < {criteria.min_survival_rate}")
+    if variance is not None and variance > criteria.max_pnl_variance:
+        failed_reasons.append(f"pnl_variance {variance:.3f} > {criteria.max_pnl_variance}")
+    if worst is not None and worst < criteria.min_worst_window_pnl:
+        failed_reasons.append(f"worst_window_pnl {worst:.3f} < {criteria.min_worst_window_pnl}")
+    if median is not None and median < criteria.min_median_window_pnl:
+        failed_reasons.append(f"median_window_pnl {median:.3f} < {criteria.min_median_window_pnl}")
+    if windows_total is not None and windows_total < criteria.min_windows:
+        failed_reasons.append(f"windows_total {windows_total} < {criteria.min_windows}")
+    
+    # Runner критерии - опциональные, применяются только если есть нужные колонки
+    if runner_criteria is not None:
+        # Проверяем наличие колонок для Runner критериев
+        has_runner_metrics = (
+            "hit_rate_x2" in row or
+            "hit_rate_x5" in row or
+            "tail_contribution" in row or
+            "tail_pnl_share" in row or
+            "p90_hold_days" in row or
+            "max_drawdown_pct" in row
+        )
+        
+        if has_runner_metrics:
+            # Применяем Runner критерии только если есть нужные колонки
+            if runner_criteria.min_hit_rate_x2 is not None and "hit_rate_x2" in row:
+                hit_rate_x2 = row.get("hit_rate_x2", 0.0)
+                if pd.isna(hit_rate_x2):
+                    hit_rate_x2 = 0.0
+                if hit_rate_x2 < runner_criteria.min_hit_rate_x2:
+                    failed_reasons.append(
+                        f"hit_rate_x2 {hit_rate_x2:.3f} < {runner_criteria.min_hit_rate_x2}"
+                    )
+            
+            if runner_criteria.min_hit_rate_x5 is not None and "hit_rate_x5" in row:
+                hit_rate_x5 = row.get("hit_rate_x5", 0.0)
+                if pd.isna(hit_rate_x5):
+                    hit_rate_x5 = 0.0
+                if hit_rate_x5 < runner_criteria.min_hit_rate_x5:
+                    failed_reasons.append(
+                        f"hit_rate_x5 {hit_rate_x5:.3f} < {runner_criteria.min_hit_rate_x5}"
+                    )
+            
+            if runner_criteria.max_p90_hold_days is not None and "p90_hold_days" in row:
+                p90_hold_days = row.get("p90_hold_days", float('inf'))
+                if pd.isna(p90_hold_days):
+                    p90_hold_days = float('inf')
+                if p90_hold_days > runner_criteria.max_p90_hold_days:
+                    failed_reasons.append(
+                        f"p90_hold_days {p90_hold_days:.2f} > {runner_criteria.max_p90_hold_days}"
+                    )
+            
+            if runner_criteria.max_tail_contribution is not None:
+                tail_contribution = row.get("tail_contribution", row.get("tail_pnl_share", 0.0))
+                if not pd.isna(tail_contribution) and tail_contribution > runner_criteria.max_tail_contribution:
+                    metric_name = "tail_pnl_share" if "tail_pnl_share" in row else "tail_contribution"
+                    failed_reasons.append(
+                        f"{metric_name} {tail_contribution:.3f} > {runner_criteria.max_tail_contribution}"
+                    )
+            
+            if runner_criteria.max_drawdown_pct is not None and "max_drawdown_pct" in row:
+                max_drawdown_pct = row.get("max_drawdown_pct", 0.0)
+                if not pd.isna(max_drawdown_pct) and max_drawdown_pct < runner_criteria.max_drawdown_pct:
+                    failed_reasons.append(
+                        f"max_drawdown_pct {max_drawdown_pct:.3f} < {runner_criteria.max_drawdown_pct}"
+                    )
+    
+    # Если есть missing_* - сразу fail
+    has_missing = any(r.startswith("missing_") for r in failed_reasons)
+    passed = (len([x for x in failed_reasons if not x.startswith("missing_")]) == 0) and not has_missing
+    
+    return bool(passed), failed_reasons
 
 
 def select_strategies(
@@ -161,11 +153,11 @@ def select_strategies(
     """
     Применяет критерии отбора к стратегиям из stability table.
     
-    Runner-only: применяются Runner-специфичные критерии.
+    Сначала применяет базовые критерии (SelectionCriteria v1), затем опционально Runner критерии.
     
     :param stability_df: DataFrame из strategy_stability.csv.
-    :param criteria: Runner-only критерии (legacy placeholder).
-    :param runner_criteria: Критерии отбора для Runner. По умолчанию DEFAULT_RUNNER_CRITERIA.
+    :param criteria: Базовые критерии отбора (SelectionCriteria v1).
+    :param runner_criteria: Опциональные критерии отбора для Runner.
     :return: DataFrame с колонками из stability_df + passed (bool) + failed_reasons (List[str]).
              ВАЖНО: НЕ СОРТИРУЕТСЯ по pnl или другим метрикам.
     """
@@ -177,12 +169,14 @@ def select_strategies(
         return result_df
     
     # Проверяем обязательные колонки (базовые для всех стратегий)
-    required_cols = ["strategy"]
-    missing_cols = [col for col in required_cols if col not in stability_df.columns]
-    if missing_cols:
-        raise ValueError(f"Missing required columns in stability_df: {missing_cols}")
+    required = {"strategy", "survival_rate", "pnl_variance", "worst_window_pnl", "median_window_pnl"}
+    has_windows = ("windows_total" in stability_df.columns) or ("windows" in stability_df.columns)
     
-    # Runner метрики могут отсутствовать, если Stage A не был обновлен
+    if not required.issubset(stability_df.columns) or not has_windows:
+        missing = sorted(list(required - set(stability_df.columns)))
+        if not has_windows:
+            missing.append("windows_total")
+        raise ValueError(f"Missing required columns: {missing}")
     
     # Применяем критерии к каждой стратегии
     results = []
@@ -190,7 +184,7 @@ def select_strategies(
         passed, failed_reasons = check_strategy_criteria(row, criteria, runner_criteria)
         
         result_row = row.to_dict()
-        result_row["passed"] = passed
+        result_row["passed"] = bool(passed)  # Явно конвертируем в python bool
         result_row["failed_reasons"] = failed_reasons
         results.append(result_row)
     
@@ -360,17 +354,17 @@ def generate_selection_table_from_stability(
     """
     Генерирует таблицу отбора из stability CSV.
     
+    Сначала применяет базовые критерии (SelectionCriteria v1), затем опционально Runner критерии.
+    
     :param stability_csv_path: Путь к strategy_stability.csv.
     :param output_path: Опциональный путь для сохранения CSV. 
                         Если None, сохраняется в той же директории как strategy_selection.csv.
-    :param criteria: Опциональные критерии отбора (Runner-only). Если None, используется DEFAULT_RUNNER_CRITERIA.
-    :param runner_criteria: Опциональные критерии отбора для Runner. Если None, используется DEFAULT_RUNNER_CRITERIA.
+    :param criteria: Базовые критерии отбора (SelectionCriteria v1). Если None, используется DEFAULT_CRITERIA_V1.
+    :param runner_criteria: Опциональные критерии отбора для Runner. Если None, не применяются.
     :return: DataFrame с таблицей отбора.
     """
     if criteria is None:
-        criteria = DEFAULT_RUNNER_CRITERIA
-    if runner_criteria is None:
-        runner_criteria = DEFAULT_RUNNER_CRITERIA
+        criteria = DEFAULT_CRITERIA_V1
     
     stability_csv_path = Path(stability_csv_path)
     
