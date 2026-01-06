@@ -422,11 +422,17 @@ def is_runner_strategy(strategy_name: str) -> bool:
     """
     Определяет, является ли стратегия Runner стратегией.
     
+    Поддерживает legacy-детекцию для обратной совместимости:
+    - имена, содержащие "runner" (case-insensitive)
+    - имена, начинающиеся на "RR_" (case-insensitive) - legacy
+    
     :param strategy_name: Имя стратегии.
     :return: True если стратегия Runner, False иначе.
     """
-    strategy_lower = strategy_name.lower()
-    return "runner" in strategy_lower or strategy_name.startswith("Runner")
+    if not strategy_name:
+        return False
+    s = strategy_name.strip().lower()
+    return ("runner" in s) or s.startswith("rr_")
 
 
 def build_stability_table(
