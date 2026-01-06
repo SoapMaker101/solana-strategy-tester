@@ -189,16 +189,18 @@ class InvariantChecker:
         return s.astype("string").fillna("")
     
     @staticmethod
-    def _safe_str(value: Any) -> str:
+    def _safe_str(value: Any, default: str = "") -> str:
         """
         Безопасное преобразование значения в строку.
         
         :param value: Значение (может быть None, Unknown, и т.д.)
-        :return: str (никогда не None)
+        :param default: Значение по умолчанию, если value is None или NaN
+        :return: str (никогда не None, всегда строка)
         """
         if value is None or pd.isna(value):
-            return ""
-        return str(value)
+            return default
+        result = str(value)
+        return result if result else default
     
     @staticmethod
     def _safe_dt(value: Any) -> Optional[datetime]:
@@ -307,9 +309,9 @@ class InvariantChecker:
         if missing:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
-                strategy=self._safe_str(row.get("strategy")) or "UNKNOWN",
+                strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
                 signal_id=self._safe_str(row.get("signal_id")) or None,
-                contract_address=self._safe_str(row.get("contract_address")) or "UNKNOWN",
+                contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
                 entry_time=self._safe_dt(row.get("entry_time")),
                 exit_time=self._safe_dt(row.get("exit_time")),
                 entry_price=row.get("entry_price") if pd.notna(row.get("entry_price")) else None,
@@ -332,9 +334,9 @@ class InvariantChecker:
         if pd.isna(entry_price) or entry_price <= self.MIN_VALID_PRICE:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
-                strategy=self._safe_str(row.get("strategy")),
+                strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
                 signal_id=self._safe_str(row.get("signal_id")) or None,
-                contract_address=self._safe_str(row.get("contract_address")),
+                contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
                 entry_time=self._safe_dt(row.get("entry_time")),
                 exit_time=self._safe_dt(row.get("exit_time")),
                 entry_price=entry_price,
@@ -352,9 +354,9 @@ class InvariantChecker:
             if pd.isna(exit_price) or exit_price <= self.MIN_VALID_PRICE:
                 self.anomalies.append(Anomaly(
                     position_id=self._safe_str(row.get("position_id")) or None,
-                    strategy=self._safe_str(row.get("strategy")),
+                    strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
                     signal_id=self._safe_str(row.get("signal_id")) or None,
-                    contract_address=self._safe_str(row.get("contract_address")),
+                    contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
                     entry_time=self._safe_dt(row.get("entry_time")),
                     exit_time=self._safe_dt(row.get("exit_time")),
                     entry_price=entry_price,
@@ -387,9 +389,9 @@ class InvariantChecker:
             if abs(pnl_pct) > self.MAX_REASONABLE_PNL_PCT:
                 self.anomalies.append(Anomaly(
                     position_id=self._safe_str(row.get("position_id")) or None,
-                    strategy=self._safe_str(row.get("strategy")),
+                    strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
                     signal_id=self._safe_str(row.get("signal_id")) or None,
-                    contract_address=self._safe_str(row.get("contract_address")),
+                    contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
                     entry_time=self._safe_dt(row.get("entry_time")),
                     exit_time=self._safe_dt(row.get("exit_time")),
                     entry_price=entry_price,
@@ -425,9 +427,9 @@ class InvariantChecker:
         if normalized_reason == "tp" and pnl_pct < -self.EPSILON:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
-                strategy=self._safe_str(row.get("strategy")),
+                strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
                 signal_id=self._safe_str(row.get("signal_id")) or None,
-                contract_address=self._safe_str(row.get("contract_address")),
+                contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
                 entry_time=self._safe_dt(row.get("entry_time")),
                 exit_time=self._safe_dt(row.get("exit_time")),
                 entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
@@ -443,9 +445,9 @@ class InvariantChecker:
         if normalized_reason == "sl" and pnl_pct >= 0:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
-                strategy=self._safe_str(row.get("strategy")),
+                strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
                 signal_id=self._safe_str(row.get("signal_id")) or None,
-                contract_address=self._safe_str(row.get("contract_address")),
+                contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
                 entry_time=self._safe_dt(row.get("entry_time")),
                 exit_time=self._safe_dt(row.get("exit_time")),
                 entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
@@ -478,9 +480,9 @@ class InvariantChecker:
         if entry_dt > exit_dt:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
-                strategy=self._safe_str(row.get("strategy")),
+                strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
                 signal_id=self._safe_str(row.get("signal_id")) or None,
-                contract_address=self._safe_str(row.get("contract_address")),
+                contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
                 entry_time=entry_dt,
                 exit_time=exit_dt,
                 entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
@@ -506,9 +508,9 @@ class InvariantChecker:
             if any(abs(pnl_pct - mv) < self.EPSILON for mv in magic_values):
                 self.anomalies.append(Anomaly(
                     position_id=self._safe_str(row.get("position_id")) or None,
-                    strategy=self._safe_str(row.get("strategy")),
+                    strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
                     signal_id=self._safe_str(row.get("signal_id")) or None,
-                    contract_address=self._safe_str(row.get("contract_address")),
+                    contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
                     entry_time=self._safe_dt(row.get("entry_time")),
                     exit_time=self._safe_dt(row.get("exit_time")),
                     entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
@@ -530,8 +532,8 @@ class InvariantChecker:
             
             position_id = self._safe_str(pos_row.get("position_id")) or None
             signal_id = self._safe_str(pos_row.get("signal_id")) or None
-            strategy = self._safe_str(pos_row.get("strategy"))
-            contract = self._safe_str(pos_row.get("contract_address"))
+            strategy = self._safe_str(pos_row.get("strategy"), "UNKNOWN")
+            contract = self._safe_str(pos_row.get("contract_address"), "UNKNOWN")
             
             # Ищем события для этой позиции по position_id (требование: проверка по position_id)
             if position_id and pd.notna(position_id):
@@ -572,8 +574,8 @@ class InvariantChecker:
         for _, pos_row in reset_positions.iterrows():
             position_id = self._safe_str(pos_row.get("position_id")) or None
             signal_id = self._safe_str(pos_row.get("signal_id")) or None
-            strategy = self._safe_str(pos_row.get("strategy"))
-            contract = self._safe_str(pos_row.get("contract_address"))
+            strategy = self._safe_str(pos_row.get("strategy"), "UNKNOWN")
+            contract = self._safe_str(pos_row.get("contract_address"), "UNKNOWN")
             
             # Ищем события reset/prune
             event_type_series = self._series(events_df, "event_type", "")
@@ -620,8 +622,8 @@ class InvariantChecker:
         for _, pos_row in positions_df.iterrows():
             position_id = self._safe_str(pos_row.get("position_id")) or None
             signal_id = self._safe_str(pos_row.get("signal_id")) or None
-            strategy = self._safe_str(pos_row.get("strategy"))
-            contract = self._safe_str(pos_row.get("contract_address"))
+            strategy = self._safe_str(pos_row.get("strategy"), "UNKNOWN")
+            contract = self._safe_str(pos_row.get("contract_address"), "UNKNOWN")
             status = self._safe_str(pos_row.get("status")) or "open"
             
             events = indices.get_events_for_position(position_id, signal_id, strategy, contract)
@@ -963,10 +965,10 @@ class InvariantChecker:
         # Создаем индекс позиций для быстрого поиска
         positions_by_signal = {}
         for _, pos_row in positions_df.iterrows():
-            signal_id = pos_row.get("signal_id")
-            strategy = pos_row.get("strategy")
+            signal_id = self._safe_str(pos_row.get("signal_id")) or None
+            strategy = self._safe_str(pos_row.get("strategy"), "UNKNOWN")
             if signal_id and strategy:
-                key = (str(strategy), str(signal_id))
+                key = (strategy, signal_id)
                 if key not in positions_by_signal:
                     positions_by_signal[key] = []
                 positions_by_signal[key].append(pos_row)
@@ -975,9 +977,9 @@ class InvariantChecker:
         for event in all_trade_events:
             event_time = self._safe_dt(event.get("timestamp"))
             event_type = str(event.get("event_type", "")).upper()
-            event_signal_id = str(event.get("signal_id", "")) if pd.notna(event.get("signal_id")) else None
-            event_strategy = str(event.get("strategy", "")) if pd.notna(event.get("strategy")) else None
-            event_id = str(event.get("event_id", "")) if pd.notna(event.get("event_id")) else None
+            event_signal_id = self._safe_str(event.get("signal_id")) or None
+            event_strategy = self._safe_str(event.get("strategy"), "UNKNOWN")
+            event_id = self._safe_str(event.get("event_id")) or None
             
             # Находим соответствующую позицию
             pos_row = None
@@ -993,11 +995,11 @@ class InvariantChecker:
                 expected_exec_type = event_to_exec_type.get(event_type)
                 if expected_exec_type and event_time and event_signal_id and event_strategy:
                     for _, exec_row in executions_df.iterrows():
-                        exec_signal_id = str(exec_row.get("signal_id", "")) if pd.notna(exec_row.get("signal_id")) else None
-                        exec_strategy = str(exec_row.get("strategy", "")) if pd.notna(exec_row.get("strategy")) else None
+                        exec_signal_id = self._safe_str(exec_row.get("signal_id")) or None
+                        exec_strategy = self._safe_str(exec_row.get("strategy"), "UNKNOWN")
                         exec_time = self._safe_dt(exec_row.get("event_time"))
                         exec_type = str(exec_row.get("event_type", "")).lower()
-                        exec_event_id = str(exec_row.get("event_id", "")) if pd.notna(exec_row.get("event_id")) else None
+                        exec_event_id = self._safe_str(exec_row.get("event_id")) or None
                         
                         # Матчинг по event_id (приоритет)
                         if event_id and exec_event_id and event_id == exec_event_id:
@@ -1039,12 +1041,12 @@ class InvariantChecker:
             
             if not has_execution:
                 # Создаем anomaly
-                position_id = event.get("position_id")
-                contract = event.get("contract_address", "UNKNOWN")
+                position_id = self._safe_str(event.get("position_id")) or None
+                contract = self._safe_str(event.get("contract_address"), "UNKNOWN")
                 
                 self.anomalies.append(Anomaly(
                     position_id=position_id,
-                    strategy=event_strategy or "UNKNOWN",
+                    strategy=self._safe_str(event_strategy, "UNKNOWN"),
                     signal_id=event_signal_id,
                     contract_address=contract,
                     entry_time=self._safe_dt(pos_row.get("entry_time")) if pos_row is not None else None,
@@ -1093,8 +1095,8 @@ class InvariantChecker:
                 # Поиск по (signal_id, strategy, timestamp)
                 if not matching_event and exec_time and exec_signal_id and exec_strategy:
                     for event in all_trade_events:
-                        event_signal_id = str(event.get("signal_id", "")) if pd.notna(event.get("signal_id")) else None
-                        event_strategy = str(event.get("strategy", "")) if pd.notna(event.get("strategy")) else None
+                        event_signal_id = self._safe_str(event.get("signal_id")) or None
+                        event_strategy = self._safe_str(event.get("strategy"), "UNKNOWN")
                         event_time = self._safe_dt(event.get("timestamp"))
                         event_type = str(event.get("event_type", "")).upper()
                         
@@ -1117,11 +1119,11 @@ class InvariantChecker:
                 if not matching_event:
                     # Создаем anomaly
                     position_id = exec_row.get("position_id")
-                    contract = self._safe_str(exec_row.get("contract_address")) or "UNKNOWN"
+                    contract = self._safe_str(exec_row.get("contract_address"), "UNKNOWN")
                     
                     self.anomalies.append(Anomaly(
                         position_id=position_id,
-                        strategy=exec_strategy or "UNKNOWN",
+                        strategy=self._safe_str(exec_strategy, "UNKNOWN"),
                         signal_id=exec_signal_id,
                         contract_address=contract,
                     entry_time=self._safe_dt(pos_row.get("entry_time")) if pos_row is not None else None,
@@ -1156,8 +1158,8 @@ class InvariantChecker:
                         
                         if expected_event_type and exec_signal_id and exec_strategy:
                             for event in all_trade_events:
-                                event_signal_id = str(event.get("signal_id", "")) if pd.notna(event.get("signal_id")) else None
-                                event_strategy = str(event.get("strategy", "")) if pd.notna(event.get("strategy")) else None
+                                event_signal_id = self._safe_str(event.get("signal_id")) or None
+                                event_strategy = self._safe_str(event.get("strategy"), "UNKNOWN")
                                 event_type = str(event.get("event_type", "")).upper()
                                 
                                 if (event_signal_id == exec_signal_id and
@@ -1169,11 +1171,11 @@ class InvariantChecker:
                     event_time = self._safe_dt(matching_event_for_time_check.get("timestamp")) if matching_event_for_time_check else None
                     if exec_time and event_time and exec_time < event_time:
                         position_id = matching_event.get("position_id")
-                        contract = matching_event.get("contract_address", "UNKNOWN")
+                        contract = self._safe_str(matching_event.get("contract_address"), "UNKNOWN")
                         
                         self.anomalies.append(Anomaly(
                             position_id=position_id,
-                            strategy=exec_strategy or "UNKNOWN",
+                            strategy=self._safe_str(exec_strategy, "UNKNOWN"),
                             signal_id=exec_signal_id,
                             contract_address=contract,
                     entry_time=self._safe_dt(pos_row.get("entry_time")) if pos_row is not None else None,
@@ -1204,11 +1206,11 @@ class InvariantChecker:
                                 price_diff_pct = abs(exec_price - entry_price) / entry_price
                                 if price_diff_pct > 0.5:  # Более 50% разница
                                     position_id = matching_event.get("position_id")
-                                    contract = matching_event.get("contract_address", "UNKNOWN")
+                                    contract = self._safe_str(matching_event.get("contract_address"), "UNKNOWN")
                                     
                                     self.anomalies.append(Anomaly(
                                         position_id=position_id,
-                                        strategy=exec_strategy or "UNKNOWN",
+                                        strategy=self._safe_str(exec_strategy, "UNKNOWN"),
                                         signal_id=exec_signal_id,
                                         contract_address=contract,
                                         entry_time=self._safe_dt(pos_row.get("entry_time")),
@@ -1232,11 +1234,11 @@ class InvariantChecker:
                                 price_diff_pct = abs(exec_price - exit_price) / exit_price
                                 if price_diff_pct > 0.5:  # Более 50% разница
                                     position_id = matching_event.get("position_id")
-                                    contract = matching_event.get("contract_address", "UNKNOWN")
+                                    contract = self._safe_str(matching_event.get("contract_address"), "UNKNOWN")
                                     
                                     self.anomalies.append(Anomaly(
                                         position_id=position_id,
-                                        strategy=exec_strategy or "UNKNOWN",
+                                        strategy=self._safe_str(exec_strategy, "UNKNOWN"),
                                         signal_id=exec_signal_id,
                                         contract_address=contract,
                                         entry_time=self._safe_dt(pos_row.get("entry_time")),
@@ -1323,7 +1325,7 @@ class InvariantChecker:
                         position_id=None,
                         strategy="portfolio",
                         signal_id=self._safe_str(event_row.get("signal_id")) or None,
-                        contract_address=self._safe_str(event_row.get("contract_address")) or "UNKNOWN",
+                        contract_address=self._safe_str(event_row.get("contract_address"), "UNKNOWN"),
                         entry_time=None,
                         exit_time=self._safe_dt(event_row.get("timestamp")),
                         entry_price=None,
