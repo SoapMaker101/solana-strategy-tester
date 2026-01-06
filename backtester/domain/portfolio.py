@@ -1253,20 +1253,14 @@ class PortfolioEngine:
             # Сохраняем информацию о частичном выходе в meta
             if "partial_exits" not in pos.meta:
                 pos.meta["partial_exits"] = []
-            pos.meta["partial_exits"].append({
-                "xn": xn,
-                "hit_time": hit_time.isoformat(),
-                "exit_size": exit_size,
-                "exit_price": effective_exit_price,
-                "pnl_pct": exit_pnl_pct,
-                "pnl_sol": exit_pnl_sol,
-                "fees_sol": fees_partial,
-                "network_fee_sol": network_fee_exit,
-            })
+            
+            # Эмитим событие POSITION_PARTIAL_EXIT (только один раз!)
             if portfolio_events is not None:
+                strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
+                pnl_pct_contrib = exit_pnl_pct * 100.0  # В процентах для события
                 event = PortfolioEvent.create_position_partial_exit(
                     timestamp=hit_time,
-                    strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                    strategy=strategy_name,
                     signal_id=pos.signal_id,
                     contract_address=pos.contract_address,
                     position_id=pos.position_id,
@@ -1274,7 +1268,7 @@ class PortfolioEngine:
                     fraction=fraction,
                     raw_price=exit_price_raw,
                     exec_price=effective_exit_price,
-                    pnl_pct_contrib=exit_pnl_pct * 100.0,  # В процентах
+                    pnl_pct_contrib=pnl_pct_contrib,
                     pnl_sol_contrib=exit_pnl_sol,
                     meta={
                         "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
@@ -1285,8 +1279,32 @@ class PortfolioEngine:
                         "reason": "ladder_tp",  # Сохраняем reason в meta
                     },
                 )
-                pos.meta["partial_exits"][-1]["event_id"] = event.event_id
                 portfolio_events.append(event)
+                
+                # Сохраняем event_id в meta для связи
+                pos.meta["partial_exits"].append({
+                    "xn": xn,
+                    "hit_time": hit_time.isoformat(),
+                    "exit_size": exit_size,
+                    "exit_price": effective_exit_price,
+                    "pnl_pct": exit_pnl_pct,
+                    "pnl_sol": exit_pnl_sol,
+                    "fees_sol": fees_partial,
+                    "network_fee_sol": network_fee_exit,
+                    "event_id": event.event_id,
+                })
+            else:
+                # Если portfolio_events не передан, все равно сохраняем в meta
+                pos.meta["partial_exits"].append({
+                    "xn": xn,
+                    "hit_time": hit_time.isoformat(),
+                    "exit_size": exit_size,
+                    "exit_price": effective_exit_price,
+                    "pnl_pct": exit_pnl_pct,
+                    "pnl_sol": exit_pnl_sol,
+                    "fees_sol": fees_partial,
+                    "network_fee_sol": network_fee_exit,
+                })
             
             # Обновляем общие fees
             if "fees_total_sol" in pos.meta:
@@ -1301,31 +1319,6 @@ class PortfolioEngine:
             
             # Помечаем уровень как обработанный
             pos.meta[processed_key] = True
-            
-            # Эмитим событие POSITION_PARTIAL_EXIT
-            if portfolio_events is not None:
-                strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
-                pnl_pct_contrib = exit_pnl_pct * 100.0  # В процентах для события
-                portfolio_events.append(
-                    PortfolioEvent.create_position_partial_exit(
-                        timestamp=hit_time,
-                        strategy=strategy_name,
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        position_id=pos.position_id,
-                        level_xn=xn,
-                        fraction=fraction,
-                        raw_price=exit_price_raw,
-                        exec_price=effective_exit_price,
-                        pnl_pct_contrib=pnl_pct_contrib,
-                        pnl_sol_contrib=exit_pnl_sol,
-                        meta={
-                            "exit_size": exit_size,
-                            "fees_sol": fees_partial,
-                            "network_fee_sol": network_fee_exit,
-                        },
-                    )
-                )
             
             # Обновляем equity curve
             equity_curve.append({"timestamp": hit_time, "balance": balance})
@@ -1450,14 +1443,20 @@ class PortfolioEngine:
         is_runner = pos.meta.get("runner_ladder", False)
         
         if is_runner and pos.exit_time is not None:
-            # Обрабатываем частичные выходы Runner
-            if current_time >= pos.exit_time or any(
+            # Guard: для runner_ladder=True partial exits эмитятся ТОЛЬКО из ladder-разметки
+            # Проверяем, не были ли partial exits уже обработаны
+            partial_exits_processed_key = "runner_partial_exits_processed"
+            if pos.meta.get(partial_exits_processed_key, False):
+                # Partial exits уже обработаны, пропускаем
+                pass
+            elif current_time >= pos.exit_time or any(
                 hit_time <= current_time 
                 for hit_time in (
                     datetime.fromisoformat(v) if isinstance(v, str) else v
                     for v in pos.meta.get("levels_hit", {}).values()
                 )
             ):
+                # Обрабатываем частичные выходы Runner (только один раз!)
                 partial_exits_processed = self._process_runner_partial_exits(
                     pos=pos,
                     current_time=current_time,
@@ -1468,6 +1467,8 @@ class PortfolioEngine:
                 )
                 state.balance = partial_exits_processed["balance"]
                 state.peak_balance = max(state.peak_balance, state.balance)
+                # Помечаем, что partial exits обработаны
+                pos.meta[partial_exits_processed_key] = True
             
             # Если позиция полностью закрыта после partial exits (size <= 0), удаляем из open
             # Проверяем, не добавлена ли уже в closed_positions
@@ -1510,28 +1511,7 @@ class PortfolioEngine:
                 state.open_positions = [p for p in state.open_positions if p.signal_id != pos.signal_id]
                 if pos.signal_id in positions_by_signal_id:
                     del positions_by_signal_id[pos.signal_id]
-                if portfolio_events is not None:
-                    close_reason = pos.meta.get("close_reason", "ladder_tp") if pos.meta else "ladder_tp"
-                    pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
-                    fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
-                    event = PortfolioEvent.create_position_closed(
-                        timestamp=current_time,
-                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        position_id=pos.position_id,
-                        reason=close_reason,
-                        meta={
-                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
-                            "exit_time": current_time.isoformat(),
-                            "pnl_pct": pos.pnl_pct,
-                            "pnl_sol": pnl_sol,
-                            "fees_total_sol": fees_total,
-                            "close_reason": close_reason,
-                        },
-                    )
-                    portfolio_events.append(event)
-                    pos.meta["close_event_id"] = event.event_id
+                # POSITION_CLOSED уже был эмитчен выше (строка 1479), не дублируем
                 return
         
         # Обычная обработка для Runner (полное закрытие)
