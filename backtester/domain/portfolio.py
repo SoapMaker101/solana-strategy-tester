@@ -348,6 +348,7 @@ class PortfolioEngine:
         reset_reason: str,
         additional_meta: Optional[Dict[str, Any]] = None,
         portfolio_events: Optional[List[PortfolioEvent]] = None,
+        override_reason: Optional[str] = None,
     ) -> Dict[str, float]:
         """
         Единый метод для принудительного закрытия позиции (forced close).
@@ -421,6 +422,10 @@ class PortfolioEngine:
             if additional_meta:
                 event_meta.update(additional_meta)
 
+            # ВАЖНО: override_reason имеет приоритет над reset_reason
+            # Это гарантирует, что при принудительном закрытии reason не перезаписывается
+            close_reason = override_reason if override_reason is not None else reset_reason
+
             strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
             portfolio_events.append(
                 PortfolioEvent.create_position_closed(
@@ -429,7 +434,7 @@ class PortfolioEngine:
                     signal_id=pos.signal_id,
                     contract_address=pos.contract_address,
                     position_id=pos.position_id,
-                    reason=reset_reason,
+                    reason=close_reason,  # Используем override_reason если задан
                     raw_price=raw_exit_price,
                     exec_price=effective_exit_price,
                     pnl_pct=exit_pnl_pct * 100.0,  # В процентах
@@ -1470,6 +1475,7 @@ class PortfolioEngine:
         state: PortfolioState,
         positions_by_signal_id: Dict[str, Position],
         portfolio_events: Optional[List[PortfolioEvent]] = None,
+        override_reason: Optional[str] = None,
     ) -> None:
         """
         Обрабатывает закрытие позиции по EXIT событию.
@@ -1479,7 +1485,14 @@ class PortfolioEngine:
             current_time: Текущее время (время EXIT события)
             state: Состояние портфеля
             positions_by_signal_id: Mapping позиций по signal_id
+            override_reason: Принудительный reason для POSITION_CLOSED (если задан, имеет приоритет)
         """
+        # ВАЖНО: Если позиция уже закрыта reset'ом, не перезаписываем reason
+        if pos.meta and pos.meta.get("closed_by_reset", False) and override_reason is None:
+            # Позиция уже закрыта reset'ом, событие уже эмитчено в _apply_reset
+            # Не обрабатываем повторно
+            return
+        
         # Проверяем, является ли позиция Runner с частичными выходами
         is_runner = pos.meta.get("runner_ladder", False)
         
@@ -1518,7 +1531,8 @@ class PortfolioEngine:
                 
                 # Эмитим событие POSITION_CLOSED для runner ladder позиции
                 if portfolio_events is not None:
-                    close_reason = pos.meta.get("ladder_reason", "ladder_tp") if pos.meta else "ladder_tp"
+                    # ВАЖНО: override_reason имеет приоритет над ladder_reason
+                    close_reason = override_reason if override_reason is not None else (pos.meta.get("ladder_reason", "ladder_tp") if pos.meta else "ladder_tp")
                     pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
                     fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
                     raw_exit_price = pos.exit_price
@@ -1532,7 +1546,7 @@ class PortfolioEngine:
                             signal_id=pos.signal_id,
                             contract_address=pos.contract_address,
                             position_id=pos.position_id,
-                            reason=close_reason,
+                            reason=close_reason,  # Используем override_reason если задан
                             raw_price=raw_exit_price,
                             exec_price=exec_exit_price,
                             pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах
@@ -1586,17 +1600,21 @@ class PortfolioEngine:
 
             # Эмитим событие POSITION_CLOSED (v2.0.1) - каноническое
             if portfolio_events is not None:
-                close_reason_raw = pos.meta.get("close_reason", pos.meta.get("ladder_reason", "tp")) if pos.meta else "tp"
-                # Маппинг legacy close_reason -> канонический reason
-                close_reason_map = {
-                    "tp": "ladder_tp",
-                    "sl": "stop_loss",
-                    "timeout": "time_stop",
-                    "time_stop": "time_stop",
-                    "stop_loss": "stop_loss",
-                    "ladder_tp": "ladder_tp",
-                }
-                canonical_reason = close_reason_map.get(close_reason_raw, close_reason_raw)
+                # ВАЖНО: override_reason имеет приоритет над всеми другими источниками reason
+                if override_reason is not None:
+                    canonical_reason = override_reason
+                else:
+                    close_reason_raw = pos.meta.get("close_reason", pos.meta.get("ladder_reason", "tp")) if pos.meta else "tp"
+                    # Маппинг legacy close_reason -> канонический reason
+                    close_reason_map = {
+                        "tp": "ladder_tp",
+                        "sl": "stop_loss",
+                        "timeout": "time_stop",
+                        "time_stop": "time_stop",
+                        "stop_loss": "stop_loss",
+                        "ladder_tp": "ladder_tp",
+                    }
+                    canonical_reason = close_reason_map.get(close_reason_raw, close_reason_raw)
                 
                 pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
                 fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
@@ -1611,7 +1629,7 @@ class PortfolioEngine:
                         signal_id=pos.signal_id,
                         contract_address=pos.contract_address,
                         position_id=pos.position_id,
-                        reason=canonical_reason,
+                        reason=canonical_reason,  # Используем override_reason если задан
                         raw_price=raw_exit_price,
                         exec_price=exec_exit_price,
                         pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах

@@ -715,8 +715,16 @@ class PortfolioReplay:
         Создает:
         - EXECUTION (final exit)
         - POSITION_CLOSED event
+        
+        ВАЖНО: Если позиция уже закрыта reset'ом (closed_by_reset=True),
+        не эмитим событие здесь - оно уже эмитчено в reset логике.
         """
         if blueprint.final_exit is None:
+            return
+        
+        # ВАЖНО: Если позиция уже закрыта reset'ом, не обрабатываем её здесь
+        if position.meta and position.meta.get("closed_by_reset", False):
+            # Позиция закрыта reset'ом, событие уже эмитчено в reset логике
             return
         
         # Получаем цену выхода
@@ -747,6 +755,11 @@ class PortfolioReplay:
         notional_returned = position.size + pnl_sol
         fees_sol = PortfolioReplay._calc_fees_sol_exit(execution_model, notional_returned)
         
+        # ВАЖНО: Если позиция уже закрыта reset'ом, не обрабатываем её здесь
+        if position.meta and position.meta.get("closed_by_reset", False):
+            # Позиция закрыта reset'ом, событие уже эмитчено в reset логике
+            return
+        
         # Обновляем баланс (возвращаем нотионал после комиссий)
         notional_after_fees = execution_model.apply_fees(notional_returned)
         state.balance += notional_after_fees
@@ -759,13 +772,15 @@ class PortfolioReplay:
         position.pnl_pct = pnl_pct
         
         # Создаем POSITION_CLOSED event с execution данными в meta
+        # ВАЖНО: override_reason не используется здесь, так как это нормальное закрытие по blueprint
+        # override_reason используется только в reset логике для принудительного закрытия
         event = PortfolioEvent.create_position_closed(
             timestamp=blueprint.final_exit.timestamp,
             strategy=blueprint.strategy_id,
             signal_id=blueprint.signal_id,
             contract_address=blueprint.contract_address,
             position_id=position.position_id,
-            reason=blueprint.final_exit.reason,
+            reason=blueprint.final_exit.reason,  # Используем reason из blueprint (не override_reason)
             raw_price=exit_price_raw,
             exec_price=exit_price_effective,
             pnl_pct=pnl_pct,
@@ -997,6 +1012,7 @@ class PortfolioReplay:
         apply_portfolio_reset(reset_context, state, execution_model)
         
         # Закрываем marker_position отдельно, если она реальная позиция
+        marker_was_closed_here = False
         if state.open_positions and marker_position in state.open_positions:
             # Принудительно закрываем marker_position
             from .portfolio_reset import get_mark_price_for_position
@@ -1025,11 +1041,15 @@ class PortfolioReplay:
             state.open_positions.remove(marker_position)
             if marker_position not in state.closed_positions:
                 state.closed_positions.append(marker_position)
+            marker_was_closed_here = True
         
         # ВАЖНО: Создаем POSITION_CLOSED events для всех закрытых позиций ПЕРЕД PORTFOLIO_RESET_TRIGGERED
         # (apply_portfolio_reset закрывает позиции, но не создает PortfolioEvent)
         # Используем все позиции, которые должны быть закрыты (включая marker, если он реальная позиция)
         real_closed_positions = all_positions_to_close
+        # ВАЖНО: Если marker был закрыт здесь, добавляем его в список для эмиссии события
+        if marker_was_closed_here and marker_position not in real_closed_positions:
+            real_closed_positions.append(marker_position)
         
         # 1) Эмитим POSITION_CLOSED для каждой закрытой позиции (N событий) - ПЕРВЫМИ
         # ЖЁСТКИЙ КОНТРАКТ: reason="profit_reset", timestamp=reset_time (не reset_time + delta), position_id обязателен
