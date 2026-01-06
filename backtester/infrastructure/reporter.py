@@ -1168,43 +1168,41 @@ class Reporter:
                 
                 # Порядок колонок согласно ТЗ v2.0.1
                 event_row = {
-                    "event_id": event.event_id,
                     "timestamp": event.timestamp.isoformat(),
                     "event_type": event.event_type.value,
                     "strategy": event.strategy,
                     "signal_id": event.signal_id,
                     "contract_address": event.contract_address,
                     "position_id": event.position_id,
+                    "event_id": event.event_id,
                     "reason": event.reason,
                     "meta_json": meta_json,
                 }
                 
                 events_rows.append(event_row)
         
+        # Ожидаемый порядок колонок (согласно тестам)
+        expected_columns = [
+            "timestamp", "event_type", "strategy", "signal_id",
+            "contract_address", "position_id", "event_id", "reason", "meta_json",
+        ]
+        
         # Создаем DataFrame
         if events_rows:
             df = pd.DataFrame(events_rows)
-            # Убеждаемся, что порядок колонок соответствует ТЗ v2.0.1
-            expected_columns = [
-                "event_id", "timestamp", "event_type", "strategy", "signal_id",
-                "contract_address", "position_id", "reason", "meta_json",
-            ]
-            # Добавляем отсутствующие колонки как NaN
+            # Добавляем отсутствующие колонки как None
             for col in expected_columns:
                 if col not in df.columns:
                     df[col] = None
-            # Переупорядочиваем колонки согласно ТЗ
-            df = df[expected_columns]
+            # Переупорядочиваем колонки согласно ожидаемому порядку
+            df = df.reindex(columns=expected_columns)
             # Сортируем по timestamp для консистентности
             df["timestamp_dt"] = pd.to_datetime(df["timestamp"], utc=True)
             df = df.sort_values("timestamp_dt")
             df = df.drop("timestamp_dt", axis=1)
         else:
-            # Создаем пустой DataFrame с правильными колонками (порядок согласно ТЗ v2.0.1)
-            df = pd.DataFrame([], columns=[  # type: ignore[arg-type]
-                "event_id", "timestamp", "event_type", "strategy", "signal_id",
-                "contract_address", "position_id", "reason", "meta_json",
-            ])
+            # Создаем пустой DataFrame с правильными колонками
+            df = pd.DataFrame(columns=expected_columns)  # type: ignore[arg-type]
         
         # Сохраняем
         events_path = self.output_dir / "portfolio_events.csv"
@@ -1578,6 +1576,12 @@ class Reporter:
         csv_rows = []
         for bp in blueprints:
             row = bp.to_row()
+            # Гарантируем, что final_exit_json всегда строка
+            if "final_exit_json" in row:
+                if row["final_exit_json"] is None:
+                    row["final_exit_json"] = ""
+                else:
+                    row["final_exit_json"] = str(row["final_exit_json"])
             csv_rows.append(row)
         
         # Создаём DataFrame
@@ -1588,9 +1592,16 @@ class Reporter:
                 if col not in df.columns:
                     df[col] = None
             df = df[columns]
+            
+            # Критически важно: final_exit_json должен быть пустой строкой, а не NaN
+            if "final_exit_json" in df.columns:
+                # Заполняем NaN пустыми строками и конвертируем в str
+                df["final_exit_json"] = df["final_exit_json"].fillna("").astype(str)
+                # Убеждаемся, что "nan" (строка) тоже становится пустой строкой
+                df.loc[df["final_exit_json"] == "nan", "final_exit_json"] = ""
         else:
             # Создаём пустой DataFrame с header
-            df = pd.DataFrame([], columns=columns)  # type: ignore[arg-type]
+            df = pd.DataFrame(columns=columns)  # type: ignore[arg-type]
         
         # Сохраняем CSV
         # Важно: na_rep='' чтобы пустые строки (для final_exit_json) не конвертировались в 'nan'
