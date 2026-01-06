@@ -126,22 +126,97 @@ class InvariantChecker:
         self.include_p2 = include_p2
     
     @staticmethod
-    def _series(df: pd.DataFrame, col: str, default: Any) -> pd.Series:
+    def _series(df: Optional[pd.DataFrame], col: str, default: Any = None) -> pd.Series:
         """
         Безопасное получение колонки из DataFrame.
         
-        Если колонка существует, возвращает df[col].
-        Если колонки нет, возвращает Series с default значениями.
+        Если df is None или колонка не существует, возвращает пустой Series или Series с default значениями.
+        Гарантирует, что возвращается Series, а не None или DataFrame.
         
-        :param df: DataFrame
+        :param df: DataFrame (может быть None)
         :param col: Имя колонки
         :param default: Значение по умолчанию
-        :return: pd.Series
+        :return: pd.Series (никогда не None)
         """
+        if df is None or df.empty:
+            return pd.Series([], dtype="object")
+        
         if col in df.columns:
-            return df[col]
+            result = df[col]
+            # Гарантируем, что возвращается Series, а не DataFrame
+            if isinstance(result, pd.Series):
+                return result
+            else:
+                # Если это DataFrame (не должно быть, но на всякий случай)
+                return pd.Series([default] * len(df), index=df.index, dtype="object")
         else:
-            return pd.Series([default] * len(df), index=df.index)
+            return pd.Series([default] * len(df), index=df.index, dtype="object")
+    
+    @staticmethod
+    def _dt_series(df: Optional[pd.DataFrame], col: str) -> pd.Series:
+        """
+        Безопасное получение datetime колонки из DataFrame.
+        
+        Внутри использует _series и pd.to_datetime с errors="coerce".
+        НИКАКИХ вызовов pd.to_datetime на None.
+        
+        :param df: DataFrame (может быть None)
+        :param col: Имя колонки
+        :return: pd.Series с datetime типом (UTC)
+        """
+        s = InvariantChecker._series(df, col, None)
+        if len(s) == 0:
+            return pd.Series([], dtype="datetime64[ns, UTC]")
+        # Применяем to_datetime только к Series, никогда к None
+        return pd.to_datetime(s, utc=True, errors="coerce")
+    
+    @staticmethod
+    def _str_series(df: Optional[pd.DataFrame], col: str) -> pd.Series:
+        """
+        Безопасное получение строковой колонки из DataFrame.
+        
+        Используется для strategy/signal_id/contract_address/position_id.
+        Гарантирует, что возвращается Series[str] без None значений.
+        
+        :param df: DataFrame (может быть None)
+        :param col: Имя колонки
+        :return: pd.Series[str] (заполнено пустыми строками вместо None)
+        """
+        s = InvariantChecker._series(df, col, "")
+        if len(s) == 0:
+            return pd.Series([], dtype="string")
+        # Конвертируем в string и заполняем None пустыми строками
+        return s.astype("string").fillna("")
+    
+    @staticmethod
+    def _safe_str(value: Any) -> str:
+        """
+        Безопасное преобразование значения в строку.
+        
+        :param value: Значение (может быть None, Unknown, и т.д.)
+        :return: str (никогда не None)
+        """
+        if value is None or pd.isna(value):
+            return ""
+        return str(value)
+    
+    @staticmethod
+    def _safe_dt(value: Any) -> Optional[datetime]:
+        """
+        Безопасное преобразование значения в datetime.
+        
+        НИКАКИХ вызовов pd.to_datetime на None.
+        
+        :param value: Значение (может быть None, Unknown, и т.д.)
+        :return: datetime или None
+        """
+        if value is None or pd.isna(value):
+            return None
+        # Применяем to_datetime только к не-None значениям
+        result = pd.to_datetime(value, utc=True, errors="coerce")
+        if pd.isna(result):
+            return None
+        return result.to_pydatetime() if hasattr(result, 'to_pydatetime') else result
     
     def check_all(
         self,
@@ -231,16 +306,16 @@ class InvariantChecker:
         
         if missing:
             self.anomalies.append(Anomaly(
-                position_id=row.get("position_id"),
-                strategy=row.get("strategy", "UNKNOWN"),
-                signal_id=row.get("signal_id"),
-                contract_address=row.get("contract_address", "UNKNOWN"),
-                entry_time=pd.to_datetime(row.get("entry_time")) if pd.notna(row.get("entry_time")) else None,
-                exit_time=pd.to_datetime(row.get("exit_time")) if pd.notna(row.get("exit_time")) else None,
+                position_id=self._safe_str(row.get("position_id")) or None,
+                strategy=self._safe_str(row.get("strategy")) or "UNKNOWN",
+                signal_id=self._safe_str(row.get("signal_id")) or None,
+                contract_address=self._safe_str(row.get("contract_address")) or "UNKNOWN",
+                entry_time=self._safe_dt(row.get("entry_time")),
+                exit_time=self._safe_dt(row.get("exit_time")),
                 entry_price=row.get("entry_price") if pd.notna(row.get("entry_price")) else None,
                 exit_price=row.get("exit_price") if pd.notna(row.get("exit_price")) else None,
                 pnl_pct=row.get("pnl_pct") if pd.notna(row.get("pnl_pct")) else None,
-                reason=row.get("reason"),
+                reason=self._safe_str(row.get("reason")) or None,
                 anomaly_type=AnomalyType.MISSING_REQUIRED_FIELDS,
                 severity="P0",
                 details={"missing_fields": missing},
@@ -256,35 +331,36 @@ class InvariantChecker:
         # Проверка entry_price
         if pd.isna(entry_price) or entry_price <= self.MIN_VALID_PRICE:
             self.anomalies.append(Anomaly(
-                position_id=row.get("position_id"),
-                strategy=row.get("strategy"),
-                signal_id=row.get("signal_id"),
-                contract_address=row.get("contract_address"),
-                entry_time=pd.to_datetime(row.get("entry_time")) if pd.notna(row.get("entry_time")) else None,
-                exit_time=pd.to_datetime(row.get("exit_time")) if pd.notna(row.get("exit_time")) else None,
+                position_id=self._safe_str(row.get("position_id")) or None,
+                strategy=self._safe_str(row.get("strategy")),
+                signal_id=self._safe_str(row.get("signal_id")) or None,
+                contract_address=self._safe_str(row.get("contract_address")),
+                entry_time=self._safe_dt(row.get("entry_time")),
+                exit_time=self._safe_dt(row.get("exit_time")),
                 entry_price=entry_price,
                 exit_price=exit_price,
                 pnl_pct=row.get("pnl_pct") if pd.notna(row.get("pnl_pct")) else None,
-                reason=row.get("reason"),
+                reason=self._safe_str(row.get("reason")) or None,
                 anomaly_type=AnomalyType.ENTRY_PRICE_INVALID,
                 severity="P0",
                 details={"entry_price": entry_price},
             ))
         
         # Проверка exit_price (только для закрытых позиций)
-        if row.get("status") == "closed":
+        status_val = self._safe_str(row.get("status"))
+        if status_val == "closed":
             if pd.isna(exit_price) or exit_price <= self.MIN_VALID_PRICE:
                 self.anomalies.append(Anomaly(
-                    position_id=row.get("position_id"),
-                    strategy=row.get("strategy"),
-                    signal_id=row.get("signal_id"),
-                    contract_address=row.get("contract_address"),
-                    entry_time=pd.to_datetime(row.get("entry_time")) if pd.notna(row.get("entry_time")) else None,
-                    exit_time=pd.to_datetime(row.get("exit_time")) if pd.notna(row.get("exit_time")) else None,
+                    position_id=self._safe_str(row.get("position_id")) or None,
+                    strategy=self._safe_str(row.get("strategy")),
+                    signal_id=self._safe_str(row.get("signal_id")) or None,
+                    contract_address=self._safe_str(row.get("contract_address")),
+                    entry_time=self._safe_dt(row.get("entry_time")),
+                    exit_time=self._safe_dt(row.get("exit_time")),
                     entry_price=entry_price,
                     exit_price=exit_price,
                     pnl_pct=row.get("pnl_pct") if pd.notna(row.get("pnl_pct")) else None,
-                    reason=row.get("reason"),
+                    reason=self._safe_str(row.get("reason")) or None,
                 anomaly_type=AnomalyType.EXIT_PRICE_INVALID,
                 severity="P0",
                 details={"exit_price": exit_price},
@@ -292,7 +368,8 @@ class InvariantChecker:
     
     def _check_pnl(self, row: pd.Series) -> None:
         """Проверка формулы PnL и разумности значений."""
-        if row.get("status") != "closed":
+        status_val = self._safe_str(row.get("status"))
+        if status_val != "closed":
             return
         
         entry_price = row.get("exec_entry_price") or row.get("raw_entry_price") or row.get("entry_price")
@@ -309,16 +386,16 @@ class InvariantChecker:
         if pd.notna(pnl_pct):
             if abs(pnl_pct) > self.MAX_REASONABLE_PNL_PCT:
                 self.anomalies.append(Anomaly(
-                    position_id=row.get("position_id"),
-                    strategy=row.get("strategy"),
-                    signal_id=row.get("signal_id"),
-                    contract_address=row.get("contract_address"),
-                    entry_time=pd.to_datetime(row.get("entry_time")) if pd.notna(row.get("entry_time")) else None,
-                    exit_time=pd.to_datetime(row.get("exit_time")) if pd.notna(row.get("exit_time")) else None,
+                    position_id=self._safe_str(row.get("position_id")) or None,
+                    strategy=self._safe_str(row.get("strategy")),
+                    signal_id=self._safe_str(row.get("signal_id")) or None,
+                    contract_address=self._safe_str(row.get("contract_address")),
+                    entry_time=self._safe_dt(row.get("entry_time")),
+                    exit_time=self._safe_dt(row.get("exit_time")),
                     entry_price=entry_price,
                     exit_price=exit_price,
                     pnl_pct=pnl_pct,
-                    reason=row.get("reason"),
+                    reason=self._safe_str(row.get("reason")) or None,
                 anomaly_type=AnomalyType.PNL_CAP_OR_MAGIC,
                 severity="P0",
                 details={
@@ -330,57 +407,60 @@ class InvariantChecker:
     
     def _check_reason_consistency(self, row: pd.Series) -> None:
         """Проверка консистентности reason с фактическими данными."""
-        if row.get("status") != "closed":
+        status_val = self._safe_str(row.get("status"))
+        if status_val != "closed":
             return
         
         reason = row.get("reason") or row.get("exit_reason")
         pnl_pct = row.get("pnl_pct") or row.get("pnl_sol")
         
-        if not reason or pd.isna(pnl_pct):
+        reason_str = self._safe_str(reason) if reason is not None else ""
+        if not reason_str or pd.isna(pnl_pct):
             return
         
         # Нормализуем reason для консистентной проверки
-        normalized_reason = normalize_reason(str(reason))
+        normalized_reason = normalize_reason(reason_str)
         
         # Проверка: reason=tp, но pnl < 0 (строго отрицательный)
         if normalized_reason == "tp" and pnl_pct < -self.EPSILON:
             self.anomalies.append(Anomaly(
-                position_id=row.get("position_id"),
-                strategy=row.get("strategy"),
-                signal_id=row.get("signal_id"),
-                contract_address=row.get("contract_address"),
-                entry_time=pd.to_datetime(row.get("entry_time")) if pd.notna(row.get("entry_time")) else None,
-                exit_time=pd.to_datetime(row.get("exit_time")) if pd.notna(row.get("exit_time")) else None,
+                position_id=self._safe_str(row.get("position_id")) or None,
+                strategy=self._safe_str(row.get("strategy")),
+                signal_id=self._safe_str(row.get("signal_id")) or None,
+                contract_address=self._safe_str(row.get("contract_address")),
+                entry_time=self._safe_dt(row.get("entry_time")),
+                exit_time=self._safe_dt(row.get("exit_time")),
                 entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
                 exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
                 pnl_pct=pnl_pct,
-                reason=reason,
+                reason=reason_str,
                 anomaly_type=AnomalyType.TP_REASON_BUT_NEGATIVE_PNL,
                 severity="P0",
-                details={"pnl_pct": pnl_pct, "reason": reason, "normalized_reason": normalized_reason},
+                details={"pnl_pct": pnl_pct, "reason": reason_str, "normalized_reason": normalized_reason},
             ))
         
         # Проверка: reason=sl/stop_loss, но pnl >= 0 (неотрицательный) - строго < 0 согласно ТЗ
         if normalized_reason == "sl" and pnl_pct >= 0:
             self.anomalies.append(Anomaly(
-                position_id=row.get("position_id"),
-                strategy=row.get("strategy"),
-                signal_id=row.get("signal_id"),
-                contract_address=row.get("contract_address"),
-                entry_time=pd.to_datetime(row.get("entry_time")) if pd.notna(row.get("entry_time")) else None,
-                exit_time=pd.to_datetime(row.get("exit_time")) if pd.notna(row.get("exit_time")) else None,
+                position_id=self._safe_str(row.get("position_id")) or None,
+                strategy=self._safe_str(row.get("strategy")),
+                signal_id=self._safe_str(row.get("signal_id")) or None,
+                contract_address=self._safe_str(row.get("contract_address")),
+                entry_time=self._safe_dt(row.get("entry_time")),
+                exit_time=self._safe_dt(row.get("exit_time")),
                 entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
                 exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
                 pnl_pct=pnl_pct,
-                reason=reason,
+                reason=reason_str,
                 anomaly_type=AnomalyType.SL_REASON_BUT_POSITIVE_PNL,
                 severity="P0",
-                details={"pnl_pct": pnl_pct, "reason": reason, "normalized_reason": normalized_reason},
+                details={"pnl_pct": pnl_pct, "reason": reason_str, "normalized_reason": normalized_reason},
             ))
     
     def _check_time_ordering(self, row: pd.Series) -> None:
         """Проверка порядка времени."""
-        if row.get("status") != "closed":
+        status_val = self._safe_str(row.get("status"))
+        if status_val != "closed":
             return
         
         entry_time = row.get("entry_time")
@@ -389,21 +469,24 @@ class InvariantChecker:
         if pd.isna(entry_time) or pd.isna(exit_time):
             return
         
-        entry_dt = pd.to_datetime(entry_time)
-        exit_dt = pd.to_datetime(exit_time)
+        entry_dt = self._safe_dt(entry_time)
+        exit_dt = self._safe_dt(exit_time)
+        
+        if entry_dt is None or exit_dt is None:
+            return
         
         if entry_dt > exit_dt:
             self.anomalies.append(Anomaly(
-                position_id=row.get("position_id"),
-                strategy=row.get("strategy"),
-                signal_id=row.get("signal_id"),
-                contract_address=row.get("contract_address"),
+                position_id=self._safe_str(row.get("position_id")) or None,
+                strategy=self._safe_str(row.get("strategy")),
+                signal_id=self._safe_str(row.get("signal_id")) or None,
+                contract_address=self._safe_str(row.get("contract_address")),
                 entry_time=entry_dt,
                 exit_time=exit_dt,
                 entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
                 exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
                 pnl_pct=row.get("pnl_pct") if pd.notna(row.get("pnl_pct")) else None,
-                reason=row.get("reason"),
+                reason=self._safe_str(row.get("reason")) or None,
                 anomaly_type=AnomalyType.TIME_ORDER_INVALID,
                 severity="P0",
                 details={
@@ -422,16 +505,16 @@ class InvariantChecker:
             magic_values = [920.0, 920.0 / 100, -920.0, -920.0 / 100]  # 920% и -920%
             if any(abs(pnl_pct - mv) < self.EPSILON for mv in magic_values):
                 self.anomalies.append(Anomaly(
-                    position_id=row.get("position_id"),
-                    strategy=row.get("strategy"),
-                    signal_id=row.get("signal_id"),
-                    contract_address=row.get("contract_address"),
-                    entry_time=pd.to_datetime(row.get("entry_time")) if pd.notna(row.get("entry_time")) else None,
-                    exit_time=pd.to_datetime(row.get("exit_time")) if pd.notna(row.get("exit_time")) else None,
+                    position_id=self._safe_str(row.get("position_id")) or None,
+                    strategy=self._safe_str(row.get("strategy")),
+                    signal_id=self._safe_str(row.get("signal_id")) or None,
+                    contract_address=self._safe_str(row.get("contract_address")),
+                    entry_time=self._safe_dt(row.get("entry_time")),
+                    exit_time=self._safe_dt(row.get("exit_time")),
                     entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
                     exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
                     pnl_pct=pnl_pct,
-                    reason=row.get("reason"),
+                    reason=self._safe_str(row.get("reason")) or None,
                     anomaly_type=AnomalyType.PNL_CAP_OR_MAGIC,
                     severity="P0",
                     details={"pnl_pct": pnl_pct, "magic_value": "920%"},
@@ -441,17 +524,20 @@ class InvariantChecker:
         """Проверка цепочки событий для каждой позиции."""
         # Для каждой закрытой позиции проверяем наличие событий по position_id
         for _, pos_row in positions_df.iterrows():
-            if pos_row.get("status") != "closed":
+            status_val = self._safe_str(pos_row.get("status"))
+            if status_val != "closed":
                 continue
             
-            position_id = pos_row.get("position_id")
-            signal_id = pos_row.get("signal_id")
-            strategy = pos_row.get("strategy")
-            contract = pos_row.get("contract_address")
+            position_id = self._safe_str(pos_row.get("position_id")) or None
+            signal_id = self._safe_str(pos_row.get("signal_id")) or None
+            strategy = self._safe_str(pos_row.get("strategy"))
+            contract = self._safe_str(pos_row.get("contract_address"))
             
             # Ищем события для этой позиции по position_id (требование: проверка по position_id)
             if position_id and pd.notna(position_id):
-                pos_events = events_df[self._series(events_df, "position_id", None) == position_id]
+                pos_id_series = self._series(events_df, "position_id", None)
+                # Используем явную проверку вместо truthiness
+                pos_events = events_df[pos_id_series == position_id]
                 # Если events_df имеет zero rows для этого position_id -> MISSING_EVENTS_CHAIN
                 if len(pos_events) == 0:
                     self.anomalies.append(Anomaly(
@@ -459,12 +545,12 @@ class InvariantChecker:
                         strategy=strategy,
                         signal_id=signal_id,
                         contract_address=contract,
-                        entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                        exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
+                        entry_time=self._safe_dt(pos_row.get("entry_time")),
+                        exit_time=self._safe_dt(pos_row.get("exit_time")),
                         entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                         exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
                         pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
-                        reason=pos_row.get("reason"),
+                        reason=self._safe_str(pos_row.get("reason")) or None,
                         anomaly_type=AnomalyType.MISSING_EVENTS_CHAIN,
                         severity="P0",
                         details={"events_count": 0, "position_id": position_id},
@@ -475,31 +561,36 @@ class InvariantChecker:
         # Проверяем позиции, закрытые по reset/prune
         # Используем безопасное получение колонок
         closed_by_reset_series = self._series(positions_df, "closed_by_reset", False)
-        reset_reason_series = self._series(positions_df, "reset_reason", None)
+        reset_reason_series = self._series(events_df, "reset_reason", None)
         
+        # Используем явные проверки вместо truthiness
         reset_positions = positions_df[
             (closed_by_reset_series == True) |
             (reset_reason_series.notna())
         ]
         
         for _, pos_row in reset_positions.iterrows():
-            position_id = pos_row.get("position_id")
-            signal_id = pos_row.get("signal_id")
-            strategy = pos_row.get("strategy")
-            contract = pos_row.get("contract_address")
+            position_id = self._safe_str(pos_row.get("position_id")) or None
+            signal_id = self._safe_str(pos_row.get("signal_id")) or None
+            strategy = self._safe_str(pos_row.get("strategy"))
+            contract = self._safe_str(pos_row.get("contract_address"))
             
             # Ищем события reset/prune
             event_type_series = self._series(events_df, "event_type", "")
             if position_id and pd.notna(position_id):
+                pos_id_series = self._series(events_df, "position_id", None)
                 reset_events = events_df[
-                    (self._series(events_df, "position_id", None) == position_id) &
+                    (pos_id_series == position_id) &
                     (event_type_series.str.contains("RESET|PRUNE", case=False, na=False))
                 ]
             else:
+                signal_id_series = self._series(events_df, "signal_id", None)
+                strategy_series = self._series(events_df, "strategy", None)
+                contract_series = self._series(events_df, "contract_address", None)
                 reset_events = events_df[
-                    (self._series(events_df, "signal_id", None) == signal_id) &
-                    (self._series(events_df, "strategy", None) == strategy) &
-                    (self._series(events_df, "contract_address", None) == contract) &
+                    (signal_id_series == signal_id) &
+                    (strategy_series == strategy) &
+                    (contract_series == contract) &
                     (event_type_series.str.contains("RESET|PRUNE", case=False, na=False))
                 ]
             
@@ -509,12 +600,12 @@ class InvariantChecker:
                     strategy=strategy,
                     signal_id=signal_id,
                     contract_address=contract,
-                    entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                    exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
+                    entry_time=self._safe_dt(pos_row.get("entry_time")),
+                    exit_time=self._safe_dt(pos_row.get("exit_time")),
                     entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                     exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
                     pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
-                    reason=pos_row.get("reason"),
+                    reason=self._safe_str(pos_row.get("reason")) or None,
                     anomaly_type=AnomalyType.RESET_WITHOUT_EVENTS,
                     severity="P0",
                     details={"reset_reason": pos_row.get("reset_reason")},
@@ -527,11 +618,11 @@ class InvariantChecker:
     ) -> None:
         """P1: Проверка консистентности positions ↔ events."""
         for _, pos_row in positions_df.iterrows():
-            position_id = pos_row.get("position_id")
-            signal_id = pos_row.get("signal_id")
-            strategy = pos_row.get("strategy")
-            contract = pos_row.get("contract_address")
-            status = pos_row.get("status", "open")
+            position_id = self._safe_str(pos_row.get("position_id")) or None
+            signal_id = self._safe_str(pos_row.get("signal_id")) or None
+            strategy = self._safe_str(pos_row.get("strategy"))
+            contract = self._safe_str(pos_row.get("contract_address"))
+            status = self._safe_str(pos_row.get("status")) or "open"
             
             events = indices.get_events_for_position(position_id, signal_id, strategy, contract)
             has_open = indices.has_open_event(position_id, signal_id, strategy, contract)
@@ -545,12 +636,12 @@ class InvariantChecker:
                     strategy=strategy,
                     signal_id=signal_id,
                     contract_address=contract,
-                    entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                    exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
+                    entry_time=self._safe_dt(pos_row.get("entry_time")),
+                    exit_time=self._safe_dt(pos_row.get("exit_time")),
                     entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                     exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
                     pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
-                    reason=pos_row.get("reason"),
+                    reason=self._safe_str(pos_row.get("reason")) or None,
                     anomaly_type=AnomalyType.POSITION_CLOSED_BUT_NO_CLOSE_EVENT,
                     severity="P1",
                     details={"status": status, "events_count": len(events)},
@@ -564,12 +655,12 @@ class InvariantChecker:
                     strategy=strategy,
                     signal_id=signal_id,
                     contract_address=contract,
-                    entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                    exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
+                    entry_time=self._safe_dt(pos_row.get("entry_time")),
+                    exit_time=self._safe_dt(pos_row.get("exit_time")),
                     entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                     exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
                     pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
-                    reason=pos_row.get("reason"),
+                    reason=self._safe_str(pos_row.get("reason")) or None,
                     anomaly_type=AnomalyType.CLOSE_EVENT_BUT_POSITION_OPEN,
                     severity="P1",
                     event_id=event_ids[0] if event_ids else None,
@@ -588,12 +679,12 @@ class InvariantChecker:
                     strategy=strategy,
                     signal_id=signal_id,
                     contract_address=contract,
-                    entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                    exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
+                    entry_time=self._safe_dt(pos_row.get("entry_time")),
+                    exit_time=self._safe_dt(pos_row.get("exit_time")),
                     entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                     exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
                     pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
-                    reason=pos_row.get("reason"),
+                    reason=self._safe_str(pos_row.get("reason")) or None,
                     anomaly_type=AnomalyType.MULTIPLE_OPEN_EVENTS,
                     severity="P1",
                     event_id=event_ids[0] if event_ids else None,
@@ -603,7 +694,7 @@ class InvariantChecker:
             # Проверка: несколько событий закрытия (если должно быть 1)
             if len(close_events) > 1:
                 # Для обычных закрытий (tp/sl/timeout) должно быть 1 событие
-                reason = pos_row.get("reason") or ""
+                reason = self._safe_str(pos_row.get("reason")) or ""
                 if reason not in ["prune", "reset", "close_all"]:
                     event_ids = [str(e.get("event_id", i)) for i, e in enumerate(close_events)]
                     self.anomalies.append(Anomaly(
@@ -611,8 +702,8 @@ class InvariantChecker:
                         strategy=strategy,
                         signal_id=signal_id,
                         contract_address=contract,
-                        entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                        exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
+                        entry_time=self._safe_dt(pos_row.get("entry_time")),
+                        exit_time=self._safe_dt(pos_row.get("exit_time")),
                         entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                         exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
                         pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
@@ -624,7 +715,7 @@ class InvariantChecker:
                     ))
             
             # Проверка маппинга reason ↔ event_type
-            reason = pos_row.get("reason")
+            reason = self._safe_str(pos_row.get("reason")) or None
             if reason and status == "closed" and len(close_events) > 0:
                 # Нормализуем reason для консистентного маппинга
                 normalized_reason = normalize_reason(str(reason))
@@ -693,8 +784,8 @@ class InvariantChecker:
                             strategy=strategy,
                             signal_id=signal_id,
                             contract_address=contract,
-                            entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                            exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
+                            entry_time=self._safe_dt(pos_row.get("entry_time")),
+                            exit_time=self._safe_dt(pos_row.get("exit_time")),
                             entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                             exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
                             pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
@@ -882,7 +973,7 @@ class InvariantChecker:
         
         # 1. TRADE_EVENT_WITHOUT_EXECUTION: проверяем каждое trade-event
         for event in all_trade_events:
-            event_time = pd.to_datetime(event.get("timestamp")) if pd.notna(event.get("timestamp")) else None
+            event_time = self._safe_dt(event.get("timestamp"))
             event_type = str(event.get("event_type", "")).upper()
             event_signal_id = str(event.get("signal_id", "")) if pd.notna(event.get("signal_id")) else None
             event_strategy = str(event.get("strategy", "")) if pd.notna(event.get("strategy")) else None
@@ -904,7 +995,7 @@ class InvariantChecker:
                     for _, exec_row in executions_df.iterrows():
                         exec_signal_id = str(exec_row.get("signal_id", "")) if pd.notna(exec_row.get("signal_id")) else None
                         exec_strategy = str(exec_row.get("strategy", "")) if pd.notna(exec_row.get("strategy")) else None
-                        exec_time = pd.to_datetime(exec_row.get("event_time")) if pd.notna(exec_row.get("event_time")) else None
+                        exec_time = self._safe_dt(exec_row.get("event_time"))
                         exec_type = str(exec_row.get("event_type", "")).lower()
                         exec_event_id = str(exec_row.get("event_id", "")) if pd.notna(exec_row.get("event_id")) else None
                         
@@ -956,12 +1047,12 @@ class InvariantChecker:
                     strategy=event_strategy or "UNKNOWN",
                     signal_id=event_signal_id,
                     contract_address=contract,
-                    entry_time=pd.to_datetime(pos_row.get("entry_time")) if pos_row is not None and pd.notna(pos_row.get("entry_time")) else None,
-                    exit_time=pd.to_datetime(pos_row.get("exit_time")) if pos_row is not None and pd.notna(pos_row.get("exit_time")) else None,
+                    entry_time=self._safe_dt(pos_row.get("entry_time")) if pos_row is not None else None,
+                    exit_time=self._safe_dt(pos_row.get("exit_time")) if pos_row is not None else None,
                     entry_price=pos_row.get("exec_entry_price") if pos_row is not None else None,
                     exit_price=pos_row.get("exec_exit_price") if pos_row is not None else None,
                     pnl_pct=pos_row.get("pnl_pct") if pos_row is not None else None,
-                    reason=pos_row.get("reason") if pos_row is not None else None,
+                    reason=self._safe_str(pos_row.get("reason")) if pos_row is not None else None,
                     anomaly_type=AnomalyType.TRADE_EVENT_WITHOUT_EXECUTION,
                     severity="P1",
                     event_id=event_id,
@@ -977,7 +1068,7 @@ class InvariantChecker:
             for _, exec_row in executions_df.iterrows():
                 exec_signal_id = str(exec_row.get("signal_id", "")) if pd.notna(exec_row.get("signal_id")) else None
                 exec_strategy = str(exec_row.get("strategy", "")) if pd.notna(exec_row.get("strategy")) else None
-                exec_time = pd.to_datetime(exec_row.get("event_time")) if pd.notna(exec_row.get("event_time")) else None
+                exec_time = self._safe_dt(exec_row.get("event_time"))
                 exec_type = str(exec_row.get("event_type", "")).lower()
                 exec_event_id = str(exec_row.get("event_id", "")) if pd.notna(exec_row.get("event_id")) else None
                 
@@ -1004,7 +1095,7 @@ class InvariantChecker:
                     for event in all_trade_events:
                         event_signal_id = str(event.get("signal_id", "")) if pd.notna(event.get("signal_id")) else None
                         event_strategy = str(event.get("strategy", "")) if pd.notna(event.get("strategy")) else None
-                        event_time = pd.to_datetime(event.get("timestamp")) if pd.notna(event.get("timestamp")) else None
+                        event_time = self._safe_dt(event.get("timestamp"))
                         event_type = str(event.get("event_type", "")).upper()
                         
                         # Матчинг по (signal_id, strategy) и типам, допускаем небольшую разницу во времени для проверки EXECUTION_TIME_BEFORE_EVENT
@@ -1026,15 +1117,15 @@ class InvariantChecker:
                 if not matching_event:
                     # Создаем anomaly
                     position_id = exec_row.get("position_id")
-                    contract = exec_row.get("contract_address", "UNKNOWN")
+                    contract = self._safe_str(exec_row.get("contract_address")) or "UNKNOWN"
                     
                     self.anomalies.append(Anomaly(
                         position_id=position_id,
                         strategy=exec_strategy or "UNKNOWN",
                         signal_id=exec_signal_id,
                         contract_address=contract,
-                        entry_time=pd.to_datetime(pos_row.get("entry_time")) if pos_row is not None and pd.notna(pos_row.get("entry_time")) else None,
-                        exit_time=pd.to_datetime(pos_row.get("exit_time")) if pos_row is not None and pd.notna(pos_row.get("exit_time")) else None,
+                    entry_time=self._safe_dt(pos_row.get("entry_time")) if pos_row is not None else None,
+                    exit_time=self._safe_dt(pos_row.get("exit_time")) if pos_row is not None else None,
                         entry_price=pos_row.get("exec_entry_price") if pos_row is not None else None,
                         exit_price=pos_row.get("exec_exit_price") if pos_row is not None else None,
                         pnl_pct=pos_row.get("pnl_pct") if pos_row is not None else None,
@@ -1075,7 +1166,7 @@ class InvariantChecker:
                                     matching_event_for_time_check = event
                                     break
                     
-                    event_time = pd.to_datetime(matching_event_for_time_check.get("timestamp")) if matching_event_for_time_check and pd.notna(matching_event_for_time_check.get("timestamp")) else None
+                    event_time = self._safe_dt(matching_event_for_time_check.get("timestamp")) if matching_event_for_time_check else None
                     if exec_time and event_time and exec_time < event_time:
                         position_id = matching_event.get("position_id")
                         contract = matching_event.get("contract_address", "UNKNOWN")
@@ -1085,8 +1176,8 @@ class InvariantChecker:
                             strategy=exec_strategy or "UNKNOWN",
                             signal_id=exec_signal_id,
                             contract_address=contract,
-                            entry_time=pd.to_datetime(pos_row.get("entry_time")) if pos_row is not None and pd.notna(pos_row.get("entry_time")) else None,
-                            exit_time=pd.to_datetime(pos_row.get("exit_time")) if pos_row is not None and pd.notna(pos_row.get("exit_time")) else None,
+                    entry_time=self._safe_dt(pos_row.get("entry_time")) if pos_row is not None else None,
+                    exit_time=self._safe_dt(pos_row.get("exit_time")) if pos_row is not None else None,
                             entry_price=pos_row.get("exec_entry_price") if pos_row is not None else None,
                             exit_price=pos_row.get("exec_exit_price") if pos_row is not None else None,
                             pnl_pct=pos_row.get("pnl_pct") if pos_row is not None else None,
@@ -1120,8 +1211,8 @@ class InvariantChecker:
                                         strategy=exec_strategy or "UNKNOWN",
                                         signal_id=exec_signal_id,
                                         contract_address=contract,
-                                        entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                                        exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
+                                        entry_time=self._safe_dt(pos_row.get("entry_time")),
+                                        exit_time=self._safe_dt(pos_row.get("exit_time")),
                                         entry_price=entry_price,
                                         exit_price=exit_price,
                                         pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
@@ -1148,8 +1239,8 @@ class InvariantChecker:
                                         strategy=exec_strategy or "UNKNOWN",
                                         signal_id=exec_signal_id,
                                         contract_address=contract,
-                                        entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                                        exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
+                                        entry_time=self._safe_dt(pos_row.get("entry_time")),
+                                        exit_time=self._safe_dt(pos_row.get("exit_time")),
                                         entry_price=entry_price,
                                         exit_price=exit_price,
                                         pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
@@ -1231,10 +1322,10 @@ class InvariantChecker:
                     self.anomalies.append(Anomaly(
                         position_id=None,
                         strategy="portfolio",
-                        signal_id=event_row.get("signal_id"),
-                        contract_address=event_row.get("contract_address"),
+                        signal_id=self._safe_str(event_row.get("signal_id")) or None,
+                        contract_address=self._safe_str(event_row.get("contract_address")) or "UNKNOWN",
                         entry_time=None,
-                        exit_time=pd.to_datetime(event_row.get("timestamp")) if pd.notna(event_row.get("timestamp")) else None,
+                        exit_time=self._safe_dt(event_row.get("timestamp")),
                         entry_price=None,
                         exit_price=None,
                         pnl_pct=None,
@@ -1320,7 +1411,7 @@ def check_reason_consistency(reason: str, pnl_pct: float, epsilon: float = 1e-6)
     return True
 
 
-def check_magic_values(pnl_pct: float, magic_values: List[float] = None, epsilon: float = 1e-6) -> bool:
+def check_magic_values(pnl_pct: float, magic_values: Optional[List[float]] = None, epsilon: float = 1e-6) -> bool:
     """Проверка на магические значения."""
     if magic_values is None:
         magic_values = [920.0, 920.0 / 100, -920.0, -920.0 / 100]
