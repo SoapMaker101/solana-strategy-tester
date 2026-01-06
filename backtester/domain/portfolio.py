@@ -1138,11 +1138,6 @@ class PortfolioEngine:
                 if marker_from_state not in all_open_positions_at_reset:
                     all_open_positions_at_reset.append(marker_from_state)
             
-            # Debug-guard: если reset сработал и были открытые позиции, должны быть закрытия
-            open_count_before = len(all_open_positions_at_reset)
-            if open_count_before > 0:
-                logger.debug(f"[PROFIT_RESET] Reset at {reset_time}, open_positions={open_count_before} (real={len(real_open_positions_at_reset)}, marker={marker_position is not None and marker_position.status == 'open'}), reason={reset_reason_str}")
-            
             # 1. Эмитим POSITION_CLOSED для каждой закрытой позиции (N событий) - ПЕРВЫМИ
             # ЖЁСТКИЙ КОНТРАКТ: reason="profit_reset", timestamp=reset_time, position_id обязателен
             emitted_profit_reset_closures = 0
@@ -2251,10 +2246,6 @@ class PortfolioEngine:
                         and not (p.meta and p.meta.get("marker", False))  # Исключаем marker
                     ]
                     
-                    # Логирование для отладки
-                    if len(positions_to_force_close) > 0:
-                        logger.debug(f"[PROFIT_RESET] Triggered at {current_time}, open_positions={len(state.open_positions)}, to_close={len(positions_to_force_close)}")
-                    
                     # Используем marker_position, созданный при старте, или выбираем из закрытых
                     reset_marker_position = marker_position
                     if reset_marker_position is None:
@@ -2280,11 +2271,6 @@ class PortfolioEngine:
                         )
                         state.open_positions.append(reset_marker_position)
                     
-                    # Локальный assert/лог: если reset сработал и open_positions было >0, то closed_events_count >0
-                    open_count_before = len(positions_to_force_close)
-                    if open_count_before > 0:
-                        logger.debug(f"[PROFIT_RESET] Before reset: real_open_positions={open_count_before}, to_close={len(positions_to_force_close)}, marker_open={reset_marker_position.status == 'open'}")
-                    
                     self._apply_reset(
                         state=state,
                         marker_position=reset_marker_position,
@@ -2292,18 +2278,7 @@ class PortfolioEngine:
                         positions_to_force_close=positions_to_force_close,
                         reason=ResetReason.PROFIT_RESET,
                         portfolio_events=portfolio_events,
-                        )
-                        
-                    # Проверяем, что события были эмитчены
-                    if portfolio_events is not None:
-                        closed_events_count = len([
-                            e for e in portfolio_events 
-                            if e.event_type == PortfolioEventType.POSITION_CLOSED 
-                            and e.reason == "profit_reset"
-                            and e.timestamp == current_time
-                        ])
-                        if open_count_before > 0 and closed_events_count == 0:
-                            logger.warning(f"[PROFIT_RESET] WARNING: Reset triggered with {open_count_before} open positions, but no POSITION_CLOSED events emitted!")
+                    )
                     
                     if reset_marker_position is not None:
                         self._dbg_meta(reset_marker_position, "AFTER_profit_reset_at_timestamp")
@@ -2528,15 +2503,6 @@ class PortfolioEngine:
         # Финальная проверка всех позиций перед возвратом
         for pos in state.closed_positions:
             self._dbg_meta(pos, f"FINAL_CHECK_before_return_signal_id={pos.signal_id}")
-
-        # Debug: Reset events diagnostics (only if BACKTESTER_RESET_DEBUG=1)
-        from ..debug.reset_debug import dump_reset_debug, reset_debug_enabled
-        if reset_debug_enabled():
-            dump_reset_debug(
-                "PortfolioEngine",
-                events=portfolio_events,
-                portfolio_event_type_engine=PortfolioEventType,
-            )
 
         return PortfolioResult(
             equity_curve=state.equity_curve,

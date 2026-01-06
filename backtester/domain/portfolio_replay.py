@@ -257,15 +257,6 @@ class PortfolioReplay:
         # Формируем equity_curve (упрощенная версия)
         equity_curve = PortfolioReplay._build_equity_curve(state, portfolio_events)
         
-        # Debug: Reset events diagnostics (only if BACKTESTER_RESET_DEBUG=1)
-        from ..debug.reset_debug import dump_reset_debug, reset_debug_enabled
-        if reset_debug_enabled():
-            dump_reset_debug(
-                "PortfolioReplay",
-                events=portfolio_events,
-                portfolio_event_type_engine=PortfolioEventType,
-            )
-        
         return PortfolioResult(
             equity_curve=equity_curve,
             positions=state.closed_positions + state.open_positions,

@@ -303,33 +303,11 @@ def test_replay_profit_reset_emits_chain(base_time, fee_model):
         profit_reset_multiple=1.3,  # Reset при equity >= 13 SOL
     )
     
-    # Debug: Enum comparison (only if BACKTESTER_RESET_DEBUG=1)
-    from backtester.debug.reset_debug import reset_debug_enabled
-    if reset_debug_enabled():
-        import backtester.domain.portfolio_events as pe
-        print("=== TEST DEBUG: Enum Comparison ===")
-        print(f"PortfolioEventType.__module__={PortfolioEventType.__module__}, id(PortfolioEventType)={id(PortfolioEventType)}")
-        print(f"pe.PortfolioEventType.__module__={pe.PortfolioEventType.__module__}, id(pe.PortfolioEventType)={id(pe.PortfolioEventType)}")
-        print(f"PortfolioEventType is pe.PortfolioEventType={PortfolioEventType is pe.PortfolioEventType}")
-        print(f"PortfolioEventType.POSITION_CLOSED == pe.PortfolioEventType.POSITION_CLOSED={PortfolioEventType.POSITION_CLOSED == pe.PortfolioEventType.POSITION_CLOSED}")
-        print("=== END TEST DEBUG ===")
-    
     result = PortfolioReplay.replay(
         blueprints=blueprints,
         portfolio_config=config,
         market_data=None,
     )
-    
-    # Debug: Reset events diagnostics (only if BACKTESTER_RESET_DEBUG=1)
-    from backtester.debug.reset_debug import dump_reset_debug
-    if reset_debug_enabled():
-        import backtester.domain.portfolio_events as pe
-        dump_reset_debug(
-            "TEST:test_replay_profit_reset_emits_chain",
-            events=result.stats.portfolio_events,
-            portfolio_event_type_test=PortfolioEventType,
-            portfolio_event_type_engine=pe.PortfolioEventType,
-        )
     
     # Проверки: есть PORTFOLIO_RESET_TRIGGERED event
     reset_events = [
