@@ -78,6 +78,27 @@ class ExecutionModel:
         
         slippage = self.profile.slippage_for(exit_type)
         return price * (1.0 - slippage)
+    
+    def apply_fees(self, notional_sol: float) -> float:
+        """
+        Применяет комиссии к нотионалу (swap + LP fees).
+        Network fee вычитается отдельно из баланса.
+        
+        :param notional_sol: Нотионал в SOL
+        :return: Нотионал после вычета комиссий (swap + LP)
+        """
+        total_fee_pct = self.fee_model.swap_fee_pct + self.fee_model.lp_fee_pct
+        return notional_sol * (1.0 - total_fee_pct)
+    
+    def network_fee(self) -> float:
+        """
+        Возвращает фиксированную network fee (в SOL) за один swap/раунд-трип,
+        используемую PortfolioEngine отдельно от процентных fee.
+        
+        :return: Network fee в SOL (0.0 если не задано)
+        """
+        value = getattr(self.fee_model, "network_fee_sol", None)
+        return float(value) if value is not None else 0.0
 
 
 def _normalize_reason_to_exit_type(reason: str) -> str:
@@ -116,23 +137,6 @@ def _normalize_reason_to_exit_type(reason: str) -> str:
     
     # Default
     return "exit_timeout"
-    
-    def apply_fees(self, notional_sol: float) -> float:
-        """
-        Применяет комиссии к нотионалу (swap + LP fees).
-        Network fee вычитается отдельно из баланса.
-        
-        :param notional_sol: Нотионал в SOL
-        :return: Нотионал после вычета комиссий (swap + LP)
-        """
-        total_fee_pct = self.fee_model.swap_fee_pct + self.fee_model.lp_fee_pct
-        return notional_sol * (1.0 - total_fee_pct)
-    
-    def network_fee(self) -> float:
-        """
-        Возвращает фиксированную комиссию сети в SOL.
-        """
-        return self.fee_model.network_fee_sol
 
 
 def get_profile(config: "PortfolioConfig") -> ExecutionProfileConfig:
