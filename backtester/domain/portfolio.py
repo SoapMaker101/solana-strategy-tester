@@ -1129,8 +1129,10 @@ class PortfolioEngine:
                     real_open_positions_at_reset.append(pos)
             
             # ВАЖНО: ВСЕГДА закрываем marker_position при profit reset (даже если есть реальные позиции)
+            # Используем marker_was_open (сохраненный ДО apply_portfolio_reset), а не marker_from_state.status
+            # так как к моменту эмиссии событий marker может уже быть закрыт/изменен
             all_open_positions_at_reset = list(real_open_positions_at_reset)
-            if reset_reason_str == "profit_reset" and marker_from_state is not None and marker_from_state.status == "open":
+            if reset_reason_str == "profit_reset" and marker_from_state is not None and marker_was_open:
                 # Закрываем marker_position с reason="profit_reset"
                 # Убеждаемся, что marker не дублируется в списке
                 if marker_from_state not in all_open_positions_at_reset:
@@ -1192,16 +1194,18 @@ class PortfolioEngine:
                             marker_closed = True
                             break
                 
-                # Assert: если reset сработал, должен быть хотя бы один POSITION_CLOSED с reason="profit_reset"
-                assert emitted_profit_reset_closures > 0, \
-                    f"[PROFIT_RESET] ERROR: Reset triggered, but no POSITION_CLOSED events with reason='profit_reset' emitted! " \
-                    f"emitted={emitted_profit_reset_closures}, reset_reason={reset_reason_str}"
-                
-                # Дополнительный guard: marker_position должен быть закрыт
-                if marker_from_state is not None:
-                    assert marker_closed, \
-                        f"[PROFIT_RESET] ERROR: Reset triggered, but marker_position (id={marker_position_id}) was not closed! " \
-                        f"marker_status={marker_from_state.status}, emitted_closures={emitted_profit_reset_closures}"
+                # Assert: если reset сработал и marker был open, должен быть хотя бы один POSITION_CLOSED с reason="profit_reset"
+                # Если marker_was_open=False, assert не должен падать (marker мог быть уже закрыт до reset)
+                if marker_was_open:
+                    assert emitted_profit_reset_closures > 0, \
+                        f"[PROFIT_RESET] ERROR: Reset triggered with marker_was_open=True, but no POSITION_CLOSED events with reason='profit_reset' emitted! " \
+                        f"emitted={emitted_profit_reset_closures}, reset_reason={reset_reason_str}"
+                    
+                    # Дополнительный guard: marker_position должен быть закрыт
+                    if marker_from_state is not None:
+                        assert marker_closed, \
+                            f"[PROFIT_RESET] ERROR: Reset triggered with marker_was_open=True, but marker_position (id={marker_position_id}) was not closed! " \
+                            f"marker_status={marker_from_state.status}, emitted_closures={emitted_profit_reset_closures}"
             
             # 2. Эмитим PORTFOLIO_RESET_TRIGGERED (1 событие) - ПОСЛЕ всех POSITION_CLOSED
             # Используем marker_from_state (найденный в state) или fallback на marker_position
@@ -2066,18 +2070,22 @@ class PortfolioEngine:
                 base_time = datetime.now(timezone.utc)
             
             # Создаем marker_position
+            # ВАЖНО: marker_position.status должен быть "open" сразу после создания
+            # marker_position.position_id обязателен (генерируется автоматически в Position.__init__)
             marker_position = Position(
                 signal_id="__profit_reset_marker__",
                 contract_address="__profit_reset_marker__",
                 entry_time=base_time,
                 entry_price=1.0,
                 size=0.0,  # Не влияет на баланс
-                status="open",
+                status="open",  # ВАЖНО: статус должен быть "open" для корректной работы reset логики
                 meta={
                     "marker": True,  # Исключаем из лимитов
                     "strategy": strategy_name,
                 },
             )
+            # Гарантируем, что status действительно "open" (на случай, если Position использует другие значения)
+            marker_position.status = "open"
             # Добавляем marker_position в open_positions (но он не учитывается в лимитах через meta["marker"])
             state.open_positions.append(marker_position)
 
