@@ -206,8 +206,10 @@ def test_strategy_trades_csv_export_empty_final_exit():
         row = df.iloc[0]
         
         # Проверяем, что final_exit_json пустой
+        # pandas.read_csv() по умолчанию превращает пустые строки в NaN, поэтому проверяем оба варианта
         final_exit_json_str = row["final_exit_json"]
-        assert final_exit_json_str == "", "final_exit_json should be empty string when final_exit is None"
+        assert (pd.isna(final_exit_json_str) or final_exit_json_str == ""), \
+            "final_exit_json should be empty/NaN when final_exit is None"
         
         # Проверяем, что partial_exits_json пустой список (JSON)
         partial_exits_json_str = row["partial_exits_json"]
