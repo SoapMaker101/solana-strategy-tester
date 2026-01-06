@@ -255,6 +255,56 @@ class BacktestRunner:
         
         return self.results
 
+    def _parse_bool(self, v: Any, default: bool = False) -> bool:
+        """
+        Парсит значение в bool с поддержкой различных форматов.
+        
+        Поддерживает:
+        - bool: возвращает как есть
+        - int/float: bool(v) (0/0.0 -> False, остальное -> True)
+        - str: "true"/"1"/"yes"/"y" -> True, "false"/"0"/"no"/"n" -> False
+        - None: возвращает default
+        """
+        if v is None:
+            return default
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in {"true", "1", "yes", "y"}:
+                return True
+            if s in {"false", "0", "no", "n"}:
+                return False
+            raise ValueError(f"Cannot parse bool from string: {v}")
+        raise TypeError(f"Cannot parse bool from type: {type(v)}")
+
+    def _parse_int_optional(self, v: Any) -> Optional[int]:
+        """
+        Парсит значение в Optional[int] с поддержкой различных форматов.
+        
+        Поддерживает:
+        - int: возвращает как есть
+        - float (целое): конвертирует в int
+        - str: парсит как int (пустая строка -> None)
+        - None: возвращает None
+        
+        Важно: 0 - валидное значение, не None.
+        """
+        if v is None:
+            return None
+        if isinstance(v, int):
+            return v
+        if isinstance(v, float) and v.is_integer():
+            return int(v)
+        if isinstance(v, str):
+            s = v.strip()
+            if s == "":
+                return None
+            return int(s)
+        raise TypeError(f"Cannot parse int from type: {type(v)}")
+
     def _build_portfolio_config(self) -> PortfolioConfig:
         """
         Строит конфигурацию портфеля из global_config.
@@ -340,6 +390,15 @@ class BacktestRunner:
         prune_min_candidates = capacity_reset_cfg.get("prune_min_candidates", 3)
         prune_protect_min_max_xn = capacity_reset_cfg.get("prune_protect_min_max_xn", 2.0)
         
+        # PortfolioReplay конфигурация (ЭТАП 2)
+        use_replay_mode = self._parse_bool(
+            portfolio_cfg.get("use_replay_mode"),
+            default=False,
+        )
+        max_hold_minutes = self._parse_int_optional(
+            portfolio_cfg.get("max_hold_minutes")
+        )
+        
         return PortfolioConfig(
             initial_balance_sol=float(portfolio_cfg.get("initial_balance_sol", 10.0)),
             allocation_mode=portfolio_cfg.get("allocation_mode", "dynamic"),
@@ -372,6 +431,8 @@ class BacktestRunner:
             prune_cooldown_days=float(prune_cooldown_days) if prune_cooldown_days is not None else None,
             prune_min_candidates=int(prune_min_candidates),
             prune_protect_min_max_xn=float(prune_protect_min_max_xn) if prune_protect_min_max_xn is not None else None,
+            use_replay_mode=use_replay_mode,
+            max_hold_minutes=max_hold_minutes,
         )
 
     def run_portfolio(self) -> Dict[str, PortfolioResult]:
