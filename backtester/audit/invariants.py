@@ -18,9 +18,8 @@ import math
 
 import pandas as pd
 
-# TYPE_CHECKING для избежания circular imports
-if TYPE_CHECKING:
-    from .indices import AuditIndices
+# Импорт AuditIndices для использования в методах
+from .indices import AuditIndices
 
 
 # Канонические причины закрытия позиций
@@ -350,8 +349,6 @@ class InvariantChecker:
         # C) Linkage checks: positions ↔ events ↔ executions (P1)
         # ============================================================
         if self.include_p1:
-            from .indices import AuditIndices
-            
             # Определяем effective executions_df: используем переданный или строим из events
             effective_executions_df = executions_df
             if effective_executions_df is None or len(effective_executions_df) == 0:
@@ -373,7 +370,6 @@ class InvariantChecker:
         
         # P2: Decision proofs (если включено)
         if self.include_p2 and events_df is not None and len(events_df) > 0:
-            from .indices import AuditIndices
             effective_executions_df = executions_df
             if effective_executions_df is None or len(effective_executions_df) == 0:
                 if events_df is not None and len(events_df) > 0:
@@ -1022,7 +1018,7 @@ class InvariantChecker:
     def _check_positions_events_consistency(
         self,
         positions_df: pd.DataFrame,
-        indices: "AuditIndices",
+        indices: AuditIndices,
     ) -> None:
         """P1: Проверка консистентности positions ↔ events."""
         for _, pos_row in positions_df.iterrows():
@@ -1357,7 +1353,7 @@ class InvariantChecker:
     def _check_events_executions_consistency(
         self,
         positions_df: pd.DataFrame,
-        indices: "AuditIndices",
+        indices: AuditIndices,
         events_df: Optional[pd.DataFrame] = None,
         executions_df: Optional[pd.DataFrame] = None,
     ) -> None:
@@ -1703,7 +1699,7 @@ class InvariantChecker:
         self,
         positions_df: pd.DataFrame,
         events_df: pd.DataFrame,
-        indices: "AuditIndices",
+        indices: AuditIndices,
     ) -> None:
         """P2: Проверка доказательств решений (reset/prune/close-all)."""
         # P2.1: Profit reset proof
