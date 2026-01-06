@@ -228,6 +228,33 @@ class PortfolioReplay:
         # Формируем equity_curve (упрощенная версия)
         equity_curve = PortfolioReplay._build_equity_curve(state, portfolio_events)
         
+        # ВРЕМЕННЫЙ DEBUG: Reset events analysis
+        print("=== RESET DEBUG (PortfolioReplay) ===")
+        reset_events = [
+            e for e in portfolio_events
+            if e.event_type in (PortfolioEventType.POSITION_CLOSED, PortfolioEventType.PORTFOLIO_RESET_TRIGGERED)
+        ]
+        for e in reset_events:
+            print(f"  {e.event_type.value} | reason={e.reason} | timestamp={e.timestamp} | position_id={e.position_id}")
+        
+        # Количество open_positions в момент reset (из reset events)
+        reset_triggered_events = [
+            e for e in portfolio_events
+            if e.event_type == PortfolioEventType.PORTFOLIO_RESET_TRIGGERED
+        ]
+        if reset_triggered_events:
+            for reset_event in reset_triggered_events:
+                closed_count = reset_event.meta.get("closed_positions_count", 0) if reset_event.meta else 0
+                print(f"  Reset at {reset_event.timestamp}: closed_positions_count={closed_count}")
+        
+        # Список причин для всех POSITION_CLOSED
+        position_closed_reasons = set()
+        for e in portfolio_events:
+            if e.event_type == PortfolioEventType.POSITION_CLOSED:
+                position_closed_reasons.add(e.reason)
+        print(f"  POSITION_CLOSED reasons: {sorted(position_closed_reasons)}")
+        print("=== END RESET DEBUG ===")
+        
         return PortfolioResult(
             equity_curve=equity_curve,
             positions=state.closed_positions + state.open_positions,
@@ -944,6 +971,10 @@ class PortfolioReplay:
         if equity < threshold:
             return False
         
+        # ВАЖНО: Определяем reset_time как единый источник истины
+        # Это timestamp, который будет использоваться для всех событий reset
+        reset_time = current_time
+        
         # Reset нужен даже если нет открытых позиций (для обновления cycle_start_equity)
         # Но если нет открытых позиций, создаем временный marker
         if state.open_positions:
@@ -962,7 +993,7 @@ class PortfolioReplay:
             marker_position = Position(
                 signal_id="reset_marker",
                 contract_address="MARKER",
-                entry_time=current_time,
+                entry_time=reset_time,
                 entry_price=1.0,
                 size=0.0,
                 status="closed",
@@ -973,7 +1004,7 @@ class PortfolioReplay:
         
         # Создаем контекст для reset
         reset_context = PortfolioResetContext(
-            reset_time=current_time,
+            reset_time=reset_time,
             reason=ResetReason.PROFIT_RESET,
             marker_position=marker_position,
             positions_to_force_close=positions_to_force_close,
@@ -987,7 +1018,7 @@ class PortfolioReplay:
         if state.open_positions and marker_position in state.open_positions:
             # Принудительно закрываем marker_position
             from .portfolio_reset import get_mark_price_for_position
-            raw_exit_price = get_mark_price_for_position(marker_position, current_time)
+            raw_exit_price = get_mark_price_for_position(marker_position, reset_time)
             effective_exit_price = execution_model.apply_exit(raw_exit_price, "manual_close")
             exec_entry_price = marker_position.meta.get("exec_entry_price", marker_position.entry_price)
             exit_pnl_pct = (effective_exit_price - exec_entry_price) / exec_entry_price if exec_entry_price > 0 else 0.0
@@ -1000,7 +1031,7 @@ class PortfolioReplay:
             state.balance -= network_fee_exit
             marker_position.size = 0.0
             marker_position.status = "closed"
-            marker_position.exit_time = current_time
+            marker_position.exit_time = reset_time
             marker_position.exit_price = effective_exit_price
             marker_position.pnl_pct = exit_pnl_pct
             m = marker_position.meta
@@ -1013,11 +1044,13 @@ class PortfolioReplay:
             if marker_position not in state.closed_positions:
                 state.closed_positions.append(marker_position)
         
-        # Создаем POSITION_CLOSED events для всех закрытых позиций
+        # ВАЖНО: Создаем POSITION_CLOSED events для всех закрытых позиций ПЕРЕД PORTFOLIO_RESET_TRIGGERED
         # (apply_portfolio_reset закрывает позиции, но не создает PortfolioEvent)
         # Используем все позиции, которые должны быть закрыты (включая marker, если он реальная позиция)
         real_closed_positions = all_positions_to_close
         
+        # 1) Эмитим POSITION_CLOSED для каждой закрытой позиции (N событий) - ПЕРВЫМИ
+        # ЖЁСТКИЙ КОНТРАКТ: reason="profit_reset", timestamp=reset_time (не reset_time + delta), position_id обязателен
         for position in real_closed_positions:
             # apply_portfolio_reset уже установил exit_price, pnl_pct, pnl_sol в position и meta
             # Получаем данные из позиции (apply_portfolio_reset уже установил)
@@ -1039,13 +1072,14 @@ class PortfolioReplay:
             strategy_id = position.meta.get("strategy", "unknown") if position.meta else "unknown"
             
             # Создаем POSITION_CLOSED event с execution данными в meta
+            # ЖЁСТКИЙ КОНТРАКТ: timestamp строго reset_time (не reset_time + delta), reason строго "profit_reset"
             event = PortfolioEvent.create_position_closed(
-                timestamp=current_time,
+                timestamp=reset_time,  # ВАЖНО: строго reset_time, не reset_time + delta
                 strategy=strategy_id,
                 signal_id=position.signal_id,
                 contract_address=position.contract_address,
-                position_id=position.position_id,
-                reason="profit_reset",
+                position_id=position.position_id,  # Обязателен
+                reason="profit_reset",  # Строго "profit_reset" (не нормализуется)
                 raw_price=exit_price_raw,
                 exec_price=exec_exit_price,
                 pnl_pct=pnl_pct,
@@ -1063,10 +1097,11 @@ class PortfolioReplay:
             )
             portfolio_events.append(event)
         
-        # 1) Emit PORTFOLIO_RESET_TRIGGERED event
+        # 2) Эмитим PORTFOLIO_RESET_TRIGGERED event ПОСЛЕ всех POSITION_CLOSED
+        # ЖЁСТКИЙ КОНТРАКТ: timestamp=reset_time, reason="profit_reset"
         reset_event = PortfolioEvent.create_portfolio_reset_triggered(
-            timestamp=current_time,
-            reason="profit_reset",
+            timestamp=reset_time,  # ВАЖНО: строго reset_time, не reset_time + delta
+            reason="profit_reset",  # Строго "profit_reset"
             closed_positions_count=len(real_closed_positions),
             position_id=marker_position.position_id,  # Marker position для audit traceability
             signal_id=marker_position.signal_id,

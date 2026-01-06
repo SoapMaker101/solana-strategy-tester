@@ -1092,19 +1092,37 @@ class PortfolioEngine:
                 ResetReason.MANUAL: "manual_close",
             }.get(reason, "manual_close")
             
-            # Собираем все позиции для закрытия: positions_to_force_close + marker_position (если он был открыт)
-            all_positions_to_close = list(positions_to_force_close)
-            # Marker position тоже должна быть закрыта и для неё эмитится POSITION_CLOSED, если она была открыта
-            if marker_was_open and marker_position not in all_positions_to_close:
-                all_positions_to_close.append(marker_position)
+            # ВАЖНО: Собираем ВСЕ открытые позиции на момент reset_time
+            # Это гарантирует, что все позиции будут закрыты с reason="profit_reset"
+            # Используем state.open_positions ДО вызова apply_portfolio_reset (который их удаляет)
+            all_open_positions_at_reset = [
+                p for p in state.open_positions 
+                if p.status == "open" and (p.exit_time is None or p.exit_time > reset_time)
+            ]
+            
+            # Добавляем marker_position, если он был открыт и еще не в списке
+            if marker_was_open and marker_position not in all_open_positions_at_reset:
+                all_open_positions_at_reset.append(marker_position)
+            
+            # Также добавляем positions_to_force_close, если они еще не в списке
+            for pos in positions_to_force_close:
+                if pos not in all_open_positions_at_reset and pos.status == "open":
+                    all_open_positions_at_reset.append(pos)
+            
+            # Debug-guard: если reset сработал и были открытые позиции, должны быть закрытия
+            open_count_before = len(all_open_positions_at_reset)
+            if open_count_before > 0:
+                logger.debug(f"[PROFIT_RESET] Reset at {reset_time}, open_positions={open_count_before}, reason={reset_reason_str}")
             
             # 1. Эмитим POSITION_CLOSED для каждой закрытой позиции (N событий) - ПЕРВЫМИ
-            for pos in all_positions_to_close:
+            # ЖЁСТКИЙ КОНТРАКТ: reason="profit_reset", timestamp=reset_time, position_id обязателен
+            emitted_profit_reset_closures = 0
+            for pos in all_open_positions_at_reset:
                 strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
-                raw_exit_price = pos.exit_price
-                exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+                raw_exit_price = pos.exit_price if pos.exit_price is not None else pos.entry_price
+                exec_exit_price = pos.meta.get("exec_exit_price", raw_exit_price) if pos.meta else raw_exit_price
                 pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
-                pnl_pct = pos.pnl_pct * 100.0 if pos.pnl_pct else None  # В процентах
+                pnl_pct = pos.pnl_pct * 100.0 if pos.pnl_pct is not None else None  # В процентах
                 
                 close_meta = {
                     "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
@@ -1114,28 +1132,36 @@ class PortfolioEngine:
                     "reset_reason": reset_reason_str,
                 }
                 
-                portfolio_events.append(
-                    PortfolioEvent.create_position_closed(
-                        timestamp=reset_time,
-                        strategy=strategy_name,
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        position_id=pos.position_id,
-                        reason=reset_reason_str,
-                        raw_price=raw_exit_price,
-                        exec_price=exec_exit_price,
-                        pnl_pct=pnl_pct,
-                        pnl_sol=pnl_sol,
-                        meta=close_meta,
-                    )
+                # ЖЁСТКИЙ КОНТРАКТ: reason строго "profit_reset" (или другой reset_reason_str), timestamp строго reset_time
+                event = PortfolioEvent.create_position_closed(
+                    timestamp=reset_time,  # Строго reset_time, без +epsilon
+                    strategy=strategy_name,
+                    signal_id=pos.signal_id,
+                    contract_address=pos.contract_address,
+                    position_id=pos.position_id,  # Обязателен
+                    reason=reset_reason_str,  # Строго reset_reason_str (не нормализуется)
+                    raw_price=raw_exit_price,
+                    exec_price=exec_exit_price,
+                    pnl_pct=pnl_pct,
+                    pnl_sol=pnl_sol,
+                    meta=close_meta,
                 )
+                portfolio_events.append(event)
+                if reset_reason_str == "profit_reset":
+                    emitted_profit_reset_closures += 1
+            
+            # Debug-guard: проверка, что события были эмитчены
+            if open_count_before > 0 and reset_reason_str == "profit_reset":
+                assert emitted_profit_reset_closures > 0, \
+                    f"[PROFIT_RESET] ERROR: Reset triggered with {open_count_before} open positions, but no POSITION_CLOSED events emitted! " \
+                    f"emitted={emitted_profit_reset_closures}, reset_reason={reset_reason_str}"
             
             # 2. Эмитим PORTFOLIO_RESET_TRIGGERED (1 событие) - ПОСЛЕ всех POSITION_CLOSED
             portfolio_events.append(
                 PortfolioEvent.create_portfolio_reset_triggered(
-                    timestamp=reset_time,
-                    reason=reset_reason_str,
-                    closed_positions_count=len(all_positions_to_close),
+                    timestamp=reset_time,  # Строго reset_time
+                    reason=reset_reason_str,  # Строго reset_reason_str
+                    closed_positions_count=len(all_open_positions_at_reset),
                     position_id=marker_position.position_id,
                     signal_id=marker_position.signal_id,
                     contract_address=marker_position.contract_address,
@@ -2351,6 +2377,33 @@ class PortfolioEngine:
         # Финальная проверка всех позиций перед возвратом
         for pos in state.closed_positions:
             self._dbg_meta(pos, f"FINAL_CHECK_before_return_signal_id={pos.signal_id}")
+
+        # ВРЕМЕННЫЙ DEBUG: Reset events analysis
+        print("=== RESET DEBUG (PortfolioEngine) ===")
+        reset_events = [
+            e for e in portfolio_events
+            if e.event_type in (PortfolioEventType.POSITION_CLOSED, PortfolioEventType.PORTFOLIO_RESET_TRIGGERED)
+        ]
+        for e in reset_events:
+            print(f"  {e.event_type.value} | reason={e.reason} | timestamp={e.timestamp} | position_id={e.position_id}")
+        
+        # Количество open_positions в момент reset (из reset events)
+        reset_triggered_events = [
+            e for e in portfolio_events
+            if e.event_type == PortfolioEventType.PORTFOLIO_RESET_TRIGGERED
+        ]
+        if reset_triggered_events:
+            for reset_event in reset_triggered_events:
+                closed_count = reset_event.meta.get("closed_positions_count", 0) if reset_event.meta else 0
+                print(f"  Reset at {reset_event.timestamp}: closed_positions_count={closed_count}")
+        
+        # Список причин для всех POSITION_CLOSED
+        position_closed_reasons = set()
+        for e in portfolio_events:
+            if e.event_type == PortfolioEventType.POSITION_CLOSED:
+                position_closed_reasons.add(e.reason)
+        print(f"  POSITION_CLOSED reasons: {sorted(position_closed_reasons)}")
+        print("=== END RESET DEBUG ===")
 
         return PortfolioResult(
             equity_curve=state.equity_curve,
