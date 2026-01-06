@@ -35,8 +35,9 @@ CANONICAL_REASONS = {
     "max_hold_minutes",
 }
 
-# Алиасы для legacy причин
-REASON_ALIASES = {
+# Алиасы для legacy причин (только для канонизации, не используется в normalize_reason)
+# normalize_reason сохраняет legacy как есть и нормализует только варианты типа tp_2x -> tp
+REASON_ALIASES_LEGACY = {
     "tp": "ladder_tp",
     "sl": "stop_loss",
     "timeout": "time_stop",
@@ -348,6 +349,9 @@ class InvariantChecker:
                 if pos_events is not None:
                     self._check_position_event_chain(row, pos_events)
         
+        # Проверка missing events chain (для закрытых позиций без событий)
+        self._check_events_chain(positions_df, events_df)
+        
         # Проверка неизвестных причин
         self._check_unknown_reasons(positions_df, events_df)
         
@@ -590,8 +594,9 @@ class InvariantChecker:
         # Нормализуем reason для консистентной проверки
         normalized_reason = normalize_reason(reason_str)
         
-        # Проверка: reason=ladder_tp, но pnl < 0 (строго отрицательный)
-        if normalized_reason == "ladder_tp" and pnl_pct_float < -self.EPSILON:
+        # Проверка: reason=tp/ladder_tp, но pnl < -epsilon (строго отрицательный)
+        # normalize_reason конвертит ladder_tp -> tp, поэтому проверяем r == "tp"
+        if normalized_reason == "tp" and pnl_pct_float < -self.EPSILON:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
                 strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -608,8 +613,9 @@ class InvariantChecker:
                     details={"pnl_pct": pnl_pct_float, "reason": reason_str, "normalized_reason": normalized_reason},
                 ))
         
-        # Проверка: reason=stop_loss, но pnl >= 0 (неотрицательный) - строго < 0 согласно ТЗ
-        if normalized_reason == "stop_loss" and pnl_pct_float >= 0:
+        # Проверка: reason=sl/stop_loss, но pnl >= -epsilon (неотрицательный или близко к нулю)
+        # normalize_reason конвертит stop_loss -> sl, поэтому проверяем r == "sl"
+        if normalized_reason == "sl" and pnl_pct_float >= -self.EPSILON:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
                 strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -1835,19 +1841,36 @@ class InvariantChecker:
 
 
 # Convenience functions
-def normalize_reason(x: Any) -> str:
+def normalize_reason(x: Any) -> Optional[str]:
     """
     Нормализует reason для консистентной обработки.
     
     Правила нормализации:
-    - Применяет алиасы: tp -> ladder_tp, sl -> stop_loss, timeout -> time_stop
+    - Если reason начинается с "tp_" -> возвращает "tp" (tp_2x, tp_5x -> tp)
+    - "stop_loss" -> "sl" (канон -> legacy для обратной совместимости)
+    - "ladder_tp" -> "tp" (канон -> legacy для обратной совместимости)
+    - Legacy причины остаются как есть: "tp", "sl", "timeout" -> остаются "tp", "sl", "timeout"
     - Возвращает нормализованную причину в нижнем регистре
     
     :param x: Исходная причина закрытия (может быть None, str, и т.д.)
     :return: Нормализованная причина (строка в нижнем регистре)
     """
-    s = "" if x is None else str(x).strip().lower()
-    return REASON_ALIASES.get(s, s)
+    if x is None:
+        return None  # None остается None (как ожидает тест)
+    s = str(x).strip().lower()
+    
+    # Если начинается с "tp_" -> нормализуем в "tp"
+    if s.startswith("tp_"):
+        return "tp"
+    
+    # Канон -> legacy для обратной совместимости (но не наоборот)
+    if s == "stop_loss":
+        return "sl"
+    if s == "ladder_tp":
+        return "tp"
+    
+    # Остальные остаются как есть (legacy не маппятся)
+    return s
 
 
 def check_pnl_formula(entry_price: float, exit_price: float, pnl_pct: float, epsilon: float = 1e-6) -> bool:
@@ -1863,7 +1886,7 @@ def check_reason_consistency(reason: str, pnl_pct: float, epsilon: float = 1e-6)
     Проверка консистентности reason с PnL.
     
     Правила:
-    - tp (и его варианты): требует pnl_pct >= -epsilon (неотрицательный с допуском)
+    - tp (и его варианты tp_2x, tp_5x, ladder_tp): требует pnl_pct >= -epsilon (неотрицательный с допуском)
     - sl/stop_loss: требует pnl_pct < 0 (строго отрицательный)
     
     :param reason: Причина закрытия позиции
@@ -1871,15 +1894,18 @@ def check_reason_consistency(reason: str, pnl_pct: float, epsilon: float = 1e-6)
     :param epsilon: Погрешность для сравнения
     :return: True если reason согласуется с PnL, False иначе
     """
-    normalized = normalize_reason(reason)
+    # Нормализуем reason перед проверкой (tp_5x -> tp, ladder_tp -> tp, stop_loss -> sl)
+    r = normalize_reason(reason)
     
-    if normalized == "ladder_tp":
-        # ladder_tp требует неотрицательный PnL (с допуском epsilon)
+    # tp и ladder_tp требуют неотрицательный PnL (с допуском epsilon)
+    # normalize_reason конвертит ladder_tp -> tp, поэтому проверяем r == "tp"
+    if r == "tp":
         return pnl_pct >= -epsilon
     
-    if normalized == "stop_loss":
-        # stop_loss требует строго отрицательный PnL
-        return pnl_pct < 0
+    # sl и stop_loss требуют строго отрицательный PnL (< -epsilon)
+    # normalize_reason конвертит stop_loss -> sl, поэтому проверяем r == "sl"
+    if r == "sl":
+        return pnl_pct < -epsilon
     
     # Для остальных причин считаем валидным (нет ограничений)
     return True
