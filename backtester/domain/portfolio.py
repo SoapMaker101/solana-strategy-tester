@@ -1076,6 +1076,10 @@ class PortfolioEngine:
             reason: Причина reset
             portfolio_events: Список событий для эмиссии (v1.9)
         """
+        # ВАЖНО: Делаем snapshot open_positions ДО вызова apply_portfolio_reset
+        # apply_portfolio_reset изменяет state.open_positions, поэтому нужно сохранить состояние заранее
+        open_positions_snapshot = list(state.open_positions)
+        
         # Сохраняем статус marker_position до reset (для эмиссии событий)
         marker_was_open = marker_position.status == "open"
         
@@ -1097,26 +1101,25 @@ class PortfolioEngine:
                 ResetReason.MANUAL: "manual_close",
             }.get(reason, "manual_close")
             
-            # ВАЖНО: Находим marker_position в state.open_positions по meta["marker"]=True
-            # Это гарантирует, что мы используем актуальный marker из state
+            # ВАЖНО: Находим marker_position в snapshot по meta["marker"]=True
+            # Используем snapshot, так как state.open_positions уже изменен apply_portfolio_reset
             marker_from_state: Optional[Position] = None
-            for p in state.open_positions:
+            for p in open_positions_snapshot:
                 if p.meta and p.meta.get("marker", False):
                     marker_from_state = p
                     break
             
-            # Если marker не найден в state, используем переданный marker_position
+            # Если marker не найден в snapshot, используем переданный marker_position
             if marker_from_state is None:
                 marker_from_state = marker_position
             
-            # ВАЖНО: Собираем ВСЕ открытые позиции на момент reset_time
-            # Это гарантирует, что все позиции будут закрыты с reason="profit_reset"
-            # Используем state.open_positions ДО вызова apply_portfolio_reset (который их удаляет)
-            # Исключаем marker_position из реальных позиций (он будет закрыт отдельно)
+            # ВАЖНО: Собираем ВСЕ открытые позиции из snapshot на момент reset_time
+            # Используем snapshot, так как state.open_positions уже изменен apply_portfolio_reset
+            # Убираем проверку exit_time > reset_time, так как reset_time может совпадать с exit_time
+            # Для snapshot-логики берем просто p.status=="open" на момент snapshot и исключаем marker по meta
             real_open_positions_at_reset = [
-                p for p in state.open_positions 
+                p for p in open_positions_snapshot 
                 if p.status == "open" 
-                and (p.exit_time is None or p.exit_time > reset_time)
                 and not (p.meta and p.meta.get("marker", False))  # Исключаем marker
             ]
             
