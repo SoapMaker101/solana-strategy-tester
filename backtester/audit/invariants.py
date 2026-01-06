@@ -1,15 +1,26 @@
 # backtester/audit/invariants.py
 # Инварианты и проверки для аудита
+#
+# ВАЖНО: Запрещено использование truthiness проверок на NDFrame (DataFrame/Series).
+# Вместо `if df:` или `if series:` используйте явные проверки:
+# - `df is not None and not df.empty`
+# - `s is not None and len(s) > 0`
+# - `s.notna().any()` для проверки наличия не-NaN значений
+# - `(s.astype("string") != "").any()` для строковых Series
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 import math
 
 import pandas as pd
+
+# TYPE_CHECKING для избежания circular imports
+if TYPE_CHECKING:
+    from .indices import AuditIndices
 
 
 # Канонические причины закрытия позиций
@@ -375,9 +386,26 @@ class InvariantChecker:
     def _check_required_fields(self, row: pd.Series) -> bool:
         """Проверка наличия обязательных полей."""
         required = ["strategy", "contract_address", "status"]
-        missing = [f for f in required if f not in row.index or pd.isna(row.get(f))]
+        # Явная проверка на None/NaN для каждого поля (избегаем truthiness на Series)
+        missing = []
+        for f in required:
+            if f not in row.index:
+                missing.append(f)
+            else:
+                val = row.get(f)
+                if val is None or pd.isna(val):
+                    missing.append(f)
         
-        if missing:
+        if len(missing) > 0:  # Явная проверка длины вместо truthiness
+            entry_price_val = row.get("entry_price")
+            exit_price_val = row.get("exit_price")
+            pnl_pct_val = row.get("pnl_pct")
+            
+            # Явные проверки на None/NaN вместо truthiness
+            entry_price = entry_price_val if (entry_price_val is not None and not pd.isna(entry_price_val)) else None
+            exit_price = exit_price_val if (exit_price_val is not None and not pd.isna(exit_price_val)) else None
+            pnl_pct = pnl_pct_val if (pnl_pct_val is not None and not pd.isna(pnl_pct_val)) else None
+            
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
                 strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -385,9 +413,9 @@ class InvariantChecker:
                 contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
                 entry_time=self._safe_dt(row.get("entry_time")),
                 exit_time=self._safe_dt(row.get("exit_time")),
-                entry_price=row.get("entry_price") if pd.notna(row.get("entry_price")) else None,
-                exit_price=row.get("exit_price") if pd.notna(row.get("exit_price")) else None,
-                pnl_pct=row.get("pnl_pct") if pd.notna(row.get("pnl_pct")) else None,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                pnl_pct=pnl_pct,
                 reason=self._safe_str(row.get("reason")) or None,
                 anomaly_type=AnomalyType.MISSING_REQUIRED_FIELDS,
                 severity="P0",
@@ -410,7 +438,17 @@ class InvariantChecker:
             except (ValueError, TypeError):
                 entry_price_valid = True  # Невалидное значение
         
-        if pd.isna(entry_price) or entry_price_valid:
+        # Явная проверка на None/NaN вместо truthiness
+        entry_price_is_invalid = (
+            entry_price is None or 
+            pd.isna(entry_price) or 
+            entry_price_valid
+        )
+        
+        if entry_price_is_invalid:
+            pnl_pct_val = row.get("pnl_pct")
+            pnl_pct = pnl_pct_val if (pnl_pct_val is not None and not pd.isna(pnl_pct_val)) else None
+            
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
                 strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -420,7 +458,7 @@ class InvariantChecker:
                 exit_time=self._safe_dt(row.get("exit_time")),
                 entry_price=entry_price,
                 exit_price=exit_price,
-                pnl_pct=row.get("pnl_pct") if pd.notna(row.get("pnl_pct")) else None,
+                pnl_pct=pnl_pct,
                 reason=self._safe_str(row.get("reason")) or None,
                 anomaly_type=AnomalyType.ENTRY_PRICE_INVALID,
                 severity="P0",
@@ -439,7 +477,17 @@ class InvariantChecker:
                 except (ValueError, TypeError):
                     exit_price_valid = True  # Невалидное значение
             
-            if pd.isna(exit_price) or exit_price_valid:
+            # Явная проверка на None/NaN вместо truthiness
+            exit_price_is_invalid = (
+                exit_price is None or
+                pd.isna(exit_price) or 
+                exit_price_valid
+            )
+            
+            if exit_price_is_invalid:
+                pnl_pct_val = row.get("pnl_pct")
+                pnl_pct = pnl_pct_val if (pnl_pct_val is not None and not pd.isna(pnl_pct_val)) else None
+                
                 self.anomalies.append(Anomaly(
                     position_id=self._safe_str(row.get("position_id")) or None,
                     strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -449,12 +497,12 @@ class InvariantChecker:
                     exit_time=self._safe_dt(row.get("exit_time")),
                     entry_price=entry_price,
                     exit_price=exit_price,
-                    pnl_pct=row.get("pnl_pct") if pd.notna(row.get("pnl_pct")) else None,
+                    pnl_pct=pnl_pct,
                     reason=self._safe_str(row.get("reason")) or None,
-                anomaly_type=AnomalyType.EXIT_PRICE_INVALID,
-                severity="P0",
-                details={"exit_price": exit_price},
-            ))
+                    anomaly_type=AnomalyType.EXIT_PRICE_INVALID,
+                    severity="P0",
+                    details={"exit_price": exit_price},
+                ))
     
     def _check_pnl(self, row: pd.Series) -> None:
         """Проверка формулы PnL и разумности значений."""
@@ -596,6 +644,9 @@ class InvariantChecker:
         
         # Безопасное сравнение datetime
         if entry_dt > exit_dt:
+            pnl_pct_val = row.get("pnl_pct")
+            pnl_pct = pnl_pct_val if (pnl_pct_val is not None and not pd.isna(pnl_pct_val)) else None
+            
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
                 strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -605,7 +656,7 @@ class InvariantChecker:
                 exit_time=exit_dt,
                 entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
                 exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
-                pnl_pct=row.get("pnl_pct") if pd.notna(row.get("pnl_pct")) else None,
+                pnl_pct=pnl_pct,
                 reason=self._safe_str(row.get("reason")) or None,
                 anomaly_type=AnomalyType.TIME_ORDER_INVALID,
                 severity="P0",
@@ -698,7 +749,7 @@ class InvariantChecker:
                             exit_time=self._safe_dt(row.get("exit_time")),
                             entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
                             exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
-                            pnl_pct=row.get("pnl_pct") if pd.notna(row.get("pnl_pct")) else None,
+                            pnl_pct=self._safe_float(row.get("pnl_pct")),
                             reason=reason_val,
                             anomaly_type=AnomalyType.UNKNOWN_REASON,
                             severity="P0",
@@ -856,6 +907,25 @@ class InvariantChecker:
         except (ValueError, TypeError):
             return None
     
+    @staticmethod
+    def _safe_get_value(row: Any, key: str, default: Any = None) -> Any:
+        """
+        Безопасное получение значения из row с явной проверкой на None/NaN.
+        
+        Избегает truthiness проверок на NDFrame.
+        
+        :param row: Series или dict
+        :param key: Ключ для получения значения
+        :param default: Значение по умолчанию
+        :return: Значение или default
+        """
+        if row is None:
+            return default
+        value = row.get(key) if hasattr(row, 'get') else None
+        if value is None or pd.isna(value):
+            return default
+        return value
+    
     def _check_events_chain(self, positions_df: pd.DataFrame, events_df: pd.DataFrame) -> None:
         """Проверка цепочки событий для каждой позиции."""
         # Для каждой закрытой позиции проверяем наличие событий по position_id
@@ -870,7 +940,8 @@ class InvariantChecker:
             contract = self._safe_str(pos_row.get("contract_address"), "UNKNOWN")
             
             # Ищем события для этой позиции по position_id (требование: проверка по position_id)
-            if position_id and pd.notna(position_id):
+            # Явная проверка на None/NaN вместо truthiness
+            if position_id is not None and not pd.isna(position_id):
                 pos_id_series = self._series(events_df, "position_id", None)
                 # Используем явную проверку вместо truthiness
                 pos_events = events_df[pos_id_series == position_id]
@@ -885,7 +956,7 @@ class InvariantChecker:
                         exit_time=self._safe_dt(pos_row.get("exit_time")),
                         entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                         exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
-                        pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
+                        pnl_pct=self._safe_float(pos_row.get("pnl_pct")),
                         reason=self._safe_str(pos_row.get("reason")) or None,
                         anomaly_type=AnomalyType.MISSING_EVENTS_CHAIN,
                         severity="P0",
@@ -913,7 +984,8 @@ class InvariantChecker:
             
             # Ищем события reset/prune
             event_type_series = self._series(events_df, "event_type", "")
-            if position_id and pd.notna(position_id):
+            # Явная проверка на None/NaN вместо truthiness
+            if position_id is not None and not pd.isna(position_id):
                 pos_id_series = self._series(events_df, "position_id", None)
                 reset_events = events_df[
                     (pos_id_series == position_id) &
@@ -940,7 +1012,7 @@ class InvariantChecker:
                     exit_time=self._safe_dt(pos_row.get("exit_time")),
                     entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                     exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
-                    pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
+                    pnl_pct=self._safe_float(pos_row.get("pnl_pct")),
                     reason=self._safe_str(pos_row.get("reason")) or None,
                     anomaly_type=AnomalyType.RESET_WITHOUT_EVENTS,
                     severity="P0",
@@ -976,7 +1048,7 @@ class InvariantChecker:
                     exit_time=self._safe_dt(pos_row.get("exit_time")),
                     entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                     exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
-                    pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
+                    pnl_pct=self._safe_float(pos_row.get("pnl_pct")),
                     reason=self._safe_str(pos_row.get("reason")) or None,
                     anomaly_type=AnomalyType.POSITION_CLOSED_BUT_NO_CLOSE_EVENT,
                     severity="P1",
@@ -995,7 +1067,7 @@ class InvariantChecker:
                     exit_time=self._safe_dt(pos_row.get("exit_time")),
                     entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                     exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
-                    pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
+                    pnl_pct=self._safe_float(pos_row.get("pnl_pct")),
                     reason=self._safe_str(pos_row.get("reason")) or None,
                     anomaly_type=AnomalyType.CLOSE_EVENT_BUT_POSITION_OPEN,
                     severity="P1",
@@ -1019,7 +1091,7 @@ class InvariantChecker:
                     exit_time=self._safe_dt(pos_row.get("exit_time")),
                     entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                     exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
-                    pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
+                    pnl_pct=self._safe_float(pos_row.get("pnl_pct")),
                     reason=self._safe_str(pos_row.get("reason")) or None,
                     anomaly_type=AnomalyType.MULTIPLE_OPEN_EVENTS,
                     severity="P1",
@@ -1043,7 +1115,7 @@ class InvariantChecker:
                         exit_time=self._safe_dt(pos_row.get("exit_time")),
                         entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                         exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
-                        pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
+                        pnl_pct=self._safe_float(pos_row.get("pnl_pct")),
                         reason=reason,
                         anomaly_type=AnomalyType.MULTIPLE_CLOSE_EVENTS,
                         severity="P1",
@@ -1093,21 +1165,22 @@ class InvariantChecker:
                                 meta_json = event.get("meta_json")
                                 meta = event.get("meta")
                                 meta_dict = {}
-                                if meta_json and pd.notna(meta_json):
+                                # Явная проверка на None/NaN вместо truthiness
+                                if meta_json is not None and not pd.isna(meta_json):
                                     try:
                                         meta_dict = json.loads(str(meta_json))
                                     except (json.JSONDecodeError, TypeError):
                                         pass
-                                elif meta and isinstance(meta, dict):
+                                elif meta is not None and isinstance(meta, dict):
                                     meta_dict = meta
-                                elif meta and isinstance(meta, str):
+                                elif meta is not None and isinstance(meta, str):
                                     try:
                                         meta_dict = json.loads(meta)
                                     except (json.JSONDecodeError, TypeError):
                                         pass
                                 
-                                    reset_reason = meta_dict.get("reset_reason") or meta_dict.get("close_reason")
-                                if reset_reason:
+                                reset_reason = meta_dict.get("reset_reason") or meta_dict.get("close_reason")
+                                if reset_reason is not None:
                                     reset_reason_lower = str(reset_reason).lower()
                                     # Для reason="ladder_tp" не должно быть reset_reason
                                     if normalized_reason == "ladder_tp" and reset_reason_lower in ("profit_reset", "capacity_prune"):
@@ -1132,7 +1205,7 @@ class InvariantChecker:
                             exit_time=self._safe_dt(pos_row.get("exit_time")),
                             entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
                             exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
-                            pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
+                            pnl_pct=self._safe_float(pos_row.get("pnl_pct")),
                             reason=reason,
                             anomaly_type=AnomalyType.UNKNOWN_REASON_MAPPING,
                             severity="P1",
@@ -1224,22 +1297,26 @@ class InvariantChecker:
             
             # Пытаемся извлечь meta из meta_json или meta
             meta = {}
-            if "meta_json" in row and pd.notna(row.get("meta_json")):
+            meta_json_val = row.get("meta_json") if "meta_json" in row else None
+            # Явная проверка на None/NaN вместо truthiness
+            if meta_json_val is not None and not pd.isna(meta_json_val):
                 try:
-                    meta_str = str(row.get("meta_json"))
-                    if meta_str:
+                    meta_str = str(meta_json_val)
+                    if len(meta_str) > 0:  # Явная проверка длины вместо truthiness
                         meta = json.loads(meta_str)
                 except (json.JSONDecodeError, TypeError):
                     pass
-            elif "meta" in row and pd.notna(row.get("meta")):
-                meta_val = row.get("meta")
-                if isinstance(meta_val, dict):
-                    meta = meta_val
-                elif isinstance(meta_val, str):
-                    try:
-                        meta = json.loads(meta_val)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+            else:
+                meta_val = row.get("meta") if "meta" in row else None
+                # Явная проверка на None вместо truthiness
+                if meta_val is not None and not pd.isna(meta_val):
+                    if isinstance(meta_val, dict):
+                        meta = meta_val
+                    elif isinstance(meta_val, str):
+                        try:
+                            meta = json.loads(meta_val)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
             
             # Извлекаем execution данные из meta
             execution_type = meta.get("execution_type")
@@ -1266,10 +1343,14 @@ class InvariantChecker:
         
         if not executions_rows:
             # Возвращаем пустой DataFrame с правильными колонками
-            return pd.DataFrame(columns=[
+            # Используем pd.DataFrame.from_dict для обхода проблем с типами
+            column_names = [
                 "signal_id", "strategy", "event_time", "event_type", "event_id",
                 "position_id", "qty_delta", "raw_price", "exec_price", "fees_sol", "pnl_sol_delta", "reason"
-            ])
+            ]
+            # Создаем пустой DataFrame через from_dict с пустым словарем
+            empty_dict = {col: [] for col in column_names}
+            return pd.DataFrame.from_dict(empty_dict)
         
         return pd.DataFrame(executions_rows)
     
@@ -1294,9 +1375,10 @@ class InvariantChecker:
         }
         
         # Проверяем, есть ли executions_df с нужными колонками
+        # Явные проверки вместо truthiness
         has_executions_df = (
             executions_df is not None 
-            and len(executions_df) > 0 
+            and not executions_df.empty
             and "event_time" in executions_df.columns 
             and "event_type" in executions_df.columns
         )
@@ -1337,7 +1419,7 @@ class InvariantChecker:
             
             has_execution = False
             
-            if has_executions_df:
+            if has_executions_df and executions_df is not None:
                 # Ищем execution в executions_df по (signal_id, strategy, event_time, event_type)
                 expected_exec_type = event_to_exec_type.get(event_type)
                 if expected_exec_type and event_time and event_signal_id and event_strategy:
@@ -1369,21 +1451,23 @@ class InvariantChecker:
                 
                 # Пытаемся извлечь meta
                 meta_dict = {}
-                if meta_json and pd.notna(meta_json):
+                # Явная проверка на None/NaN вместо truthiness
+                if meta_json is not None and not pd.isna(meta_json):
                     try:
                         meta_dict = json.loads(str(meta_json))
                     except (json.JSONDecodeError, TypeError):
                         pass
-                elif meta and isinstance(meta, dict):
+                elif meta is not None and isinstance(meta, dict):
                     meta_dict = meta
-                elif meta and isinstance(meta, str):
+                elif meta is not None and isinstance(meta, str):
                     try:
                         meta_dict = json.loads(meta)
                     except (json.JSONDecodeError, TypeError):
                         pass
                 
-                # Проверяем наличие execution_type в meta
-                if meta_dict.get("execution_type"):
+                # Проверяем наличие execution_type в meta (явная проверка)
+                execution_type_val = meta_dict.get("execution_type")
+                if execution_type_val is not None:
                     has_execution = True
             
             if not has_execution:
@@ -1413,13 +1497,20 @@ class InvariantChecker:
                 ))
         
         # 2. EXECUTION_WITHOUT_TRADE_EVENT: проверяем каждое execution (если есть executions_df)
-        if has_executions_df:
+        if has_executions_df and executions_df is not None:
             for _, exec_row in executions_df.iterrows():
-                exec_signal_id = str(exec_row.get("signal_id", "")) if pd.notna(exec_row.get("signal_id")) else None
-                exec_strategy = str(exec_row.get("strategy", "")) if pd.notna(exec_row.get("strategy")) else None
+                # Явные проверки на None/NaN вместо truthiness
+                exec_signal_id_val = exec_row.get("signal_id")
+                exec_signal_id = str(exec_signal_id_val) if (exec_signal_id_val is not None and not pd.isna(exec_signal_id_val)) else None
+                
+                exec_strategy_val = exec_row.get("strategy")
+                exec_strategy = str(exec_strategy_val) if (exec_strategy_val is not None and not pd.isna(exec_strategy_val)) else None
+                
                 exec_time = self._safe_dt(exec_row.get("event_time"))
                 exec_type = str(exec_row.get("event_type", "")).lower()
-                exec_event_id = str(exec_row.get("event_id", "")) if pd.notna(exec_row.get("event_id")) else None
+                
+                exec_event_id_val = exec_row.get("event_id")
+                exec_event_id = str(exec_event_id_val) if (exec_event_id_val is not None and not pd.isna(exec_event_id_val)) else None
                 
                 # Находим соответствующую позицию
                 pos_row = None
@@ -1432,10 +1523,11 @@ class InvariantChecker:
                 matching_event = None
                 
                 # Поиск по event_id (приоритет)
-                if exec_event_id:
+                if exec_event_id is not None:
                     for event in all_trade_events:
-                        event_id = str(event.get("event_id", "")) if pd.notna(event.get("event_id")) else None
-                        if event_id and event_id == exec_event_id:
+                        event_id_val = event.get("event_id")
+                        event_id = str(event_id_val) if (event_id_val is not None and not pd.isna(event_id_val)) else None
+                        if event_id is not None and event_id == exec_event_id:
                             matching_event = event
                             break
                 
@@ -1547,9 +1639,11 @@ class InvariantChecker:
                         exit_price = pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price")
                         exec_price = exec_row.get("exec_price")
                         
-                        if exec_price and pd.notna(exec_price) and exec_price > 0:
+                        # Явная проверка на None/NaN и > 0
+                        if exec_price is not None and not pd.isna(exec_price) and exec_price > 0:
                             # Для entry: сравниваем с entry_price
-                            if exec_type == "entry" and entry_price:
+                            # Явная проверка на None вместо truthiness
+                            if exec_type == "entry" and entry_price is not None:
                                 price_diff_pct = abs(exec_price - entry_price) / entry_price
                                 if price_diff_pct > 0.5:  # Более 50% разница
                                     position_id = matching_event.get("position_id")
@@ -1564,7 +1658,7 @@ class InvariantChecker:
                                         exit_time=self._safe_dt(pos_row.get("exit_time")),
                                         entry_price=entry_price,
                                         exit_price=exit_price,
-                                        pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
+                                        pnl_pct=self._safe_float(pos_row.get("pnl_pct")),
                                         reason=pos_row.get("reason"),
                                         anomaly_type=AnomalyType.EXECUTION_PRICE_OUT_OF_RANGE,
                                         severity="P1",
@@ -1577,7 +1671,8 @@ class InvariantChecker:
                                     ))
                             
                             # Для exit: сравниваем с exit_price
-                            if exec_type in ("partial_exit", "final_exit", "forced_close") and exit_price:
+                            # Явная проверка на None вместо truthiness
+                            if exec_type in ("partial_exit", "final_exit", "forced_close") and exit_price is not None:
                                 price_diff_pct = abs(exec_price - exit_price) / exit_price
                                 if price_diff_pct > 0.5:  # Более 50% разница
                                     position_id = matching_event.get("position_id")
@@ -1592,7 +1687,7 @@ class InvariantChecker:
                                         exit_time=self._safe_dt(pos_row.get("exit_time")),
                                         entry_price=entry_price,
                                         exit_price=exit_price,
-                                        pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
+                                        pnl_pct=self._safe_float(pos_row.get("pnl_pct")),
                                         reason=pos_row.get("reason"),
                                         anomaly_type=AnomalyType.EXECUTION_PRICE_OUT_OF_RANGE,
                                         severity="P1",
