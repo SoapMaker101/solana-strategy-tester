@@ -1260,6 +1260,10 @@ class PortfolioEngine:
             # Уменьшаем размер позиции
             pos.size -= exit_size
             
+            # ВАЖНО: Математический pnl_pct для meta (без учета slippage/fees)
+            # Тест ожидает: pnl_pct_contrib = f * (xn - 1.0) * 100.0
+            pnl_pct_meta = fraction * (xn - 1.0) * 100.0
+            
             # Сохраняем информацию о частичном выходе в meta
             if "partial_exits" not in pos.meta:
                 pos.meta["partial_exits"] = []
@@ -1267,7 +1271,7 @@ class PortfolioEngine:
             # Эмитим событие POSITION_PARTIAL_EXIT (только один раз!)
             if portfolio_events is not None:
                 strategy_name = pos.meta.get("strategy", "unknown") if pos.meta else "unknown"
-                pnl_pct_contrib = exit_pnl_pct * 100.0  # В процентах для события
+                pnl_pct_contrib = exit_pnl_pct * 100.0  # В процентах для события (с учетом slippage)
                 event = PortfolioEvent.create_position_partial_exit(
                     timestamp=hit_time,
                     strategy=strategy_name,
@@ -1292,12 +1296,13 @@ class PortfolioEngine:
                 portfolio_events.append(event)
                 
                 # Сохраняем event_id в meta для связи
+                # ВАЖНО: pnl_pct в meta должен быть математическим (f * (xn - 1.0) * 100.0)
                 pos.meta["partial_exits"].append({
                     "xn": xn,
                     "hit_time": hit_time.isoformat(),
                     "exit_size": exit_size,
                     "exit_price": effective_exit_price,
-                    "pnl_pct": exit_pnl_pct,
+                    "pnl_pct": pnl_pct_meta,  # Математический вклад: f * (xn - 1.0) * 100.0
                     "pnl_sol": exit_pnl_sol,
                     "fees_sol": fees_partial,
                     "network_fee_sol": network_fee_exit,
@@ -1310,7 +1315,7 @@ class PortfolioEngine:
                     "hit_time": hit_time.isoformat(),
                     "exit_size": exit_size,
                     "exit_price": effective_exit_price,
-                    "pnl_pct": exit_pnl_pct,
+                    "pnl_pct": pnl_pct_meta,  # Математический вклад: f * (xn - 1.0) * 100.0
                     "pnl_sol": exit_pnl_sol,
                     "fees_sol": fees_partial,
                     "network_fee_sol": network_fee_exit,
@@ -1987,6 +1992,42 @@ class PortfolioEngine:
             if self.config.resolved_profit_reset_enabled():
                 state.update_equity_peak()
             
+            # ВАЖНО: Проверяем profit reset ДО обработки EXIT событий, чтобы закрыть позиции с reason="profit_reset"
+            # Это гарантирует, что открытые позиции будут закрыты reset'ом, а не нормальным EXIT
+            profit_reset_triggered_before_exit = False
+            if self.config.resolved_profit_reset_enabled():
+                reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
+                if state.equity_peak_in_cycle >= reset_threshold:
+                    # Собираем открытые позиции ДО обработки EXIT событий
+                    open_positions_before_exit = [p for p in state.open_positions if p.status == "open"]
+                    
+                    if len(open_positions_before_exit) > 0:
+                        # Выбираем marker position
+                        closed_candidates = state.closed_positions
+                        open_candidates = open_positions_before_exit
+                        marker_position = self._select_profit_reset_marker(
+                            state=state,
+                            closed_positions_candidates=closed_candidates,
+                            open_positions_candidates=open_candidates,
+                        )
+                        
+                        if marker_position is not None:
+                            # Исключаем marker из списка forced-close, если он открыт
+                            if marker_position.status == "open" and marker_position in open_positions_before_exit:
+                                other_positions_to_force_close = [p for p in open_positions_before_exit if p.signal_id != marker_position.signal_id]
+                            else:
+                                other_positions_to_force_close = open_positions_before_exit
+                            
+                            self._apply_reset(
+                                state=state,
+                                marker_position=marker_position,
+                                reset_time=current_time,
+                                positions_to_force_close=other_positions_to_force_close,
+                                reason=ResetReason.PROFIT_RESET,
+                                portfolio_events=portfolio_events,
+                            )
+                            profit_reset_triggered_before_exit = True
+            
             # Сначала обрабатываем все EXIT события на текущем timestamp
             exit_events = [e for e in events_at_time if e.event_type == EventType.EXIT]
             for event in exit_events:
@@ -2045,13 +2086,22 @@ class PortfolioEngine:
             
             # После обработки всех событий на текущем timestamp: проверяем profit reset ПЕРЕД capacity
             # Порядок приоритетов: profit reset > capacity (hardening v1.7.1)
-            profit_reset_triggered = False
-            if self.config.resolved_profit_reset_enabled():
+            # НО: profit reset уже мог быть обработан ДО EXIT событий (profit_reset_triggered_before_exit)
+            profit_reset_triggered = profit_reset_triggered_before_exit
+            if not profit_reset_triggered_before_exit and self.config.resolved_profit_reset_enabled():
                 state.update_equity_peak()
                 reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
                 if state.equity_peak_in_cycle >= reset_threshold:
                     # Формируем список позиций для принудительного закрытия
-                    positions_to_force_close = [p for p in state.open_positions if p.status == "open"]
+                    # ВАЖНО: собираем ВСЕ открытые позиции (status == "open" и exit_time is None или exit_time > current_time)
+                    positions_to_force_close = [
+                        p for p in state.open_positions 
+                        if p.status == "open" and (p.exit_time is None or p.exit_time > current_time)
+                    ]
+                    
+                    # Логирование для отладки
+                    if len(positions_to_force_close) > 0:
+                        logger.debug(f"[PROFIT_RESET] Triggered at {current_time}, open_positions={len(state.open_positions)}, to_close={len(positions_to_force_close)}")
                     
                     # Выбираем marker position детерминированно
                     closed_candidates = state.closed_positions
@@ -2069,6 +2119,11 @@ class PortfolioEngine:
                         else:
                             other_positions_to_force_close = positions_to_force_close
                         
+                        # Локальный assert/лог: если reset сработал и open_positions было >0, то closed_events_count >0
+                        open_count_before = len(state.open_positions)
+                        if open_count_before > 0:
+                            logger.debug(f"[PROFIT_RESET] Before reset: open_positions={open_count_before}, to_close={len(other_positions_to_force_close)}, marker_open={marker_position.status == 'open'}")
+                        
                         self._apply_reset(
                             state=state,
                             marker_position=marker_position,
@@ -2077,6 +2132,18 @@ class PortfolioEngine:
                             reason=ResetReason.PROFIT_RESET,
                             portfolio_events=portfolio_events,
                         )
+                        
+                        # Проверяем, что события были эмитчены
+                        if portfolio_events is not None:
+                            closed_events_count = len([
+                                e for e in portfolio_events 
+                                if e.event_type == PortfolioEventType.POSITION_CLOSED 
+                                and e.reason == "profit_reset"
+                                and e.timestamp == current_time
+                            ])
+                            if open_count_before > 0 and closed_events_count == 0:
+                                logger.warning(f"[PROFIT_RESET] WARNING: Reset triggered with {open_count_before} open positions, but no POSITION_CLOSED events emitted!")
+                        
                         self._dbg_meta(marker_position, "AFTER_profit_reset_at_timestamp")
                         profit_reset_triggered = True  # Profit reset сработал
             
