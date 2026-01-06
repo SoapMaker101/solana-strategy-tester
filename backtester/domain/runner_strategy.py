@@ -106,11 +106,11 @@ class RunnerStrategy(Strategy):
         # config уже проверен в on_signal, используем cast для типизации
         config = cast(RunnerConfig, self.config)
 
-        # Определяем reason (legacy) и canonical_reason на основе достигнутых уровней
-        # Если достигнут хотя бы один уровень - это TP
+        # Определяем reason (legacy) и canonical_reason на основе ladder_result.reason
+        # RunnerLadderEngine теперь возвращает канонический reason: "ladder_tp" или "time_stop"
         has_levels_hit = bool(ladder_result.levels_hit)
         
-        if has_levels_hit:
+        if ladder_result.reason == "ladder_tp":
             # Достигнут хотя бы один уровень - это take profit
             reason_legacy = "tp"  # Legacy: "tp"
             reason_canon = "ladder_tp"  # Канон: "ladder_tp"
@@ -125,8 +125,13 @@ class RunnerStrategy(Strategy):
             reason_legacy = "no_entry"
             reason_canon = "no_entry"
         else:
-            reason_legacy = "error"
-            reason_canon = "error"
+            # Fallback для обратной совместимости (если engine вернул "all_levels_hit")
+            if ladder_result.reason == "all_levels_hit" or bool(ladder_result.levels_hit):
+                reason_legacy = "tp"
+                reason_canon = "ladder_tp"
+            else:
+                reason_legacy = "error"
+                reason_canon = "error"
 
         # Находим свечу на момент exit_time для получения рыночной цены закрытия
         # exit_price должен быть market close, а НЕ синтетика entry * realized_multiple

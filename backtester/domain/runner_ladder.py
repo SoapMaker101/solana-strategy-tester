@@ -132,14 +132,17 @@ class RunnerLadderEngine:
         exit_time: Optional[datetime] = None
         exit_price: Optional[float] = None
         
-        if remaining_fraction <= 0:
-            # Все уровни достигнуты
-            reason = "all_levels_hit"
-            if levels_hit:
-                # Берем время последнего достигнутого уровня
-                exit_time = max(levels_hit.values())
+        # Главное правило: если хотя бы один уровень достигнут → reason = "ladder_tp"
+        # Иначе → reason = "time_stop" (или "no_data" если нет данных)
+        has_levels_hit = bool(levels_hit)
+        
+        if has_levels_hit:
+            # Хотя бы один уровень достигнут - это ladder take profit
+            reason = "ladder_tp"
+            # Берем время последнего достигнутого уровня
+            exit_time = max(levels_hit.values())
         else:
-            # Не все уровни достигнуты - проверяем time_stop
+            # Ни один уровень не достигнут - проверяем time_stop
             reason = "time_stop"
             if max_hold_minutes:
                 # Вычисляем время time_stop
@@ -148,12 +151,13 @@ class RunnerLadderEngine:
                 last_candle_time = pd.to_datetime(candles_df.iloc[-1]['timestamp'])
                 if last_candle_time >= time_stop_time:
                     exit_time = time_stop_time
-                elif levels_hit:
-                    # Если есть достигнутые уровни, используем время последнего
-                    exit_time = max(levels_hit.values())
-            elif levels_hit:
-                # Если нет max_hold_minutes, но есть достигнутые уровни
-                exit_time = max(levels_hit.values())
+                else:
+                    # Данные закончились до time_stop - закрываемся по последней свече
+                    exit_time = last_candle_time.to_pydatetime() if hasattr(last_candle_time, 'to_pydatetime') else last_candle_time
+            else:
+                # Нет max_hold_minutes - закрываемся по последней свече
+                last_candle_time = pd.to_datetime(candles_df.iloc[-1]['timestamp'])
+                exit_time = last_candle_time.to_pydatetime() if hasattr(last_candle_time, 'to_pydatetime') else last_candle_time
         
         # Находим цену на момент exit_time
         if exit_time:
