@@ -298,4 +298,5 @@ def test_is_runner_strategy():
     assert is_runner_strategy("RUNNER_test") == True
     assert is_runner_strategy("RR_2.0_0.5") == True
     assert is_runner_strategy("RRD_3.0_1.5") == True
-    assert is_runner_strategy("test_strategy") == True
+    # "test_strategy" — нейтральное имя, не runner и не legacy RR/RRD, поэтому должно быть False
+    assert is_runner_strategy("test_strategy") == False
