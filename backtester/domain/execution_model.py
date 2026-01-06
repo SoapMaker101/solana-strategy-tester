@@ -70,22 +70,52 @@ class ExecutionModel:
         (получаем меньше при продаже)
         
         :param price: Исходная цена выхода
-        :param reason: Причина выхода: "ladder_tp", "stop_loss", "time_stop", "manual_close" или другие
+        :param reason: Причина выхода: "tp", "ladder_tp", "sl", "stop_loss", "timeout", "time_stop", "max_hold_minutes", "manual_close" и т.д.
         :return: Эффективная цена выхода с учетом slippage
         """
-        # Маппинг reason на event
-        event_map = {
-            "ladder_tp": "exit_tp",
-            "stop_loss": "exit_sl",
-            "time_stop": "exit_timeout",
-            "manual_close": "exit_manual",
-            "profit_reset": "exit_manual",
-            "capacity_prune": "exit_manual",
-        }
-        event = event_map.get(reason, "exit_timeout")
+        # Нормализуем reason в exit type family
+        exit_type = _normalize_reason_to_exit_type(reason)
         
-        slippage = self.profile.slippage_for(event)
+        slippage = self.profile.slippage_for(exit_type)
         return price * (1.0 - slippage)
+
+
+def _normalize_reason_to_exit_type(reason: str) -> str:
+    """
+    Нормализует reason (legacy или canonical) в exit type для execution profiles.
+    
+    Правила:
+    - TP family (tp, tp_*, ladder_tp) → "exit_tp"
+    - SL family (sl, stop_loss) → "exit_sl"
+    - Timeout family (timeout, time_stop, max_hold_minutes) → "exit_timeout"
+    - Manual/forced (manual_close, profit_reset, capacity_prune) → "exit_manual"
+    
+    :param reason: Причина выхода (legacy или canonical)
+    :return: Exit type для execution profiles
+    """
+    if not reason:
+        return "exit_timeout"
+    
+    reason_lower = str(reason).strip().lower()
+    
+    # TP family
+    if reason_lower in ("tp", "ladder_tp") or reason_lower.startswith("tp_"):
+        return "exit_tp"
+    
+    # SL family
+    if reason_lower in ("sl", "stop_loss"):
+        return "exit_sl"
+    
+    # Timeout family
+    if reason_lower in ("timeout", "time_stop", "max_hold_minutes"):
+        return "exit_timeout"
+    
+    # Manual/forced family
+    if reason_lower in ("manual_close", "profit_reset", "capacity_prune"):
+        return "exit_manual"
+    
+    # Default
+    return "exit_timeout"
     
     def apply_fees(self, notional_sol: float) -> float:
         """

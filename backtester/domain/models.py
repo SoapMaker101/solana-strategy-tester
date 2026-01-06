@@ -48,14 +48,8 @@ class StrategyOutput:
     exit_time: Optional[datetime]               # Момент выхода
     exit_price: Optional[float]                 # Цена выхода
     pnl: float                                  # Прибыль/убыток в процентах (в десятичной форме)
-    reason: Literal[
-        "tp",
-        "sl",
-        "timeout",
-        "no_entry",
-        "error",
-    ]  # Причина выхода из сделки (legacy для обратной совместимости)
-    canonical_reason: Literal[
+    reason: str  # Причина выхода из сделки (legacy или canonical: "tp", "sl", "timeout", "ladder_tp", "stop_loss", "time_stop", "max_hold_minutes", "no_entry", "error", и т.д.)
+    canonical_reason: Optional[Literal[
         "ladder_tp",
         "stop_loss",
         "time_stop",
@@ -64,5 +58,45 @@ class StrategyOutput:
         "manual_close",
         "no_entry",
         "error",
-    ]  # Каноническая причина выхода из сделки
+        "max_hold_minutes",
+    ]] = None  # Каноническая причина выхода из сделки (автоматически вычисляется если None)
     meta: Dict[str, Any] = field(default_factory=dict)           # Доп. информация (например, индекс свечи выхода)
+    
+    def __post_init__(self):
+        """Автоматически вычисляет canonical_reason если не задан."""
+        if self.canonical_reason is None:
+            # Сначала проверяем meta["ladder_reason"] (канон в meta)
+            if self.meta and isinstance(self.meta.get("ladder_reason"), str):
+                ladder_reason = self.meta["ladder_reason"]
+                # Проверяем, что это валидный канонический reason
+                valid_canonical = {
+                    "ladder_tp", "stop_loss", "time_stop", "capacity_prune",
+                    "profit_reset", "manual_close", "no_entry", "error", "max_hold_minutes"
+                }
+                if ladder_reason in valid_canonical:
+                    self.canonical_reason = ladder_reason
+                    return
+            
+            # Валидные канонические reasons
+            valid_canonical = {
+                "ladder_tp", "stop_loss", "time_stop", "capacity_prune",
+                "profit_reset", "manual_close", "no_entry", "error", "max_hold_minutes"
+            }
+            
+            # Если reason уже канонический (например "ladder_tp" или "max_hold_minutes" в тестах портфеля)
+            reason_str = str(self.reason).strip().lower()
+            if reason_str in valid_canonical:
+                self.canonical_reason = reason_str
+                return
+            
+            # Маппинг legacy → canonical
+            legacy_to_canonical = {
+                "tp": "ladder_tp",
+                "sl": "stop_loss",
+                "timeout": "time_stop",
+                "no_entry": "no_entry",
+                "error": "error",
+            }
+            # Маппим legacy → canonical
+            # Если reason не найден в маппинге и не канонический - используем как есть (может быть "max_hold_minutes" и т.д.)
+            self.canonical_reason = legacy_to_canonical.get(reason_str, reason_str if reason_str in valid_canonical else "error")

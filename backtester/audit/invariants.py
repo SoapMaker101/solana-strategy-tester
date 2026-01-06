@@ -1152,31 +1152,90 @@ class InvariantChecker:
             # Проверка маппинга reason ↔ event_type
             reason = self._safe_str(pos_row.get("reason")) or None
             if reason and status == "closed" and len(close_events) > 0:
-                # Нормализуем reason для консистентного маппинга
-                normalized_reason = normalize_reason(str(reason))
+                # Нормализуем reason в каноническую форму для сравнения
+                # normalize_reason конвертит в legacy, но нам нужна каноническая форма
+                reason_str = str(reason).strip().lower()
+                
+                # Маппинг legacy → canonical для проверки
+                legacy_to_canonical = {
+                    "tp": "ladder_tp",
+                    "sl": "stop_loss",
+                    "timeout": "time_stop",
+                    "no_entry": "no_entry",
+                    "error": "error",
+                }
+                
+                # Если reason уже канонический - используем как есть
+                canonical_reason = reason_str if reason_str in CANONICAL_REASONS else legacy_to_canonical.get(reason_str, reason_str)
                 
                 # Проверяем только известные причины (из CANONICAL_REASONS)
-                if normalized_reason not in CANONICAL_REASONS:
+                if canonical_reason not in CANONICAL_REASONS:
                     # Неизвестная причина - пропускаем проверку маппинга
                     # (она уже будет обработана в _check_unknown_reasons)
                     continue
                 
-                expected_event_types = self._get_expected_event_types_for_reason(normalized_reason)
+                expected_event_types = self._get_expected_event_types_for_reason(canonical_reason)
                 
                 if expected_event_types:
                     # Получаем фактические типы событий закрытия
                     actual_event_types = [str(e.get("event_type", "")).strip() for e in close_events]
                     actual_event_types_lower = [et.lower() for et in actual_event_types]
                     
-                    # Проверяем соответствие: ищем точное совпадение
-                    # НЕ используем подстроку, чтобы избежать ложных совпадений
-                    # (например, "close" не должно совпадать с "closed_by_capacity_prune")
+                    # Нормализуем event_type в семейства для сравнения
+                    def normalize_event_type_to_family(event_type: str) -> str:
+                        """Нормализует event_type в семейство для сравнения."""
+                        et_lower = event_type.lower()
+                        # Канонический тип
+                        if et_lower == "position_closed":
+                            return "position_closed"
+                        # Legacy типы по семействам
+                        if "tp" in et_lower or "take_profit" in et_lower:
+                            return "tp_family"
+                        if "sl" in et_lower or "stop_loss" in et_lower:
+                            return "sl_family"
+                        if "timeout" in et_lower or "max_hold" in et_lower or "time_stop" in et_lower:
+                            return "timeout_family"
+                        if "capacity_prune" in et_lower or "prune" in et_lower:
+                            return "capacity_prune_family"
+                        if "profit_reset" in et_lower or "reset" in et_lower:
+                            return "profit_reset_family"
+                        if "manual" in et_lower or "close_all" in et_lower:
+                            return "manual_family"
+                        return et_lower
+                    
+                    # Нормализуем reason в семейство
+                    def normalize_reason_to_family(canon_reason: str) -> str:
+                        """Нормализует canonical reason в семейство для сравнения."""
+                        if canon_reason == "ladder_tp":
+                            return "tp_family"
+                        if canon_reason == "stop_loss":
+                            return "sl_family"
+                        if canon_reason in ("time_stop", "max_hold_minutes"):
+                            return "timeout_family"
+                        if canon_reason == "capacity_prune":
+                            return "capacity_prune_family"
+                        if canon_reason == "profit_reset":
+                            return "profit_reset_family"
+                        if canon_reason == "manual_close":
+                            return "manual_family"
+                        return canon_reason
+                    
+                    reason_family = normalize_reason_to_family(canonical_reason)
+                    
+                    # Проверяем соответствие: ищем точное совпадение или совпадение семейств
                     matches = False
                     expected_event_types_lower = [et.lower() for et in expected_event_types]
                     
-                    for actual_et_lower in actual_event_types_lower:
+                    for actual_et in actual_event_types:
+                        actual_et_lower = actual_et.lower()
                         # Точное совпадение
                         if actual_et_lower in expected_event_types_lower:
+                            matches = True
+                            break
+                        
+                        # Совпадение по семействам
+                        actual_family = normalize_event_type_to_family(actual_et)
+                        if actual_family == reason_family:
                             matches = True
                             break
                     
@@ -1209,16 +1268,16 @@ class InvariantChecker:
                                 if reset_reason is not None:
                                     reset_reason_lower = str(reset_reason).lower()
                                     # Для reason="ladder_tp" не должно быть reset_reason
-                                    if normalized_reason == "ladder_tp" and reset_reason_lower in ("profit_reset", "capacity_prune"):
+                                    if canonical_reason == "ladder_tp" and reset_reason_lower in ("profit_reset", "capacity_prune"):
                                         matches = False  # Несоответствие
                                     # Для reason="profit_reset" или "capacity_prune" проверяем reset_reason
-                                    elif normalized_reason in ("profit_reset", "capacity_prune"):
-                                        if (normalized_reason == "profit_reset" and "profit_reset" in reset_reason_lower) or \
-                                           (normalized_reason == "capacity_prune" and "capacity_prune" in reset_reason_lower):
+                                    elif canonical_reason in ("profit_reset", "capacity_prune"):
+                                        if (canonical_reason == "profit_reset" and "profit_reset" in reset_reason_lower) or \
+                                           (canonical_reason == "capacity_prune" and "capacity_prune" in reset_reason_lower):
                                             matches = True
                                 else:
                                     # POSITION_CLOSED без reset_reason - подходит для ladder_tp/stop_loss/time_stop
-                                    if normalized_reason in ("ladder_tp", "stop_loss", "time_stop", "max_hold_minutes"):
+                                    if canonical_reason in ("ladder_tp", "stop_loss", "time_stop", "max_hold_minutes"):
                                         matches = True
                     
                     if not matches:
@@ -1237,7 +1296,8 @@ class InvariantChecker:
                             severity="P1",
                             details={
                                 "reason": reason,
-                                "normalized_reason": normalized_reason,
+                                "canonical_reason": canonical_reason,
+                                "reason_family": reason_family,
                                 "expected_event_types": expected_event_types,
                                 "actual_event_types": actual_event_types,
                             },
