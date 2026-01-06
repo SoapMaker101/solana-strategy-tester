@@ -425,6 +425,7 @@ def is_runner_strategy(strategy_name: str) -> bool:
     Поддерживает legacy-детекцию для обратной совместимости:
     - имена, содержащие "runner" (case-insensitive)
     - имена, начинающиеся на "RR_" (case-insensitive) - legacy
+    - имена, начинающиеся на "RRD_" (case-insensitive) - legacy
     
     :param strategy_name: Имя стратегии.
     :return: True если стратегия Runner, False иначе.
@@ -432,7 +433,7 @@ def is_runner_strategy(strategy_name: str) -> bool:
     if not strategy_name:
         return False
     s = strategy_name.strip().lower()
-    return ("runner" in s) or s.startswith("rr_")
+    return ("runner" in s) or s.startswith(("rr_", "rrd_"))
 
 
 def build_stability_table(
