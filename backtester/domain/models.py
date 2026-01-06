@@ -49,6 +49,13 @@ class StrategyOutput:
     exit_price: Optional[float]                 # Цена выхода
     pnl: float                                  # Прибыль/убыток в процентах (в десятичной форме)
     reason: Literal[
+        "tp",
+        "sl",
+        "timeout",
+        "no_entry",
+        "error",
+    ]  # Причина выхода из сделки (legacy для обратной совместимости)
+    canonical_reason: Literal[
         "ladder_tp",
         "stop_loss",
         "time_stop",
@@ -57,5 +64,5 @@ class StrategyOutput:
         "manual_close",
         "no_entry",
         "error",
-    ]  # Причина выхода из сделки
+    ]  # Каноническая причина выхода из сделки
     meta: Dict[str, Any] = field(default_factory=dict)           # Доп. информация (например, индекс свечи выхода)

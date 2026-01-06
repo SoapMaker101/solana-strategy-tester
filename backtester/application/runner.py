@@ -119,6 +119,7 @@ class BacktestRunner:
                         exit_price=None,
                         pnl=0.0,
                         reason="no_entry",
+                        canonical_reason="no_entry",
                         meta={"detail": "no_candles"},
                     )
                     results.append({
@@ -150,6 +151,7 @@ class BacktestRunner:
                     exit_price=None,
                     pnl=0.0,
                     reason="error",
+                    canonical_reason="error",
                     meta={"exception": str(e)},
                 )
             
@@ -221,6 +223,7 @@ class BacktestRunner:
                                     exit_price=None,
                                     pnl=0.0,
                                     reason="error",
+                                    canonical_reason="error",
                                     meta={"exception": str(e)},
                                 ),
                             })

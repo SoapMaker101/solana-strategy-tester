@@ -53,6 +53,7 @@ class RunnerStrategy(Strategy):
                 entry_time=None, entry_price=None,
                 exit_time=None, exit_price=None,
                 pnl=0.0, reason="no_entry",
+                canonical_reason="no_entry",
                 meta={"detail": "no candles after signal"}
             )
 
@@ -105,10 +106,39 @@ class RunnerStrategy(Strategy):
         # config уже проверен в on_signal, используем cast для типизации
         config = cast(RunnerConfig, self.config)
 
+        # Определяем reason (legacy) и canonical_reason на основе достигнутых уровней
+        # Если достигнут хотя бы один уровень - это TP
+        has_levels_hit = bool(ladder_result.levels_hit)
+        
+        if has_levels_hit:
+            # Достигнут хотя бы один уровень - это take profit
+            reason_legacy = "tp"  # Legacy: "tp"
+            reason_canon = "ladder_tp"  # Канон: "ladder_tp"
+        elif ladder_result.reason == "time_stop":
+            # Уровни не достигнуты, закрыли по времени/концу данных
+            reason_legacy = "timeout"  # Legacy: "timeout"
+            reason_canon = "time_stop"  # Канон: "time_stop"
+        elif ladder_result.reason == "stop_loss":
+            reason_legacy = "sl"  # Legacy: "sl"
+            reason_canon = "stop_loss"  # Канон: "stop_loss"
+        elif ladder_result.reason in ("no_data", "no_entry"):
+            reason_legacy = "no_entry"
+            reason_canon = "no_entry"
+        else:
+            reason_legacy = "error"
+            reason_canon = "error"
+
         # Находим свечу на момент exit_time для получения рыночной цены закрытия
         # exit_price должен быть market close, а НЕ синтетика entry * realized_multiple
         exit_price = entry_candle.close  # Fallback на entry price если не найдена свеча
-        if ladder_result.exit_time:
+        
+        # Если уровни не достигнуты - закрываемся по последней доступной свече
+        if not has_levels_hit:
+            # Данные закончились или time_stop — закрываемся по последней доступной close
+            if candles:
+                exit_price = candles[-1].close
+        elif ladder_result.exit_time:
+            # Уровни достигнуты - ищем свечу на момент exit_time
             # Ищем свечу с timestamp >= exit_time (первая свеча на момент или после закрытия)
             for candle in candles:
                 if candle.timestamp >= ladder_result.exit_time:
@@ -122,21 +152,6 @@ class RunnerStrategy(Strategy):
         # PnL уже рассчитан в ladder_result.realized_pnl_pct (в процентах)
         # Преобразуем в десятичную форму
         pnl = ladder_result.realized_pnl_pct / 100.0
-
-        # Преобразуем reason из RunnerTradeResult в StrategyOutput.reason
-        # Для ladder используем "ladder_tp" вместо "tp"
-        reason_map: dict[str, Literal["ladder_tp", "tp", "sl", "timeout", "no_entry", "error"]] = {
-            "time_stop": "timeout",
-            "all_levels_hit": "ladder_tp",  # Все уровни достигнуты = ladder take profit
-            "no_data": "no_entry"
-        }
-        reason_str = reason_map.get(ladder_result.reason, "error")
-        # StrategyOutput.reason может не поддерживать "ladder_tp", используем "tp" как fallback
-        # Но в meta мы сохраним "ladder_tp" для явной идентификации
-        reason: Literal["tp", "sl", "timeout", "no_entry", "error"] = cast(
-            Literal["tp", "sl", "timeout", "no_entry", "error"], 
-            "tp" if reason_str == "ladder_tp" else reason_str
-        )
 
         # Вычисляем trade features
         all_candles = sorted(data.candles, key=lambda c: c.timestamp)
@@ -154,18 +169,33 @@ class RunnerStrategy(Strategy):
             total_supply=total_supply,
         )
 
+        # Явная переменная для цены входа
+        entry_price_raw = float(entry_candle.close)
+        
+        # Вычисляем realized_multiple
+        if not has_levels_hit:
+            # Ни один уровень не достигнут - считаем multiple по последней цене
+            realized_multiple = float(exit_price) / entry_price_raw
+        else:
+            # Уровни достигнуты - используем значение из ladder_result
+            realized_multiple = ladder_result.realized_multiple if ladder_result.realized_multiple > 0 else 1.0
+        
         # Формируем meta с данными из RunnerTradeResult
+        # Гарантируем обязательные ключи
+        # time_stop_triggered должен зависеть ТОЛЬКО от ladder_result.reason
         meta = {
             # Данные из RunnerTradeResult
-            "levels_hit": {str(k): v.isoformat() for k, v in ladder_result.levels_hit.items()},
-            "fractions_exited": {str(k): v for k, v in ladder_result.fractions_exited.items()},
-            "realized_multiple": ladder_result.realized_multiple,
-            "time_stop_triggered": ladder_result.reason == "time_stop",
+            "levels_hit": {str(k): v.isoformat() for k, v in ladder_result.levels_hit.items()} if ladder_result.levels_hit else {},
+            "fractions_exited": {str(k): v for k, v in ladder_result.fractions_exited.items()} if ladder_result.fractions_exited else {},
+            "realized_multiple": realized_multiple,
+            # time_stop_triggered зависит ТОЛЬКО от ladder_result.reason (не от has_levels_hit, не от exit_time)
+            "time_stop_triggered": (ladder_result.reason == "time_stop"),
             # Дополнительная информация
             "runner_ladder": True,
             "entry_idx": 0,
-            # Сохраняем канонический reason для ladder (ladder_tp вместо tp)
-            "ladder_reason": reason_str,  # "ladder_tp" или "timeout" или "no_entry"
+            # Сохраняем канонический reason для ladder (ladder_tp/time_stop вместо tp/timeout)
+            # Для обратной совместимости
+            "ladder_reason": reason_canon,  # "ladder_tp" или "time_stop" или "no_entry"
         }
         
         # Добавляем trade features
@@ -178,7 +208,8 @@ class RunnerStrategy(Strategy):
             exit_time=ladder_result.exit_time,
             exit_price=exit_price,  # Market close цена, НЕ синтетика
             pnl=pnl,
-            reason=reason,  # "tp" для обратной совместимости, но meta["ladder_reason"] содержит "ladder_tp"
+            reason=reason_legacy,  # Legacy: "tp"|"timeout"|"sl"|"no_entry"|"error"
+            canonical_reason=reason_canon,  # Канон: "ladder_tp"|"time_stop"|"stop_loss"|"no_entry"|"error"
             meta=meta
         )
 
