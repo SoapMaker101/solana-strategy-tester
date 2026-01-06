@@ -210,6 +210,29 @@ class InvariantChecker:
         return s.astype("string").fillna("")
     
     @staticmethod
+    def _num_series(df: Optional[pd.DataFrame], col: str) -> pd.Series:
+        """
+        Безопасное получение числовой колонки из DataFrame.
+        
+        Конвертирует значения в float с обработкой ошибок.
+        Гарантирует, что возвращается Series[float] с NaN для невалидных значений.
+        
+        :param df: DataFrame (может быть None)
+        :param col: Имя колонки
+        :return: pd.Series[float] (NaN для невалидных значений)
+        """
+        s = InvariantChecker._series(df, col, None)
+        if len(s) == 0:
+            return pd.Series([], dtype="float64")
+        # Конвертируем в numeric с обработкой ошибок
+        result = pd.to_numeric(s, errors="coerce")
+        # Гарантируем, что возвращается Series
+        if isinstance(result, pd.Series):
+            return result
+        else:
+            return pd.Series([], dtype="float64")
+    
+    @staticmethod
     def _safe_str(value: Any, default: str = "") -> str:
         """
         Безопасное преобразование значения в строку.
@@ -250,6 +273,11 @@ class InvariantChecker:
         """
         Запускает все проверки инвариантов.
         
+        Структура проверок:
+        A) Schema/sanity: колонки, dtype, datetime parse
+        B) Per-position invariants: chain opened->partial*->closed, time ordering
+        C) Linkage: events<->executions (P1 checks)
+        
         :param positions_df: DataFrame с позициями (portfolio_positions.csv)
         :param events_df: Опциональный DataFrame с событиями (portfolio_events.csv)
         :param executions_df: Опциональный DataFrame с исполнениями (portfolio_executions.csv)
@@ -260,27 +288,19 @@ class InvariantChecker:
         if len(positions_df) == 0:
             return []
         
-        # Строим индексы (если есть события/исполнения)
-        from .indices import AuditIndices
+        # ============================================================
+        # A) Schema/sanity checks: валидация структуры данных
+        # ============================================================
+        self._check_schema_sanity(positions_df, events_df, executions_df)
         
-        # Определяем effective executions_df: используем переданный или строим из events
-        effective_executions_df = executions_df
-        if effective_executions_df is None or len(effective_executions_df) == 0:
-            # Пустой или None - строим из events
-            if events_df is not None and len(events_df) > 0:
-                effective_executions_df = self.build_executions_from_events(events_df)
-        else:
-            # executions_df не пустой - проверяем наличие нужных колонок
-            required_cols = ["event_time", "event_type"]
-            has_required_cols = all(col in effective_executions_df.columns for col in required_cols)
-            if not has_required_cols:
-                # Нет нужных колонок - строим из events
-                if events_df is not None and len(events_df) > 0:
-                    effective_executions_df = self.build_executions_from_events(events_df)
+        # ============================================================
+        # B) Per-position invariants: проверки для каждой позиции
+        # ============================================================
+        # Строим ledger views для эффективного доступа
+        events_by_position_id = self._build_events_by_position_id(events_df)
+        executions_by_position_id = self._build_executions_by_position_id(executions_df, events_df)
         
-        indices = AuditIndices(events_df=events_df, executions_df=effective_executions_df)
-        
-        # P0: Базовые проверки позиций
+        # Один проход по positions для всех per-position проверок
         for _, row in positions_df.iterrows():
             # Проверка обязательных полей
             if not self._check_required_fields(row):
@@ -295,32 +315,59 @@ class InvariantChecker:
             # Проверка причин закрытия
             self._check_reason_consistency(row)
             
-            # Проверка времени
+            # Проверка времени (используем распарсенные dt series)
             self._check_time_ordering(row)
             
             # Проверка магических значений
             self._check_magic_values(row)
+            
+            # Проверка цепочки событий для позиции
+            position_id = self._safe_str(row.get("position_id")) or None
+            if position_id:
+                pos_events = events_by_position_id.get(position_id)
+                if pos_events is not None:
+                    self._check_position_event_chain(row, pos_events)
         
-        # P0: Проверка событий
-        # Если events_df не None (даже пустой), проверяем цепочку событий
-        # _check_events_chain корректно обрабатывает пустой DataFrame
-        if events_df is not None:
-            self._check_events_chain(positions_df, events_df)
+        # Проверка неизвестных причин
+        self._check_unknown_reasons(positions_df, events_df)
         
-        # Policy consistency требует непустой events_df
+        # Policy consistency
         if events_df is not None and len(events_df) > 0:
             self._check_policy_consistency(positions_df, events_df)
         
-        # P0: Проверка неизвестных причин
-        self._check_unknown_reasons(positions_df, events_df)
-        
-        # P1: Cross-check positions ↔ events ↔ executions
+        # ============================================================
+        # C) Linkage checks: positions ↔ events ↔ executions (P1)
+        # ============================================================
         if self.include_p1:
+            from .indices import AuditIndices
+            
+            # Определяем effective executions_df: используем переданный или строим из events
+            effective_executions_df = executions_df
+            if effective_executions_df is None or len(effective_executions_df) == 0:
+                # Пустой или None - строим из events
+                if events_df is not None and len(events_df) > 0:
+                    effective_executions_df = self.build_executions_from_events(events_df)
+            else:
+                # executions_df не пустой - проверяем наличие нужных колонок
+                required_cols = ["event_time", "event_type"]
+                has_required_cols = all(col in effective_executions_df.columns for col in required_cols)
+                if not has_required_cols:
+                    # Нет нужных колонок - строим из events
+                    if events_df is not None and len(events_df) > 0:
+                        effective_executions_df = self.build_executions_from_events(events_df)
+            
+            indices = AuditIndices(events_df=events_df, executions_df=effective_executions_df)
             self._check_positions_events_consistency(positions_df, indices)
             self._check_events_executions_consistency(positions_df, indices, events_df, effective_executions_df)
         
         # P2: Decision proofs (если включено)
         if self.include_p2 and events_df is not None and len(events_df) > 0:
+            from .indices import AuditIndices
+            effective_executions_df = executions_df
+            if effective_executions_df is None or len(effective_executions_df) == 0:
+                if events_df is not None and len(events_df) > 0:
+                    effective_executions_df = self.build_executions_from_events(events_df)
+            indices = AuditIndices(events_df=events_df, executions_df=effective_executions_df)
             self._check_decision_proofs(positions_df, events_df, indices)
         
         return self.anomalies
@@ -354,8 +401,16 @@ class InvariantChecker:
         entry_price = row.get("exec_entry_price") or row.get("raw_entry_price") or row.get("entry_price")
         exit_price = row.get("exec_exit_price") or row.get("raw_exit_price") or row.get("exit_price")
         
-        # Проверка entry_price
-        if pd.isna(entry_price) or entry_price <= self.MIN_VALID_PRICE:
+        # Проверка entry_price - безопасная проверка на None
+        entry_price_valid = False
+        if entry_price is not None and not pd.isna(entry_price):
+            try:
+                entry_price_float = float(entry_price)
+                entry_price_valid = entry_price_float <= self.MIN_VALID_PRICE
+            except (ValueError, TypeError):
+                entry_price_valid = True  # Невалидное значение
+        
+        if pd.isna(entry_price) or entry_price_valid:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
                 strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -375,7 +430,16 @@ class InvariantChecker:
         # Проверка exit_price (только для закрытых позиций)
         status_val = self._safe_str(row.get("status"))
         if status_val == "closed":
-            if pd.isna(exit_price) or exit_price <= self.MIN_VALID_PRICE:
+            # Безопасная проверка exit_price на None
+            exit_price_valid = False
+            if exit_price is not None and not pd.isna(exit_price):
+                try:
+                    exit_price_float = float(exit_price)
+                    exit_price_valid = exit_price_float <= self.MIN_VALID_PRICE
+                except (ValueError, TypeError):
+                    exit_price_valid = True  # Невалидное значение
+            
+            if pd.isna(exit_price) or exit_price_valid:
                 self.anomalies.append(Anomaly(
                     position_id=self._safe_str(row.get("position_id")) or None,
                     strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -402,34 +466,50 @@ class InvariantChecker:
         exit_price = row.get("exec_exit_price") or row.get("raw_exit_price") or row.get("exit_price")
         pnl_pct = row.get("pnl_pct") or row.get("pnl_sol")
         
-        if pd.isna(entry_price) or pd.isna(exit_price) or entry_price <= 0:
+        # Безопасная проверка на None перед операциями
+        if entry_price is None or exit_price is None:
+            return
+        if pd.isna(entry_price) or pd.isna(exit_price):
+            return  # Уже проверено в _check_prices
+        
+        try:
+            entry_price_float = float(entry_price)
+            exit_price_float = float(exit_price)
+        except (ValueError, TypeError):
+            return  # Невалидные значения
+        
+        if entry_price_float <= 0:
             return  # Уже проверено в _check_prices
         
         # Проверка формулы PnL (для long позиций)
-        expected_pnl_pct = (exit_price - entry_price) / entry_price
+        expected_pnl_pct = (exit_price_float - entry_price_float) / entry_price_float
         
         # Проверка на магические значения
-        if pd.notna(pnl_pct):
-            if abs(pnl_pct) > self.MAX_REASONABLE_PNL_PCT:
-                self.anomalies.append(Anomaly(
-                    position_id=self._safe_str(row.get("position_id")) or None,
-                    strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
-                    signal_id=self._safe_str(row.get("signal_id")) or None,
-                    contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
-                    entry_time=self._safe_dt(row.get("entry_time")),
-                    exit_time=self._safe_dt(row.get("exit_time")),
-                    entry_price=entry_price,
-                    exit_price=exit_price,
-                    pnl_pct=pnl_pct,
-                    reason=self._safe_str(row.get("reason")) or None,
-                anomaly_type=AnomalyType.PNL_CAP_OR_MAGIC,
-                severity="P0",
-                details={
-                    "pnl_pct": pnl_pct,
-                    "expected_pnl_pct": expected_pnl_pct,
-                    "max_reasonable": self.MAX_REASONABLE_PNL_PCT,
-                },
-            ))
+        if pnl_pct is not None and pd.notna(pnl_pct):
+            try:
+                pnl_pct_float = float(pnl_pct)
+                if abs(pnl_pct_float) > self.MAX_REASONABLE_PNL_PCT:
+                    self.anomalies.append(Anomaly(
+                        position_id=self._safe_str(row.get("position_id")) or None,
+                        strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
+                        signal_id=self._safe_str(row.get("signal_id")) or None,
+                        contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
+                        entry_time=self._safe_dt(row.get("entry_time")),
+                        exit_time=self._safe_dt(row.get("exit_time")),
+                        entry_price=entry_price_float,
+                        exit_price=exit_price_float,
+                        pnl_pct=pnl_pct_float,
+                        reason=self._safe_str(row.get("reason")) or None,
+                    anomaly_type=AnomalyType.PNL_CAP_OR_MAGIC,
+                    severity="P0",
+                    details={
+                        "pnl_pct": pnl_pct_float,
+                        "expected_pnl_pct": expected_pnl_pct,
+                        "max_reasonable": self.MAX_REASONABLE_PNL_PCT,
+                    },
+                ))
+            except (ValueError, TypeError):
+                pass  # Невалидное значение pnl_pct
     
     def _check_reason_consistency(self, row: pd.Series) -> None:
         """Проверка консистентности reason с фактическими данными."""
@@ -441,14 +521,23 @@ class InvariantChecker:
         pnl_pct = row.get("pnl_pct") or row.get("pnl_sol")
         
         reason_str = self._safe_str(reason) if reason is not None else ""
-        if not reason_str or pd.isna(pnl_pct):
+        if not reason_str:
             return
+        
+        # Безопасная проверка pnl_pct на None
+        if pnl_pct is None or pd.isna(pnl_pct):
+            return
+        
+        try:
+            pnl_pct_float = float(pnl_pct)
+        except (ValueError, TypeError):
+            return  # Невалидное значение
         
         # Нормализуем reason для консистентной проверки
         normalized_reason = normalize_reason(reason_str)
         
-        # Проверка: reason=tp, но pnl < 0 (строго отрицательный)
-        if normalized_reason == "tp" and pnl_pct < -self.EPSILON:
+        # Проверка: reason=ladder_tp, но pnl < 0 (строго отрицательный)
+        if normalized_reason == "ladder_tp" and pnl_pct_float < -self.EPSILON:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
                 strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -456,17 +545,17 @@ class InvariantChecker:
                 contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
                 entry_time=self._safe_dt(row.get("entry_time")),
                 exit_time=self._safe_dt(row.get("exit_time")),
-                entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
-                exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
-                pnl_pct=pnl_pct,
-                reason=reason_str,
-                anomaly_type=AnomalyType.TP_REASON_BUT_NEGATIVE_PNL,
-                severity="P0",
-                details={"pnl_pct": pnl_pct, "reason": reason_str, "normalized_reason": normalized_reason},
-            ))
+                    entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
+                    exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
+                    pnl_pct=pnl_pct_float,
+                    reason=reason_str,
+                    anomaly_type=AnomalyType.TP_REASON_BUT_NEGATIVE_PNL,
+                    severity="P0",
+                    details={"pnl_pct": pnl_pct_float, "reason": reason_str, "normalized_reason": normalized_reason},
+                ))
         
         # Проверка: reason=stop_loss, но pnl >= 0 (неотрицательный) - строго < 0 согласно ТЗ
-        if normalized_reason == "stop_loss" and pnl_pct >= 0:
+        if normalized_reason == "stop_loss" and pnl_pct_float >= 0:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
                 strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -474,14 +563,14 @@ class InvariantChecker:
                 contract_address=self._safe_str(row.get("contract_address"), "UNKNOWN"),
                 entry_time=self._safe_dt(row.get("entry_time")),
                 exit_time=self._safe_dt(row.get("exit_time")),
-                entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
-                exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
-                pnl_pct=pnl_pct,
-                reason=reason_str,
-                anomaly_type=AnomalyType.SL_REASON_BUT_POSITIVE_PNL,
-                severity="P0",
-                details={"pnl_pct": pnl_pct, "reason": reason_str, "normalized_reason": normalized_reason},
-            ))
+                    entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
+                    exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
+                    pnl_pct=pnl_pct_float,
+                    reason=reason_str,
+                    anomaly_type=AnomalyType.SL_REASON_BUT_POSITIVE_PNL,
+                    severity="P0",
+                    details={"pnl_pct": pnl_pct_float, "reason": reason_str, "normalized_reason": normalized_reason},
+                ))
     
     def _check_time_ordering(self, row: pd.Series) -> None:
         """Проверка порядка времени."""
@@ -492,6 +581,10 @@ class InvariantChecker:
         entry_time = row.get("entry_time")
         exit_time = row.get("exit_time")
         
+        # Безопасная проверка на None
+        if entry_time is None or exit_time is None:
+            return
+        
         if pd.isna(entry_time) or pd.isna(exit_time):
             return
         
@@ -501,6 +594,7 @@ class InvariantChecker:
         if entry_dt is None or exit_dt is None:
             return
         
+        # Безопасное сравнение datetime
         if entry_dt > exit_dt:
             self.anomalies.append(Anomaly(
                 position_id=self._safe_str(row.get("position_id")) or None,
@@ -526,10 +620,18 @@ class InvariantChecker:
         """Проверка на магические значения (920%, 0, NaN)."""
         pnl_pct = row.get("pnl_pct") or row.get("pnl_sol")
         
-        if pd.notna(pnl_pct):
-            # Проверка на известные магические значения
-            magic_values = [920.0, 920.0 / 100, -920.0, -920.0 / 100]  # 920% и -920%
-            if any(abs(pnl_pct - mv) < self.EPSILON for mv in magic_values):
+        # Безопасная проверка на None
+        if pnl_pct is None or pd.isna(pnl_pct):
+            return
+        
+        try:
+            pnl_pct_float = float(pnl_pct)
+        except (ValueError, TypeError):
+            return  # Невалидное значение
+        
+        # Проверка на известные магические значения
+        magic_values = [920.0, 920.0 / 100, -920.0, -920.0 / 100]  # 920% и -920%
+        if any(abs(pnl_pct_float - mv) < self.EPSILON for mv in magic_values):
                 self.anomalies.append(Anomaly(
                     position_id=self._safe_str(row.get("position_id")) or None,
                     strategy=self._safe_str(row.get("strategy"), "UNKNOWN"),
@@ -539,11 +641,11 @@ class InvariantChecker:
                     exit_time=self._safe_dt(row.get("exit_time")),
                     entry_price=row.get("exec_entry_price") or row.get("raw_entry_price"),
                     exit_price=row.get("exec_exit_price") or row.get("raw_exit_price"),
-                    pnl_pct=pnl_pct,
+                    pnl_pct=pnl_pct_float,
                     reason=self._safe_str(row.get("reason")) or None,
                     anomaly_type=AnomalyType.PNL_CAP_OR_MAGIC,
                     severity="P0",
-                    details={"pnl_pct": pnl_pct, "magic_value": "920%"},
+                    details={"pnl_pct": pnl_pct_float, "magic_value": "920%"},
                 ))
     
     def _check_unknown_reasons(
@@ -607,6 +709,152 @@ class InvariantChecker:
                             },
                         ))
                         break  # Одна аномалия на уникальную причину
+    
+    def _check_schema_sanity(
+        self,
+        positions_df: pd.DataFrame,
+        events_df: Optional[pd.DataFrame] = None,
+        executions_df: Optional[pd.DataFrame] = None,
+    ) -> None:
+        """
+        Блок A: Schema/sanity checks.
+        
+        Проверяет структуру данных: наличие колонок, типы данных, парсинг datetime.
+        Не проверяет бизнес-логику, только валидность структуры.
+        """
+        # Проверка обязательных колонок в positions_df уже делается в _check_required_fields
+        # Здесь можно добавить дополнительные проверки структуры, если нужно
+        pass
+    
+    def _build_events_by_position_id(
+        self,
+        events_df: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        Строит словарь events по position_id.
+        
+        :param events_df: DataFrame с событиями
+        :return: dict[position_id, DataFrame] - события для каждой позиции
+        """
+        events_by_position_id: Dict[str, pd.DataFrame] = {}
+        
+        if events_df is None or len(events_df) == 0:
+            return events_by_position_id
+        
+        # Получаем position_id series
+        position_id_series = self._str_series(events_df, "position_id")
+        
+        # Группируем по position_id (пропускаем пустые)
+        for position_id in position_id_series.unique():
+            if position_id and position_id.strip():
+                mask = position_id_series == position_id
+                filtered = events_df[mask]
+                # Гарантируем, что это DataFrame, а не Series
+                if isinstance(filtered, pd.DataFrame):
+                    events_by_position_id[position_id] = filtered.copy()
+                else:
+                    # Если это Series, конвертируем в DataFrame
+                    events_by_position_id[position_id] = pd.DataFrame([filtered])
+        
+        return events_by_position_id
+    
+    def _build_executions_by_position_id(
+        self,
+        executions_df: Optional[pd.DataFrame] = None,
+        events_df: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, pd.DataFrame]:
+        """
+        Строит словарь executions по position_id.
+        
+        Если executions_df не передан или пустой, строит из events_df.
+        
+        :param executions_df: DataFrame с исполнениями
+        :param events_df: DataFrame с событиями (используется если executions_df пустой)
+        :return: dict[position_id, DataFrame] - исполнения для каждой позиции
+        """
+        executions_by_position_id: Dict[str, pd.DataFrame] = {}
+        
+        # Определяем effective executions_df
+        effective_executions_df = executions_df
+        if effective_executions_df is None or len(effective_executions_df) == 0:
+            if events_df is not None and len(events_df) > 0:
+                effective_executions_df = self.build_executions_from_events(events_df)
+            else:
+                return executions_by_position_id
+        
+        if effective_executions_df is None or len(effective_executions_df) == 0:
+            return executions_by_position_id
+        
+        # Получаем position_id series
+        position_id_series = self._str_series(effective_executions_df, "position_id")
+        
+        # Группируем по position_id (пропускаем пустые)
+        for position_id in position_id_series.unique():
+            if position_id and position_id.strip():
+                mask = position_id_series == position_id
+                filtered = effective_executions_df[mask]
+                # Гарантируем, что это DataFrame, а не Series
+                if isinstance(filtered, pd.DataFrame):
+                    executions_by_position_id[position_id] = filtered.copy()
+                else:
+                    # Если это Series, конвертируем в DataFrame
+                    executions_by_position_id[position_id] = pd.DataFrame([filtered])
+        
+        return executions_by_position_id
+    
+    def _check_position_event_chain(
+        self,
+        pos_row: pd.Series,
+        pos_events: pd.DataFrame,
+    ) -> None:
+        """
+        Проверка цепочки событий для одной позиции.
+        
+        Проверяет наличие событий открытия и закрытия для закрытых позиций.
+        
+        :param pos_row: Строка позиции
+        :param pos_events: DataFrame с событиями для этой позиции
+        """
+        status = self._safe_str(pos_row.get("status"))
+        if status != "closed":
+            return
+        
+        position_id = self._safe_str(pos_row.get("position_id")) or None
+        if not position_id:
+            return
+        
+        # Проверяем наличие событий
+        if len(pos_events) == 0:
+            self.anomalies.append(Anomaly(
+                position_id=position_id,
+                strategy=self._safe_str(pos_row.get("strategy"), "UNKNOWN"),
+                signal_id=self._safe_str(pos_row.get("signal_id")) or None,
+                contract_address=self._safe_str(pos_row.get("contract_address"), "UNKNOWN"),
+                entry_time=self._safe_dt(pos_row.get("entry_time")),
+                exit_time=self._safe_dt(pos_row.get("exit_time")),
+                entry_price=self._safe_float(pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price")),
+                exit_price=self._safe_float(pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price")),
+                pnl_pct=self._safe_float(pos_row.get("pnl_pct")),
+                reason=self._safe_str(pos_row.get("reason")) or None,
+                anomaly_type=AnomalyType.MISSING_EVENTS_CHAIN,
+                severity="P0",
+                details={"events_count": 0, "position_id": position_id},
+            ))
+    
+    @staticmethod
+    def _safe_float(value: Any) -> Optional[float]:
+        """
+        Безопасное преобразование значения в float.
+        
+        :param value: Значение (может быть None, Unknown, и т.д.)
+        :return: float или None
+        """
+        if value is None or pd.isna(value):
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
     
     def _check_events_chain(self, positions_df: pd.DataFrame, events_df: pd.DataFrame) -> None:
         """Проверка цепочки событий для каждой позиции."""
