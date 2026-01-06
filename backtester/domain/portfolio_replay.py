@@ -12,7 +12,7 @@ PortfolioReplay - альтернативный путь исполнения п�
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from .portfolio import (
@@ -22,6 +22,7 @@ from .portfolio import (
     Position,
     PortfolioEvent,
 )
+from .portfolio_events import PortfolioEventType
 # ExecutionModel lives in execution_model.py; portfolio.py holds ledger types.
 from .execution_model import ExecutionModel
 from .portfolio_reset import (
@@ -100,6 +101,9 @@ class PortfolioReplay:
             closed_positions=[],
             equity_curve=[],
         )
+        # Инициализируем cycle_start_equity для profit reset
+        state.cycle_start_equity = portfolio_config.initial_balance_sol
+        state.equity_peak_in_cycle = portfolio_config.initial_balance_sol
         
         # Создаем ExecutionModel для расчета цен
         execution_model = ExecutionModel.from_config(portfolio_config)
@@ -129,7 +133,30 @@ class PortfolioReplay:
                 stats.trades_skipped_by_risk += 1
                 continue
             
-            # Проверяем profit reset перед открытием новой позиции
+            # Применяем все pending exits для открытых позиций до текущего времени
+            # Это необходимо для правильной проверки capacity (time-aware)
+            # И для обновления баланса перед проверкой profit reset
+            PortfolioReplay._apply_pending_exits_until_time(
+                state,
+                blueprint.entry_time,
+                market_data,
+                execution_model,
+                portfolio_events,
+                portfolio_config,
+            )
+            
+            # Проверяем max_hold_minutes для всех открытых позиций
+            # (должно быть после применения exits, но перед profit reset)
+            PortfolioReplay._check_max_hold_minutes_for_all(
+                state,
+                blueprint,
+                portfolio_config,
+                market_data,
+                execution_model,
+                portfolio_events,
+            )
+            
+            # Проверяем profit reset ПОСЛЕ применения exits (чтобы баланс был обновлен)
             if portfolio_config.resolved_profit_reset_enabled():
                 reset_triggered = PortfolioReplay._check_and_apply_profit_reset(
                     state,
@@ -143,7 +170,7 @@ class PortfolioReplay:
                     # После reset все позиции закрыты, продолжаем обработку
                     pass
             
-            # Проверяем capacity / allocation
+            # Проверяем capacity / allocation (теперь open_positions отражает реальное состояние на timeline)
             can_open = PortfolioReplay._can_open_position(
                 state, portfolio_config, blueprint.entry_time
             )
@@ -169,41 +196,28 @@ class PortfolioReplay:
             state.open_positions.append(position)
             stats.trades_executed += 1
             
-            # 4) Для каждого partial_exit: создать EXECUTION и POSITION_PARTIAL_EXIT
-            PortfolioReplay._process_partial_exits(
-                position,
-                blueprint,
-                market_data,
-                execution_model,
-                portfolio_events,
-                state,
-            )
-            
-            # 5) Если final_exit существует: создать EXECUTION и POSITION_CLOSED
-            if blueprint.final_exit is not None:
-                PortfolioReplay._process_final_exit(
-                    position,
-                    blueprint,
-                    market_data,
-                    execution_model,
-                    portfolio_events,
-                    state,
-                )
-            # 6) Если final_exit НЕ существует: позиция остается открытой
-            # (будет закрыта по max_hold_minutes, portfolio reset или forced close)
-            
-            # Проверяем max_hold_minutes для всех открытых позиций
-            PortfolioReplay._check_max_hold_minutes_for_all(
-                state,
-                blueprint,
-                portfolio_config,
-                market_data,
-                execution_model,
-                portfolio_events,
-            )
+            # Exits будут применены event-driven образом в _apply_pending_exits_until_time
+            # при обработке следующих blueprints или в конце replay
+        
+        # Применяем все оставшиеся pending exits для всех открытых позиций
+        # (на случай, если есть позиции без последующих blueprints)
+        final_time = sorted_blueprints[-1].entry_time if sorted_blueprints else datetime.min.replace(tzinfo=timezone.utc)
+        PortfolioReplay._apply_pending_exits_until_time(
+            state,
+            final_time + timedelta(days=365),  # Будущее время для применения всех exits
+            market_data,
+            execution_model,
+            portfolio_events,
+            portfolio_config,
+        )
         
         # Финализируем статистику
         stats.final_balance_sol = state.balance
+        
+        # Сортируем события по timestamp и ordering_rank для обеспечения монотонности
+        # Согласно REPLAY_EVENT_ORDERING.md: сортировка по (timestamp, tie-breaker)
+        portfolio_events = PortfolioReplay._sort_events_by_timestamp_and_type(portfolio_events)
+        
         stats.portfolio_events = portfolio_events
         # Обновляем reset статистику из state
         stats.portfolio_reset_count = state.portfolio_reset_count
@@ -219,6 +233,230 @@ class PortfolioReplay:
             positions=state.closed_positions + state.open_positions,
             stats=stats,
         )
+    
+    @staticmethod
+    def _sort_events_by_timestamp_and_type(events: List[PortfolioEvent]) -> List[PortfolioEvent]:
+        """
+        Сортирует события по timestamp и ordering_rank (tie-breaker).
+        
+        Порядок tie-breaker (согласно REPLAY_EVENT_ORDERING.md):
+        - POSITION_OPENED -> 10
+        - POSITION_PARTIAL_EXIT -> 20
+        - POSITION_CLOSED -> 30
+        - PORTFOLIO_RESET_TRIGGERED -> 40
+        
+        Args:
+            events: Список событий для сортировки
+            
+        Returns:
+            Отсортированный список событий (стабильная сортировка)
+        """
+        def get_ordering_rank(event: PortfolioEvent) -> int:
+            """Возвращает ordering_rank для события (tie-breaker при одинаковом timestamp)."""
+            event_type_ranks = {
+                PortfolioEventType.POSITION_OPENED: 10,
+                PortfolioEventType.POSITION_PARTIAL_EXIT: 20,
+                PortfolioEventType.POSITION_CLOSED: 30,
+                PortfolioEventType.PORTFOLIO_RESET_TRIGGERED: 40,
+            }
+            return event_type_ranks.get(event.event_type, 50)  # Неизвестные типы в конец
+        
+        # Сортируем по (timestamp, ordering_rank)
+        # Используем стабильную сортировку для сохранения порядка событий с одинаковым timestamp и типом
+        sorted_events = sorted(
+            events,
+            key=lambda e: (e.timestamp, get_ordering_rank(e))
+        )
+        
+        return sorted_events
+    
+    @staticmethod
+    def _apply_pending_exits_until_time(
+        state: PortfolioState,
+        current_time: datetime,
+        market_data: MarketData,
+        execution_model: ExecutionModel,
+        portfolio_events: List[PortfolioEvent],
+        config: PortfolioConfig,
+    ) -> None:
+        """
+        Применяет все pending exits для открытых позиций до указанного времени.
+        
+        Это необходимо для правильной проверки capacity (time-aware):
+        перед открытием новой позиции нужно закрыть все позиции, у которых
+        exit timestamp <= текущий entry_time.
+        
+        Args:
+            state: Состояние портфеля
+            current_time: Время до которого применять exits
+            market_data: Данные о ценах
+            execution_model: Модель исполнения
+            portfolio_events: Список событий портфеля
+            config: Конфигурация портфеля
+        """
+        # Обрабатываем открытые позиции (создаем копию списка, т.к. он может изменяться)
+        positions_to_process = list(state.open_positions)
+        
+        for position in positions_to_process:
+            if position.status != "open":
+                continue
+            
+            # Получаем pending exits из meta
+            if not position.meta:
+                continue
+            
+            pending_partial_exits = position.meta.get("pending_partial_exits", [])
+            pending_final_exit = position.meta.get("pending_final_exit")
+            original_size = position.meta.get("original_size", position.size)
+            
+            # Применяем partial exits, которые должны произойти до current_time
+            remaining_size = position.size
+            applied_partial_exits = []
+            
+            for partial_exit_data in pending_partial_exits:
+                exit_timestamp = datetime.fromisoformat(partial_exit_data["timestamp"])
+                
+                if exit_timestamp > current_time:
+                    continue  # Этот exit еще не наступил
+                
+                # Применяем partial exit
+                xn = partial_exit_data["xn"]
+                fraction = partial_exit_data["fraction"]
+                
+                # Получаем цену выхода
+                exit_price_raw = PortfolioReplay._get_exit_price(
+                    exit_timestamp,
+                    position.entry_price,
+                    xn,
+                    market_data,
+                )
+                
+                # Вычисляем размер закрываемой части
+                exit_size = remaining_size * fraction
+                
+                # EXECUTION: применяем slippage
+                exit_price_effective = execution_model.apply_exit(exit_price_raw, "ladder_tp")
+                
+                # Вычисляем PnL для этой части
+                pnl_pct = (exit_price_effective / position.entry_price - 1.0) * 100.0
+                pnl_sol = exit_size * (exit_price_effective / position.entry_price - 1.0)
+                
+                # Вычисляем комиссии для exit
+                notional_returned = exit_size + pnl_sol
+                fees_sol = PortfolioReplay._calc_fees_sol_exit(execution_model, notional_returned)
+                
+                # Обновляем баланс
+                notional_after_fees = execution_model.apply_fees(notional_returned)
+                state.balance += notional_after_fees
+                state.balance -= execution_model.network_fee()
+                
+                # Уменьшаем размер позиции
+                remaining_size -= exit_size
+                
+                # Создаем POSITION_PARTIAL_EXIT event
+                event = PortfolioEvent.create_position_partial_exit(
+                    timestamp=exit_timestamp,
+                    strategy=position.meta.get("strategy", "unknown"),
+                    signal_id=position.signal_id,
+                    contract_address=position.contract_address,
+                    position_id=position.position_id,
+                    level_xn=xn,
+                    fraction=fraction,
+                    raw_price=exit_price_raw,
+                    exec_price=exit_price_effective,
+                    pnl_pct_contrib=pnl_pct,
+                    pnl_sol_contrib=pnl_sol,
+                    meta={
+                        "execution_type": "partial_exit",
+                        "raw_price": exit_price_raw,
+                        "exec_price": exit_price_effective,
+                        "qty_delta": -exit_size,
+                        "fees_sol": fees_sol,
+                        "pnl_sol_delta": pnl_sol,
+                    },
+                )
+                portfolio_events.append(event)
+                
+                applied_partial_exits.append(partial_exit_data)
+            
+            # Обновляем размер позиции и список pending partial exits
+            position.size = remaining_size
+            position.meta["pending_partial_exits"] = [
+                pe for pe in pending_partial_exits if pe not in applied_partial_exits
+            ]
+            
+            # Применяем final exit, если он должен произойти до current_time
+            if pending_final_exit:
+                final_exit_timestamp = datetime.fromisoformat(pending_final_exit["timestamp"])
+                
+                if final_exit_timestamp <= current_time:
+                    # Применяем final exit
+                    reason = pending_final_exit.get("reason", "all_levels_hit")
+                    
+                    # Получаем цену выхода (используем последний известный xn или entry_price)
+                    # Для final exit используем realized_multiple из meta или вычисляем
+                    max_xn = position.meta.get("max_xn_reached", 1.0)
+                    exit_price_raw = PortfolioReplay._get_exit_price(
+                        final_exit_timestamp,
+                        position.entry_price,
+                        max_xn,
+                        market_data,
+                    )
+                    
+                    # EXECUTION: применяем slippage
+                    exit_price_effective = execution_model.apply_exit(exit_price_raw, reason)
+                    
+                    # Вычисляем PnL
+                    pnl_pct = (exit_price_effective / position.entry_price - 1.0) * 100.0
+                    pnl_sol = remaining_size * (exit_price_effective / position.entry_price - 1.0)
+                    
+                    # Вычисляем комиссии
+                    notional_returned = remaining_size + pnl_sol
+                    fees_sol = PortfolioReplay._calc_fees_sol_exit(execution_model, notional_returned)
+                    
+                    # Обновляем баланс
+                    notional_after_fees = execution_model.apply_fees(notional_returned)
+                    state.balance += notional_after_fees
+                    state.balance -= execution_model.network_fee()
+                    
+                    # Обновляем позицию
+                    position.exit_time = final_exit_timestamp
+                    position.exit_price = exit_price_raw
+                    position.pnl_pct = pnl_pct
+                    position.status = "closed"
+                    if position.meta:
+                        position.meta["exec_exit_price"] = exit_price_effective
+                        position.meta["pnl_sol"] = pnl_sol
+                        position.meta["fees_total_sol"] = fees_sol
+                        position.meta.pop("pending_final_exit", None)  # Удаляем pending final exit
+                    
+                    # Создаем POSITION_CLOSED event
+                    event = PortfolioEvent.create_position_closed(
+                        timestamp=final_exit_timestamp,
+                        strategy=position.meta.get("strategy", "unknown") if position.meta else "unknown",
+                        signal_id=position.signal_id,
+                        contract_address=position.contract_address,
+                        position_id=position.position_id,
+                        reason=reason,
+                        raw_price=exit_price_raw,
+                        exec_price=exit_price_effective,
+                        pnl_pct=pnl_pct,
+                        pnl_sol=pnl_sol,
+                        meta={
+                            "execution_type": "final_exit",
+                            "raw_price": exit_price_raw,
+                            "exec_price": exit_price_effective,
+                            "qty_delta": -remaining_size,
+                            "fees_sol": fees_sol,
+                            "pnl_sol_delta": pnl_sol,
+                        },
+                    )
+                    portfolio_events.append(event)
+                    
+                    # Переносим позицию из open в closed
+                    if position in state.open_positions:
+                        state.open_positions.remove(position)
+                        state.closed_positions.append(position)
     
     @staticmethod
     def _can_open_position(
@@ -322,6 +560,22 @@ class PortfolioReplay:
         state.balance -= fees_sol
         
         # Создаем позицию
+        # Сохраняем информацию о pending exits в meta для event-driven обработки
+        pending_partial_exits = [
+            {
+                "timestamp": pe.timestamp.isoformat(),
+                "xn": pe.xn,
+                "fraction": pe.fraction,
+            }
+            for pe in blueprint.partial_exits
+        ]
+        pending_final_exit = None
+        if blueprint.final_exit is not None:
+            pending_final_exit = {
+                "timestamp": blueprint.final_exit.timestamp.isoformat(),
+                "reason": blueprint.final_exit.reason,
+            }
+        
         position = Position(
             signal_id=blueprint.signal_id,
             contract_address=blueprint.contract_address,
@@ -335,6 +589,9 @@ class PortfolioReplay:
                 "entry_mcap_proxy": blueprint.entry_mcap_proxy,
                 "max_xn_reached": blueprint.max_xn_reached,
                 "exec_entry_price": entry_price_effective,  # Для reset логики
+                "pending_partial_exits": pending_partial_exits,  # Для event-driven обработки
+                "pending_final_exit": pending_final_exit,  # Для event-driven обработки
+                "original_size": size_sol,  # Для расчета fraction
             },
         )
         
@@ -538,15 +795,9 @@ class PortfolioReplay:
             return
         
         # Определяем текущее время (reference point для проверки)
-        # Используем entry_time текущего blueprint
+        # Используем entry_time текущего blueprint для проверки max_hold_minutes
+        # (проверяем, прошло ли max_hold_minutes с момента открытия позиции до момента, когда приходит новый blueprint)
         current_time = current_blueprint.entry_time
-        
-        # Если есть partial_exits или final_exit - используем последнее время
-        if current_blueprint.final_exit:
-            current_time = current_blueprint.final_exit.timestamp
-        elif current_blueprint.partial_exits:
-            # Используем время последнего partial_exit
-            current_time = max(pe.timestamp for pe in current_blueprint.partial_exits)
         
         # Проверяем все открытые позиции
         positions_to_close = []
@@ -617,8 +868,12 @@ class PortfolioReplay:
         # Закрываем позицию
         position.status = "closed"
         position.exit_time = close_time
-        position.exit_price = exit_price_effective
+        position.exit_price = exit_price_raw  # Используем raw_price для позиции
         position.pnl_pct = pnl_pct
+        if position.meta:
+            position.meta["exec_exit_price"] = exit_price_effective  # Effective price в meta
+            position.meta["pnl_sol"] = pnl_sol
+            position.meta["fees_total_sol"] = fees_sol
         
         # Получаем strategy_id из meta
         strategy_id = position.meta.get("strategy", "unknown") if position.meta else "unknown"
@@ -680,24 +935,41 @@ class PortfolioReplay:
         # (реальная стоимость позиций может отличаться, но для reset threshold это достаточно)
         equity = state.balance + sum(p.size for p in state.open_positions)
         
-        # Проверяем условие profit reset
-        threshold = config.initial_balance_sol * config.resolved_profit_reset_multiple()
+        # Обновляем equity_peak_in_cycle
+        if equity > state.equity_peak_in_cycle:
+            state.equity_peak_in_cycle = equity
+        
+        # Проверяем условие profit reset: equity >= cycle_start_equity * profit_reset_multiple
+        threshold = state.cycle_start_equity * config.resolved_profit_reset_multiple()
         if equity < threshold:
             return False
         
-        # Нет открытых позиций - reset не нужен
-        if not state.open_positions:
-            return False
-        
-        # Создаем marker position (первая позиция из списка)
-        marker_position = state.open_positions[0]
+        # Reset нужен даже если нет открытых позиций (для обновления cycle_start_equity)
+        # Но если нет открытых позиций, создаем временный marker
+        if state.open_positions:
+            marker_position = state.open_positions[0]
+            positions_to_force_close = state.open_positions[1:] if len(state.open_positions) > 1 else []
+        else:
+            # Нет открытых позиций, но reset нужен для обновления cycle_start_equity
+            # Создаем временную позицию для marker (она не будет реально закрыта)
+            from .position import Position
+            marker_position = Position(
+                signal_id="reset_marker",
+                contract_address="MARKER",
+                entry_time=current_time,
+                entry_price=1.0,
+                size=0.0,
+                status="closed",
+                meta={"strategy": "reset_marker"},
+            )
+            positions_to_force_close = []
         
         # Создаем контекст для reset
         reset_context = PortfolioResetContext(
             reset_time=current_time,
             reason=ResetReason.PROFIT_RESET,
             marker_position=marker_position,
-            positions_to_force_close=state.open_positions[1:] if len(state.open_positions) > 1 else [],
+            positions_to_force_close=positions_to_force_close,
         )
         
         # Применяем reset (закрывает все позиции и обновляет state)
@@ -705,9 +977,10 @@ class PortfolioReplay:
         
         # Создаем POSITION_CLOSED events для всех закрытых позиций
         # (apply_portfolio_reset закрывает позиции, но не создает PortfolioEvent)
-        all_closed_positions = [reset_context.marker_position] + reset_context.positions_to_force_close
+        # Используем только реальные позиции из positions_to_force_close (marker исключаем)
+        real_closed_positions = reset_context.positions_to_force_close
         
-        for position in all_closed_positions:
+        for position in real_closed_positions:
             # apply_portfolio_reset уже установил exit_price, pnl_pct, pnl_sol в position и meta
             # Получаем данные из позиции (apply_portfolio_reset уже установил)
             exit_price_raw = position.exit_price if position.exit_price is not None else position.entry_price
@@ -756,7 +1029,7 @@ class PortfolioReplay:
         reset_event = PortfolioEvent.create_portfolio_reset_triggered(
             timestamp=current_time,
             reason="profit_reset",
-            closed_positions_count=len(all_closed_positions),
+            closed_positions_count=len(real_closed_positions),
             position_id=marker_position.position_id,  # Marker position для audit traceability
             signal_id=marker_position.signal_id,
             contract_address=marker_position.contract_address,

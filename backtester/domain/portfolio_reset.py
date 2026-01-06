@@ -216,31 +216,33 @@ def apply_portfolio_reset(
         pos.status = "closed"
         
         # ВАЖНО: используем setdefault/update, никогда не присваиваем meta = ...
-    # Маппинг ResetReason -> каноническое значение для meta/CSV
-    reset_reason_str = {
-        ResetReason.PROFIT_RESET: "profit_reset",
-        ResetReason.CAPACITY_PRUNE: "capacity_prune",
-        ResetReason.MANUAL: "manual_close",
-    }.get(context.reason, context.reason.value)
+        # Маппинг ResetReason -> каноническое значение для meta/CSV
+        reset_reason_str = {
+            ResetReason.PROFIT_RESET: "profit_reset",
+            ResetReason.CAPACITY_PRUNE: "capacity_prune",
+            ResetReason.MANUAL: "manual_close",
+        }.get(context.reason, context.reason.value)
         
-    pos.meta.update({
-        "pnl_sol": exit_pnl_sol,
-        "fees_total_sol": fees_total,
-        "closed_by_reset": True,
-        "reset_reason": reset_reason_str,
-        "close_reason": reset_reason_str,
-    })
-    pos.meta["network_fee_sol"] = pos.meta.get("network_fee_sol", 0.0) + network_fee_exit
+        pos.meta.update({
+            "pnl_sol": exit_pnl_sol,
+            "fees_total_sol": fees_total,
+            "closed_by_reset": True,
+            "reset_reason": reset_reason_str,
+            "close_reason": reset_reason_str,
+        })
+        pos.meta["network_fee_sol"] = pos.meta.get("network_fee_sol", 0.0) + network_fee_exit
+        
+        state.closed_positions.append(pos)
+        state.peak_balance = max(state.peak_balance, state.balance)
+        state.equity_curve.append({"timestamp": context.reset_time, "balance": state.balance})
     
-    state.closed_positions.append(pos)
-    state.peak_balance = max(state.peak_balance, state.balance)
-    state.equity_curve.append({"timestamp": context.reset_time, "balance": state.balance})
-    
-    # Удаляем закрытые позиции из open_positions
-    state.open_positions = [
-        p for p in state.open_positions 
-        if p.signal_id not in {pos.signal_id for pos in context.positions_to_force_close}
-    ]
+    # Удаляем закрытые позиции из open_positions (после цикла)
+    if context.positions_to_force_close:
+        closed_signal_ids = {pos.signal_id for pos in context.positions_to_force_close}
+        state.open_positions = [
+            p for p in state.open_positions 
+            if p.signal_id not in closed_signal_ids
+        ]
     
     # 2. Помечаем marker_position флагами reset
     # ВАЖНО: marker_position может быть еще открыта или уже закрыта

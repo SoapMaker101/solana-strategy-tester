@@ -100,14 +100,6 @@ class RunnerStrategy(Strategy):
         # config уже проверен в on_signal, используем cast для типизации
         config = cast(RunnerConfig, self.config)
 
-<<<<<<< HEAD
-        # Рассчитываем exit_price как close свечи, на которой произошло финальное закрытие
-        exit_candle = next(
-            (c for c in candles if c.timestamp == ladder_result.exit_time),
-            candles[-1],
-        )
-        exit_price = exit_candle.close
-=======
         # Находим свечу на момент exit_time для получения рыночной цены закрытия
         # exit_price должен быть market close, а НЕ синтетика entry * realized_multiple
         exit_price = entry_candle.close  # Fallback на entry price если не найдена свеча
@@ -121,23 +113,12 @@ class RunnerStrategy(Strategy):
                 # Если не нашли свечу >= exit_time, берем последнюю доступную
                 if candles:
                     exit_price = candles[-1].close
->>>>>>> origin/main
 
         # PnL уже рассчитан в ladder_result.realized_pnl_pct (в процентах)
         # Преобразуем в десятичную форму
         pnl = ladder_result.realized_pnl_pct / 100.0
 
         # Преобразуем reason из RunnerTradeResult в StrategyOutput.reason
-<<<<<<< HEAD
-        reason_map: dict[str, Literal["ladder_tp", "time_stop", "no_entry", "error"]] = {
-            "time_stop": "time_stop",
-            "all_levels_hit": "ladder_tp",
-            "no_data": "no_entry",
-        }
-        reason_str = reason_map.get(ladder_result.reason, "error")
-        reason: Literal["ladder_tp", "time_stop", "no_entry", "error"] = cast(
-            Literal["ladder_tp", "time_stop", "no_entry", "error"], reason_str
-=======
         # Для ladder используем "ladder_tp" вместо "tp"
         reason_map: dict[str, Literal["ladder_tp", "tp", "sl", "timeout", "no_entry", "error"]] = {
             "time_stop": "timeout",
@@ -150,7 +131,6 @@ class RunnerStrategy(Strategy):
         reason: Literal["tp", "sl", "timeout", "no_entry", "error"] = cast(
             Literal["tp", "sl", "timeout", "no_entry", "error"], 
             "tp" if reason_str == "ladder_tp" else reason_str
->>>>>>> origin/main
         )
 
         # Вычисляем trade features

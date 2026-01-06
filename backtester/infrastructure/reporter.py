@@ -1273,7 +1273,7 @@ class Reporter:
                     "signal_id": pos.signal_id,
                     "strategy": strategy_name,
                     "event_time": pos.entry_time.isoformat(),
-                    "event_type": "POSITION_OPENED",
+                    "event_type": "entry",
                     "event_id": pos.meta.get("open_event_id") if pos.meta else None,
                     "qty_delta": pos.size,
                     "raw_price": raw_entry_price,
@@ -1308,21 +1308,28 @@ class Reporter:
                             # Это приблизительно, но для дебага достаточно
                             raw_exit_price = exit_price / (1.0 - 0.03) if exit_price > 0 else 0.0  # Примерный slippage
                             
+                            # Вычисляем fraction безопасно (избегаем деления на ноль)
+                            denom = pos.meta.get("original_size", None) if pos.meta else None
+                            if denom is None or denom <= 0:
+                                fraction = None
+                            else:
+                                fraction = exit_size / denom
+                            
                             executions_rows.append({
                                 "position_id": pos.position_id,
                                 "signal_id": pos.signal_id,
                                 "strategy": strategy_name,
                                 "event_time": hit_time.isoformat() if isinstance(hit_time, datetime) else str(hit_time),
-                                "event_type": "POSITION_PARTIAL_EXIT",
+                                "event_type": "partial_exit",
                                 "event_id": partial.get("event_id"),
                                 "qty_delta": -exit_size,
                                 "raw_price": raw_exit_price,
                                 "exec_price": exit_price,
                                 "fees_sol": fees_partial,
                                 "pnl_sol_delta": pnl_sol,
-                                "reason": "time_stop" if partial.get("is_remainder") else "ladder_tp",
+                                "reason": "forced_close" if partial.get("is_remainder") else "ladder_tp",
                                 "xn": partial.get("xn"),
-                                "fraction": partial.get("exit_size", 0.0) / pos.meta.get("original_size", pos.size) if pos.meta else None,
+                                "fraction": fraction,
                             })
                 
                 # Final exit или force close
@@ -1339,7 +1346,7 @@ class Reporter:
                         "signal_id": pos.signal_id,
                         "strategy": strategy_name,
                         "event_time": pos.exit_time.isoformat(),
-                        "event_type": "POSITION_CLOSED",
+                        "event_type": "final_exit",
                         "event_id": pos.meta.get("close_event_id") if pos.meta else None,
                         "qty_delta": -pos.size,
                         "raw_price": raw_exit_price,

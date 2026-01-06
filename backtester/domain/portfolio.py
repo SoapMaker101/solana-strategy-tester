@@ -1083,10 +1083,8 @@ class PortfolioEngine:
         if portfolio_events is not None:
             # Маппинг ResetReason -> канонический reason
             reset_reason_str = {
-                ResetReason.EQUITY_THRESHOLD: "profit_reset",
-                ResetReason.CAPACITY_PRESSURE: "capacity_prune",
+                ResetReason.PROFIT_RESET: "profit_reset",
                 ResetReason.CAPACITY_PRUNE: "capacity_prune",
-                ResetReason.RUNNER_XN: "manual_close",
                 ResetReason.MANUAL: "manual_close",
             }.get(reason, "manual_close")
             
@@ -1272,18 +1270,19 @@ class PortfolioEngine:
                     signal_id=pos.signal_id,
                     contract_address=pos.contract_address,
                     position_id=pos.position_id,
-                    reason="ladder_tp",
+                    level_xn=xn,
+                    fraction=fraction,
+                    raw_price=exit_price_raw,
+                    exec_price=effective_exit_price,
+                    pnl_pct_contrib=exit_pnl_pct * 100.0,  # В процентах
+                    pnl_sol_contrib=exit_pnl_sol,
                     meta={
                         "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
                         "exit_time": hit_time.isoformat(),
-                        "xn": xn,
-                        "fraction": fraction,
                         "exit_size": exit_size,
-                        "exit_price": effective_exit_price,
-                        "pnl_pct": exit_pnl_pct,
-                        "pnl_sol": exit_pnl_sol,
                         "fees_sol": fees_partial,
                         "network_fee_sol": network_fee_exit,
+                        "reason": "ladder_tp",  # Сохраняем reason в meta
                     },
                 )
                 pos.meta["partial_exits"][-1]["event_id"] = event.event_id
@@ -1314,7 +1313,7 @@ class PortfolioEngine:
                         signal_id=pos.signal_id,
                         contract_address=pos.contract_address,
                         position_id=pos.position_id,
-                        level=xn,
+                        level_xn=xn,
                         fraction=fraction,
                         raw_price=exit_price_raw,
                         exec_price=effective_exit_price,
@@ -1373,25 +1372,30 @@ class PortfolioEngine:
                     "is_remainder": True,
                 })
                 if portfolio_events is not None:
+                    # Вычисляем level_xn для time_stop
+                    level_xn = pos.exit_price / pos.entry_price if pos.entry_price and pos.entry_price > 0 else 1.0
+                    fraction_remainder = pos.size / original_size if original_size and original_size > 0 else 0.0
+                    
                     event = PortfolioEvent.create_position_partial_exit(
                         timestamp=pos.exit_time or current_time,
                         strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
                         signal_id=pos.signal_id,
                         contract_address=pos.contract_address,
                         position_id=pos.position_id,
-                        reason="time_stop",
+                        level_xn=level_xn,
+                        fraction=fraction_remainder,
+                        raw_price=pos.exit_price,  # Используем exit_price как raw_price
+                        exec_price=effective_exit_price,
+                        pnl_pct_contrib=exit_pnl_pct * 100.0,  # В процентах
+                        pnl_sol_contrib=exit_pnl_sol,
                         meta={
                             "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
                             "exit_time": pos.exit_time.isoformat() if pos.exit_time else None,
-                            "xn": pos.exit_price / pos.entry_price if pos.entry_price else 1.0,
-                            "fraction": pos.size / original_size if original_size else 0.0,
                             "exit_size": pos.size,
-                            "exit_price": effective_exit_price,
-                            "pnl_pct": exit_pnl_pct,
-                            "pnl_sol": exit_pnl_sol,
                             "fees_sol": fees_remainder,
                             "network_fee_sol": network_fee_exit,
                             "is_remainder": True,
+                            "reason": "time_stop",  # Сохраняем reason в meta
                         },
                     )
                     pos.meta["partial_exits"][-1]["event_id"] = event.event_id
@@ -1803,29 +1807,22 @@ class PortfolioEngine:
             meta=pos_meta,
         )
         
-        # Эмитим событие POSITION_OPENED
+        # Эмитим событие POSITION_OPENED с position_id
         event = PortfolioEvent.create_position_opened(
             timestamp=current_time,
             strategy=strategy_name,
             signal_id=trade_data["signal_id"],
             contract_address=trade_data["contract_address"],
             position_id=pos.position_id,
-            meta={"size": size, "open_positions": len(state.open_positions) + 1},
+            meta={
+                "size": size,
+                "entry_price": raw_entry_price,
+                "exec_entry_price": effective_entry_price,
+                "open_positions": len(state.open_positions) + 1,
+            },
         )
         portfolio_events.append(event)
         pos.meta["open_event_id"] = event.event_id
-        
-        # Эмитим событие POSITION_OPENED с position_id
-        portfolio_events.append(
-            PortfolioEvent.create_position_opened(
-                timestamp=current_time,
-                strategy=strategy_name,
-                signal_id=trade_data["signal_id"],
-                contract_address=trade_data["contract_address"],
-                position_id=pos.position_id,
-                meta={"size": size, "entry_price": raw_entry_price, "exec_entry_price": effective_entry_price},
-            )
-        )
         
         return pos
 

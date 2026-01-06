@@ -164,7 +164,23 @@ class InvariantChecker:
         
         # Строим индексы (если есть события/исполнения)
         from .indices import AuditIndices
-        indices = AuditIndices(events_df=events_df, executions_df=executions_df)
+        
+        # Определяем effective executions_df: используем переданный или строим из events
+        effective_executions_df = executions_df
+        if effective_executions_df is None or len(effective_executions_df) == 0:
+            # Пустой или None - строим из events
+            if events_df is not None and len(events_df) > 0:
+                effective_executions_df = self.build_executions_from_events(events_df)
+        else:
+            # executions_df не пустой - проверяем наличие нужных колонок
+            required_cols = ["event_time", "event_type"]
+            has_required_cols = all(col in effective_executions_df.columns for col in required_cols)
+            if not has_required_cols:
+                # Нет нужных колонок - строим из events
+                if events_df is not None and len(events_df) > 0:
+                    effective_executions_df = self.build_executions_from_events(events_df)
+        
+        indices = AuditIndices(events_df=events_df, executions_df=effective_executions_df)
         
         # P0: Базовые проверки позиций
         for _, row in positions_df.iterrows():
@@ -187,16 +203,20 @@ class InvariantChecker:
             # Проверка магических значений
             self._check_magic_values(row)
         
-        # P0: Проверка событий (если есть)
-        if events_df is not None and len(events_df) > 0:
+        # P0: Проверка событий
+        # Если events_df не None (даже пустой), проверяем цепочку событий
+        # _check_events_chain корректно обрабатывает пустой DataFrame
+        if events_df is not None:
             self._check_events_chain(positions_df, events_df)
+        
+        # Policy consistency требует непустой events_df
+        if events_df is not None and len(events_df) > 0:
             self._check_policy_consistency(positions_df, events_df)
         
         # P1: Cross-check positions ↔ events ↔ executions
         if self.include_p1:
             self._check_positions_events_consistency(positions_df, indices)
-            if executions_df is not None and len(executions_df) > 0:
-                self._check_events_executions_consistency(positions_df, indices)
+            self._check_events_executions_consistency(positions_df, indices, events_df, effective_executions_df)
         
         # P2: Decision proofs (если включено)
         if self.include_p2 and events_df is not None and len(events_df) > 0:
@@ -605,13 +625,69 @@ class InvariantChecker:
             
             # Проверка маппинга reason ↔ event_type
             reason = pos_row.get("reason")
-            if reason and status == "closed":
+            if reason and status == "closed" and len(close_events) > 0:
                 # Нормализуем reason для консистентного маппинга
                 normalized_reason = normalize_reason(str(reason))
                 expected_event_types = self._get_expected_event_types_for_reason(normalized_reason)
+                
                 if expected_event_types:
-                    actual_event_types = [str(e.get("event_type", "")).lower() for e in close_events]
-                    if not any(exp in act for exp in expected_event_types for act in actual_event_types):
+                    # Получаем фактические типы событий закрытия
+                    actual_event_types = [str(e.get("event_type", "")).strip() for e in close_events]
+                    actual_event_types_lower = [et.lower() for et in actual_event_types]
+                    
+                    # Проверяем соответствие: ищем точное совпадение
+                    # НЕ используем подстроку, чтобы избежать ложных совпадений
+                    # (например, "close" не должно совпадать с "closed_by_capacity_prune")
+                    matches = False
+                    expected_event_types_lower = [et.lower() for et in expected_event_types]
+                    
+                    for actual_et_lower in actual_event_types_lower:
+                        # Точное совпадение
+                        if actual_et_lower in expected_event_types_lower:
+                            matches = True
+                            break
+                    
+                    # Дополнительная проверка для канонических типов (POSITION_CLOSED)
+                    # Если событие POSITION_CLOSED, проверяем meta/reset_reason для reset/prune
+                    if not matches:
+                        for event in close_events:
+                            event_type = str(event.get("event_type", "")).strip().upper()
+                            if event_type == "POSITION_CLOSED":
+                                # Для POSITION_CLOSED проверяем meta/reset_reason
+                                import json
+                                meta_json = event.get("meta_json")
+                                meta = event.get("meta")
+                                meta_dict = {}
+                                if meta_json and pd.notna(meta_json):
+                                    try:
+                                        meta_dict = json.loads(str(meta_json))
+                                    except (json.JSONDecodeError, TypeError):
+                                        pass
+                                elif meta and isinstance(meta, dict):
+                                    meta_dict = meta
+                                elif meta and isinstance(meta, str):
+                                    try:
+                                        meta_dict = json.loads(meta)
+                                    except (json.JSONDecodeError, TypeError):
+                                        pass
+                                
+                                reset_reason = meta_dict.get("reset_reason") or meta_dict.get("close_reason")
+                                if reset_reason:
+                                    reset_reason_lower = str(reset_reason).lower()
+                                    # Для reason="tp" не должно быть reset_reason
+                                    if normalized_reason == "tp" and reset_reason_lower in ("profit_reset", "capacity_prune"):
+                                        matches = False  # Несоответствие
+                                    # Для reason="profit_reset" или "capacity_prune" проверяем reset_reason
+                                    elif normalized_reason in ("reset", "prune"):
+                                        if (normalized_reason == "reset" and "profit_reset" in reset_reason_lower) or \
+                                           (normalized_reason == "prune" and "capacity_prune" in reset_reason_lower):
+                                            matches = True
+                                else:
+                                    # POSITION_CLOSED без reset_reason - подходит для tp/sl/timeout
+                                    if normalized_reason in ("tp", "sl", "timeout"):
+                                        matches = True
+                    
+                    if not matches:
                         self.anomalies.append(Anomaly(
                             position_id=position_id,
                             strategy=strategy,
@@ -638,217 +714,455 @@ class InvariantChecker:
         Возвращает ожидаемые типы событий для причины закрытия.
         
         Использует нормализованную причину (normalize_reason должен быть применен заранее).
+        
+        Поддерживает:
+        - Канонические типы: POSITION_CLOSED (новый мир)
+        - Legacy типы: closed_by_*, executed_close, capacity_prune, profit_reset и т.д.
         """
         # reason уже должен быть нормализован
         mapping = {
-            "tp": ["executed_close", "close", "exit", "position_closed"],
-            "sl": ["executed_close", "close", "exit", "position_closed"],
-            "timeout": ["executed_close", "close", "exit", "position_closed"],
-            "prune": ["capacity_prune", "closed_by_capacity_prune", "prune", "position_closed"],
-            "reset": ["profit_reset", "closed_by_profit_reset", "reset", "position_closed"],
-            "close_all": ["close_all", "closed_by_capacity_close_all", "position_closed"],
+            "tp": [
+                "POSITION_CLOSED",  # Канонический тип
+                "executed_close", "position_closed",  # Legacy (убрали "close" и "exit" - слишком общие)
+                "closed_by_take_profit", "closed_by_tp",  # Legacy варианты
+            ],
+            "sl": [
+                "POSITION_CLOSED",  # Канонический тип
+                "executed_close", "position_closed",  # Legacy (убрали "close" и "exit" - слишком общие)
+                "closed_by_stop_loss", "closed_by_sl",  # Legacy варианты
+            ],
+            "timeout": [
+                "POSITION_CLOSED",  # Канонический тип
+                "executed_close", "position_closed",  # Legacy (убрали "close" и "exit" - слишком общие)
+                "closed_by_timeout", "closed_by_max_hold",  # Legacy варианты
+            ],
+            "prune": [
+                "POSITION_CLOSED",  # Канонический тип (с reset_reason="capacity_prune" в meta)
+                "capacity_prune", "closed_by_capacity_prune", "prune",  # Legacy
+            ],
+            "reset": [
+                "POSITION_CLOSED",  # Канонический тип (с reset_reason="profit_reset" в meta)
+                "profit_reset", "closed_by_profit_reset", "reset",  # Legacy
+            ],
+            "close_all": [
+                "POSITION_CLOSED",  # Канонический тип
+                "close_all", "closed_by_capacity_close_all",  # Legacy
+            ],
         }
         return mapping.get(reason, [])
+    
+    @staticmethod
+    def build_executions_from_events(events_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Строит executions DataFrame из events DataFrame.
+        
+        Извлекает execution данные из meta_json (или meta) trade-related событий.
+        
+        Trade-related события определяются по каноническим типам:
+        - POSITION_OPENED
+        - POSITION_PARTIAL_EXIT
+        - POSITION_CLOSED
+        
+        Args:
+            events_df: DataFrame с событиями (portfolio_events.csv)
+            
+        Returns:
+            DataFrame с executions (колонки: signal_id, strategy, event_time, event_type, ...)
+        """
+        import json
+        
+        trade_event_types = {"POSITION_OPENED", "POSITION_PARTIAL_EXIT", "POSITION_CLOSED"}
+        
+        executions_rows = []
+        
+        for _, row in events_df.iterrows():
+            event_type = str(row.get("event_type", "")).upper()
+            
+            # Пропускаем не trade-related события
+            if event_type not in trade_event_types:
+                continue
+            
+            # Пытаемся извлечь meta из meta_json или meta
+            meta = {}
+            if "meta_json" in row and pd.notna(row.get("meta_json")):
+                try:
+                    meta_str = str(row.get("meta_json"))
+                    if meta_str:
+                        meta = json.loads(meta_str)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            elif "meta" in row and pd.notna(row.get("meta")):
+                meta_val = row.get("meta")
+                if isinstance(meta_val, dict):
+                    meta = meta_val
+                elif isinstance(meta_val, str):
+                    try:
+                        meta = json.loads(meta_val)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            
+            # Извлекаем execution данные из meta
+            execution_type = meta.get("execution_type")
+            if not execution_type:
+                continue  # Нет execution данных в meta
+            
+            # Собираем строку execution
+            execution_row = {
+                "signal_id": row.get("signal_id"),
+                "strategy": row.get("strategy"),
+                "event_time": row.get("timestamp"),  # timestamp события = event_time execution
+                "event_type": execution_type,  # execution_type из meta
+                "event_id": row.get("event_id"),  # ссылка на event
+                "position_id": row.get("position_id"),
+                "qty_delta": meta.get("qty_delta"),
+                "raw_price": meta.get("raw_price"),
+                "exec_price": meta.get("exec_price"),
+                "fees_sol": meta.get("fees_sol"),
+                "pnl_sol_delta": meta.get("pnl_sol_delta"),
+                "reason": row.get("reason"),  # reason из события
+            }
+            
+            executions_rows.append(execution_row)
+        
+        if not executions_rows:
+            # Возвращаем пустой DataFrame с правильными колонками
+            return pd.DataFrame(columns=[
+                "signal_id", "strategy", "event_time", "event_type", "event_id",
+                "position_id", "qty_delta", "raw_price", "exec_price", "fees_sol", "pnl_sol_delta", "reason"
+            ])
+        
+        return pd.DataFrame(executions_rows)
     
     def _check_events_executions_consistency(
         self,
         positions_df: pd.DataFrame,
         indices: "AuditIndices",
+        events_df: Optional[pd.DataFrame] = None,
+        executions_df: Optional[pd.DataFrame] = None,
     ) -> None:
-        """P1: Проверка консистентности events ↔ executions."""
-        # Для каждой позиции проверяем соответствие событий и исполнений
+        """P1: Проверка консистентности events ↔ executions по контракту."""
+        import json
+        
+        # Определяем trade-related события (канонические типы)
+        trade_event_types = {"POSITION_OPENED", "POSITION_PARTIAL_EXIT", "POSITION_CLOSED"}
+        
+        # Маппинг event_type -> execution_type
+        event_to_exec_type = {
+            "POSITION_OPENED": "entry",
+            "POSITION_PARTIAL_EXIT": "partial_exit",
+            "POSITION_CLOSED": "final_exit",
+        }
+        
+        # Проверяем, есть ли executions_df с нужными колонками
+        has_executions_df = (
+            executions_df is not None 
+            and len(executions_df) > 0 
+            and "event_time" in executions_df.columns 
+            and "event_type" in executions_df.columns
+        )
+        
+        # Получаем все trade-events глобально
+        all_trade_events = []
+        if events_df is not None and len(events_df) > 0:
+            for _, row in events_df.iterrows():
+                event_type = str(row.get("event_type", "")).upper()
+                if event_type in trade_event_types:
+                    all_trade_events.append(row.to_dict())
+        
+        # Создаем индекс позиций для быстрого поиска
+        positions_by_signal = {}
         for _, pos_row in positions_df.iterrows():
-            position_id = pos_row.get("position_id")
             signal_id = pos_row.get("signal_id")
             strategy = pos_row.get("strategy")
-            contract = pos_row.get("contract_address")
+            if signal_id and strategy:
+                key = (str(strategy), str(signal_id))
+                if key not in positions_by_signal:
+                    positions_by_signal[key] = []
+                positions_by_signal[key].append(pos_row)
+        
+        # 1. TRADE_EVENT_WITHOUT_EXECUTION: проверяем каждое trade-event
+        for event in all_trade_events:
+            event_time = pd.to_datetime(event.get("timestamp")) if pd.notna(event.get("timestamp")) else None
+            event_type = str(event.get("event_type", "")).upper()
+            event_signal_id = str(event.get("signal_id", "")) if pd.notna(event.get("signal_id")) else None
+            event_strategy = str(event.get("strategy", "")) if pd.notna(event.get("strategy")) else None
+            event_id = str(event.get("event_id", "")) if pd.notna(event.get("event_id")) else None
             
-            events = indices.get_events_for_position(position_id, signal_id, strategy, contract)
-            executions = indices.get_executions_for_position(position_id, signal_id)
+            # Находим соответствующую позицию
+            pos_row = None
+            if event_signal_id and event_strategy:
+                key = (event_strategy, event_signal_id)
+                if key in positions_by_signal and len(positions_by_signal[key]) > 0:
+                    pos_row = positions_by_signal[key][0]  # Берем первую
             
-            # События, которые должны иметь execution
-            trade_events = [
-                e for e in events
-                if any(kw in str(e.get("event_type", "")).lower() for kw in [
-                    "attempt_accepted_open", "executed_open", "open",
-                    "executed_close", "closed_by", "close", "exit",
-                ])
-            ]
+            has_execution = False
             
-            # Проверка: событие торговли без execution
-            for event in trade_events:
-                event_time = pd.to_datetime(event.get("timestamp")) if pd.notna(event.get("timestamp")) else None
-                event_type = str(event.get("event_type", "")).lower()
+            if has_executions_df:
+                # Ищем execution в executions_df по (signal_id, strategy, event_time, event_type)
+                expected_exec_type = event_to_exec_type.get(event_type)
+                if expected_exec_type and event_time and event_signal_id and event_strategy:
+                    for _, exec_row in executions_df.iterrows():
+                        exec_signal_id = str(exec_row.get("signal_id", "")) if pd.notna(exec_row.get("signal_id")) else None
+                        exec_strategy = str(exec_row.get("strategy", "")) if pd.notna(exec_row.get("strategy")) else None
+                        exec_time = pd.to_datetime(exec_row.get("event_time")) if pd.notna(exec_row.get("event_time")) else None
+                        exec_type = str(exec_row.get("event_type", "")).lower()
+                        exec_event_id = str(exec_row.get("event_id", "")) if pd.notna(exec_row.get("event_id")) else None
+                        
+                        # Матчинг по event_id (приоритет)
+                        if event_id and exec_event_id and event_id == exec_event_id:
+                            has_execution = True
+                            break
+                        
+                        # Матчинг по (signal_id, strategy, event_time, event_type)
+                        # Разрешаем точное совпадение или разницу <= 0 секунд (допускаем в пределах 0 секунд)
+                        if (exec_signal_id == event_signal_id and 
+                            exec_strategy == event_strategy and
+                            exec_time and event_time and
+                            abs((exec_time - event_time).total_seconds()) <= 0 and
+                            exec_type == expected_exec_type):
+                            has_execution = True
+                            break
+            else:
+                # executions_df пустой или нет нужных колонок - проверяем meta_json
+                meta_json = event.get("meta_json")
+                meta = event.get("meta")
                 
-                # Ищем соответствующее execution по времени (в пределах 1 минуты)
-                matching_execution = None
-                if event_time:
-                    for exec_item in executions:
-                        exec_time = pd.to_datetime(exec_item.get("event_time")) if pd.notna(exec_item.get("event_time")) else None
-                        if exec_time and abs((exec_time - event_time).total_seconds()) < 60:
-                            exec_event_type = str(exec_item.get("event_type", "")).lower()
-                            # Проверяем соответствие типов
-                            if ("open" in event_type and "entry" in exec_event_type) or \
-                               ("close" in event_type or "exit" in event_type) and ("exit" in exec_event_type or "close" in exec_event_type):
-                                matching_execution = exec_item
-                                break
+                # Пытаемся извлечь meta
+                meta_dict = {}
+                if meta_json and pd.notna(meta_json):
+                    try:
+                        meta_dict = json.loads(str(meta_json))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                elif meta and isinstance(meta, dict):
+                    meta_dict = meta
+                elif meta and isinstance(meta, str):
+                    try:
+                        meta_dict = json.loads(meta)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
                 
-                if not matching_execution:
-                    self.anomalies.append(Anomaly(
-                        position_id=position_id,
-                        strategy=strategy,
-                        signal_id=signal_id,
-                        contract_address=contract,
-                        entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                        exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
-                        entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
-                        exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
-                        pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
-                        reason=pos_row.get("reason"),
-                        anomaly_type=AnomalyType.TRADE_EVENT_WITHOUT_EXECUTION,
-                        severity="P1",
-                        event_id=str(event.get("event_id", "")),
-                        details={
-                            "event_type": event_type,
-                            "event_time": event_time.isoformat() if event_time else None,
-                            "executions_count": len(executions),
-                        },
-                    ))
+                # Проверяем наличие execution_type в meta
+                if meta_dict.get("execution_type"):
+                    has_execution = True
             
-            # Проверка: execution без соответствующего события
-            for exec_item in executions:
-                exec_time = pd.to_datetime(exec_item.get("event_time")) if pd.notna(exec_item.get("event_time")) else None
-                exec_event_type = str(exec_item.get("event_type", "")).lower()
+            if not has_execution:
+                # Создаем anomaly
+                position_id = event.get("position_id")
+                contract = event.get("contract_address", "UNKNOWN")
+                
+                self.anomalies.append(Anomaly(
+                    position_id=position_id,
+                    strategy=event_strategy or "UNKNOWN",
+                    signal_id=event_signal_id,
+                    contract_address=contract,
+                    entry_time=pd.to_datetime(pos_row.get("entry_time")) if pos_row is not None and pd.notna(pos_row.get("entry_time")) else None,
+                    exit_time=pd.to_datetime(pos_row.get("exit_time")) if pos_row is not None and pd.notna(pos_row.get("exit_time")) else None,
+                    entry_price=pos_row.get("exec_entry_price") if pos_row is not None else None,
+                    exit_price=pos_row.get("exec_exit_price") if pos_row is not None else None,
+                    pnl_pct=pos_row.get("pnl_pct") if pos_row is not None else None,
+                    reason=pos_row.get("reason") if pos_row is not None else None,
+                    anomaly_type=AnomalyType.TRADE_EVENT_WITHOUT_EXECUTION,
+                    severity="P1",
+                    event_id=event_id,
+                    details={
+                        "event_type": event_type,
+                        "event_time": event_time.isoformat() if event_time else None,
+                        "has_executions_df": has_executions_df,
+                    },
+                ))
+        
+        # 2. EXECUTION_WITHOUT_TRADE_EVENT: проверяем каждое execution (если есть executions_df)
+        if has_executions_df:
+            for _, exec_row in executions_df.iterrows():
+                exec_signal_id = str(exec_row.get("signal_id", "")) if pd.notna(exec_row.get("signal_id")) else None
+                exec_strategy = str(exec_row.get("strategy", "")) if pd.notna(exec_row.get("strategy")) else None
+                exec_time = pd.to_datetime(exec_row.get("event_time")) if pd.notna(exec_row.get("event_time")) else None
+                exec_type = str(exec_row.get("event_type", "")).lower()
+                exec_event_id = str(exec_row.get("event_id", "")) if pd.notna(exec_row.get("event_id")) else None
+                
+                # Находим соответствующую позицию
+                pos_row = None
+                if exec_signal_id and exec_strategy:
+                    key = (exec_strategy, exec_signal_id)
+                    if key in positions_by_signal and len(positions_by_signal[key]) > 0:
+                        pos_row = positions_by_signal[key][0]
                 
                 # Ищем соответствующее событие
                 matching_event = None
-                if exec_time:
-                    for event in events:
+                
+                # Поиск по event_id (приоритет)
+                if exec_event_id:
+                    for event in all_trade_events:
+                        event_id = str(event.get("event_id", "")) if pd.notna(event.get("event_id")) else None
+                        if event_id and event_id == exec_event_id:
+                            matching_event = event
+                            break
+                
+                # Поиск по (signal_id, strategy, timestamp)
+                if not matching_event and exec_time and exec_signal_id and exec_strategy:
+                    for event in all_trade_events:
+                        event_signal_id = str(event.get("signal_id", "")) if pd.notna(event.get("signal_id")) else None
+                        event_strategy = str(event.get("strategy", "")) if pd.notna(event.get("strategy")) else None
                         event_time = pd.to_datetime(event.get("timestamp")) if pd.notna(event.get("timestamp")) else None
-                        if event_time and abs((event_time - exec_time).total_seconds()) < 60:
-                            event_type = str(event.get("event_type", "")).lower()
-                            if ("entry" in exec_event_type and "open" in event_type) or \
-                               ("exit" in exec_event_type and ("close" in event_type or "exit" in event_type)):
-                                matching_event = event
-                                break
+                        event_type = str(event.get("event_type", "")).upper()
+                        
+                        # Матчинг по (signal_id, strategy) и типам, допускаем небольшую разницу во времени для проверки EXECUTION_TIME_BEFORE_EVENT
+                        time_diff = abs((event_time - exec_time).total_seconds()) if event_time and exec_time else float('inf')
+                        if (event_signal_id == exec_signal_id and
+                            event_strategy == exec_strategy):
+                            # Проверяем соответствие типов
+                            expected_exec_type = event_to_exec_type.get(event_type)
+                            if expected_exec_type and exec_type == expected_exec_type:
+                                # Для точного матчинга требуем <= 0 секунд, для проверки времени допускаем разницу
+                                if time_diff <= 0:
+                                    matching_event = event
+                                    break
+                                # Если не точное совпадение, но типы совпадают, тоже считаем match для проверки времени
+                                elif time_diff <= 3600:  # До 1 часа для проверки EXECUTION_TIME_BEFORE_EVENT
+                                    if matching_event is None:  # Берем первый подходящий
+                                        matching_event = event
                 
                 if not matching_event:
+                    # Создаем anomaly
+                    position_id = exec_row.get("position_id")
+                    contract = exec_row.get("contract_address", "UNKNOWN")
+                    
                     self.anomalies.append(Anomaly(
                         position_id=position_id,
-                        strategy=strategy,
-                        signal_id=signal_id,
+                        strategy=exec_strategy or "UNKNOWN",
+                        signal_id=exec_signal_id,
                         contract_address=contract,
-                        entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                        exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
-                        entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
-                        exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
-                        pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
-                        reason=pos_row.get("reason"),
+                        entry_time=pd.to_datetime(pos_row.get("entry_time")) if pos_row is not None and pd.notna(pos_row.get("entry_time")) else None,
+                        exit_time=pd.to_datetime(pos_row.get("exit_time")) if pos_row is not None and pd.notna(pos_row.get("exit_time")) else None,
+                        entry_price=pos_row.get("exec_entry_price") if pos_row is not None else None,
+                        exit_price=pos_row.get("exec_exit_price") if pos_row is not None else None,
+                        pnl_pct=pos_row.get("pnl_pct") if pos_row is not None else None,
+                        reason=pos_row.get("reason") if pos_row is not None else None,
                         anomaly_type=AnomalyType.EXECUTION_WITHOUT_TRADE_EVENT,
                         severity="P1",
                         details={
-                            "execution_type": exec_event_type,
+                            "execution_type": exec_type,
                             "execution_time": exec_time.isoformat() if exec_time else None,
-                            "events_count": len(events),
                         },
                     ))
-            
-            # Проверка времени: execution не может быть раньше события
-            for event in trade_events:
-                event_time = pd.to_datetime(event.get("timestamp")) if pd.notna(event.get("timestamp")) else None
-                if not event_time:
-                    continue
-                
-                for exec_item in executions:
-                    exec_time = pd.to_datetime(exec_item.get("event_time")) if pd.notna(exec_item.get("event_time")) else None
-                    if exec_time and exec_time < event_time:
-                        # Проверяем, что это действительно связанные события
-                        exec_event_type = str(exec_item.get("event_type", "")).lower()
-                        event_type = str(event.get("event_type", "")).lower()
-                        if (("entry" in exec_event_type and "open" in event_type) or
-                            ("exit" in exec_event_type and ("close" in event_type or "exit" in event_type))):
-                            self.anomalies.append(Anomaly(
-                                position_id=position_id,
-                                strategy=strategy,
-                                signal_id=signal_id,
-                                contract_address=contract,
-                                entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                                exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
-                                entry_price=pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price"),
-                                exit_price=pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price"),
-                                pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
-                                reason=pos_row.get("reason"),
-                                anomaly_type=AnomalyType.EXECUTION_TIME_BEFORE_EVENT,
-                                severity="P1",
-                                event_id=str(event.get("event_id", "")),
-                                details={
-                                    "event_time": event_time.isoformat(),
-                                    "execution_time": exec_time.isoformat(),
-                                    "diff_seconds": (event_time - exec_time).total_seconds(),
-                                },
-                            ))
-            
-            # Проверка цен: execution price должна быть в разумных пределах
-            entry_price = pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price")
-            exit_price = pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price")
-            
-            for exec_item in executions:
-                exec_price = exec_item.get("exec_price")
-                raw_price = exec_item.get("raw_price")
-                exec_event_type = str(exec_item.get("event_type", "")).lower()
-                
-                if pd.isna(exec_price) or exec_price <= 0:
-                    continue
-                
-                # Для entry: exec_price должна быть близка к entry_price
-                if "entry" in exec_event_type and entry_price:
-                    price_diff_pct = abs(exec_price - entry_price) / entry_price
-                    if price_diff_pct > 0.5:  # Более 50% разница
+                else:
+                    # 3. EXECUTION_TIME_BEFORE_EVENT: проверяем, что execution не раньше события
+                    # Для этой проверки нужно найти matching событие по (signal_id, strategy, event_type)
+                    # даже если время немного отличается
+                    matching_event_for_time_check = matching_event
+                    if not matching_event_for_time_check:
+                        # Ищем событие для проверки времени по (signal_id, strategy, event_type)
+                        exec_event_type_for_match = exec_type
+                        # Маппинг execution_type -> event_type для поиска
+                        exec_to_event_type = {
+                            "entry": "POSITION_OPENED",
+                            "partial_exit": "POSITION_PARTIAL_EXIT",
+                            "final_exit": "POSITION_CLOSED",
+                            "forced_close": "POSITION_CLOSED",
+                        }
+                        expected_event_type = exec_to_event_type.get(exec_event_type_for_match)
+                        
+                        if expected_event_type and exec_signal_id and exec_strategy:
+                            for event in all_trade_events:
+                                event_signal_id = str(event.get("signal_id", "")) if pd.notna(event.get("signal_id")) else None
+                                event_strategy = str(event.get("strategy", "")) if pd.notna(event.get("strategy")) else None
+                                event_type = str(event.get("event_type", "")).upper()
+                                
+                                if (event_signal_id == exec_signal_id and
+                                    event_strategy == exec_strategy and
+                                    event_type == expected_event_type):
+                                    matching_event_for_time_check = event
+                                    break
+                    
+                    event_time = pd.to_datetime(matching_event_for_time_check.get("timestamp")) if matching_event_for_time_check and pd.notna(matching_event_for_time_check.get("timestamp")) else None
+                    if exec_time and event_time and exec_time < event_time:
+                        position_id = matching_event.get("position_id")
+                        contract = matching_event.get("contract_address", "UNKNOWN")
+                        
                         self.anomalies.append(Anomaly(
                             position_id=position_id,
-                            strategy=strategy,
-                            signal_id=signal_id,
+                            strategy=exec_strategy or "UNKNOWN",
+                            signal_id=exec_signal_id,
                             contract_address=contract,
-                            entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                            exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
-                            entry_price=entry_price,
-                            exit_price=exit_price,
-                            pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
-                            reason=pos_row.get("reason"),
-                            anomaly_type=AnomalyType.EXECUTION_PRICE_OUT_OF_RANGE,
+                            entry_time=pd.to_datetime(pos_row.get("entry_time")) if pos_row is not None and pd.notna(pos_row.get("entry_time")) else None,
+                            exit_time=pd.to_datetime(pos_row.get("exit_time")) if pos_row is not None and pd.notna(pos_row.get("exit_time")) else None,
+                            entry_price=pos_row.get("exec_entry_price") if pos_row is not None else None,
+                            exit_price=pos_row.get("exec_exit_price") if pos_row is not None else None,
+                            pnl_pct=pos_row.get("pnl_pct") if pos_row is not None else None,
+                            reason=pos_row.get("reason") if pos_row is not None else None,
+                            anomaly_type=AnomalyType.EXECUTION_TIME_BEFORE_EVENT,
                             severity="P1",
+                            event_id=str(matching_event.get("event_id", "")),
                             details={
-                                "execution_type": exec_event_type,
-                                "execution_price": exec_price,
-                                "position_price": entry_price,
-                                "price_diff_pct": price_diff_pct,
+                                "event_time": event_time.isoformat(),
+                                "execution_time": exec_time.isoformat(),
+                                "diff_seconds": (event_time - exec_time).total_seconds(),
                             },
                         ))
-                
-                # Для exit: exec_price должна быть близка к exit_price
-                if ("exit" in exec_event_type or "close" in exec_event_type) and exit_price:
-                    price_diff_pct = abs(exec_price - exit_price) / exit_price
-                    if price_diff_pct > 0.5:  # Более 50% разница
-                        self.anomalies.append(Anomaly(
-                            position_id=position_id,
-                            strategy=strategy,
-                            signal_id=signal_id,
-                            contract_address=contract,
-                            entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
-                            exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
-                            entry_price=entry_price,
-                            exit_price=exit_price,
-                            pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
-                            reason=pos_row.get("reason"),
-                            anomaly_type=AnomalyType.EXECUTION_PRICE_OUT_OF_RANGE,
-                            severity="P1",
-                            details={
-                                "execution_type": exec_event_type,
-                                "execution_price": exec_price,
-                                "position_price": exit_price,
-                                "price_diff_pct": price_diff_pct,
-                            },
-                        ))
+                    
+                    # 4. EXECUTION_PRICE_OUT_OF_RANGE: проверяем цены
+                    if pos_row is not None:
+                        entry_price = pos_row.get("exec_entry_price") or pos_row.get("raw_entry_price")
+                        exit_price = pos_row.get("exec_exit_price") or pos_row.get("raw_exit_price")
+                        exec_price = exec_row.get("exec_price")
+                        
+                        if exec_price and pd.notna(exec_price) and exec_price > 0:
+                            # Для entry: сравниваем с entry_price
+                            if exec_type == "entry" and entry_price:
+                                price_diff_pct = abs(exec_price - entry_price) / entry_price
+                                if price_diff_pct > 0.5:  # Более 50% разница
+                                    position_id = matching_event.get("position_id")
+                                    contract = matching_event.get("contract_address", "UNKNOWN")
+                                    
+                                    self.anomalies.append(Anomaly(
+                                        position_id=position_id,
+                                        strategy=exec_strategy or "UNKNOWN",
+                                        signal_id=exec_signal_id,
+                                        contract_address=contract,
+                                        entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
+                                        exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
+                                        entry_price=entry_price,
+                                        exit_price=exit_price,
+                                        pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
+                                        reason=pos_row.get("reason"),
+                                        anomaly_type=AnomalyType.EXECUTION_PRICE_OUT_OF_RANGE,
+                                        severity="P1",
+                                        details={
+                                            "execution_type": exec_type,
+                                            "execution_price": exec_price,
+                                            "position_price": entry_price,
+                                            "price_diff_pct": price_diff_pct,
+                                        },
+                                    ))
+                            
+                            # Для exit: сравниваем с exit_price
+                            if exec_type in ("partial_exit", "final_exit", "forced_close") and exit_price:
+                                price_diff_pct = abs(exec_price - exit_price) / exit_price
+                                if price_diff_pct > 0.5:  # Более 50% разница
+                                    position_id = matching_event.get("position_id")
+                                    contract = matching_event.get("contract_address", "UNKNOWN")
+                                    
+                                    self.anomalies.append(Anomaly(
+                                        position_id=position_id,
+                                        strategy=exec_strategy or "UNKNOWN",
+                                        signal_id=exec_signal_id,
+                                        contract_address=contract,
+                                        entry_time=pd.to_datetime(pos_row.get("entry_time")) if pd.notna(pos_row.get("entry_time")) else None,
+                                        exit_time=pd.to_datetime(pos_row.get("exit_time")) if pd.notna(pos_row.get("exit_time")) else None,
+                                        entry_price=entry_price,
+                                        exit_price=exit_price,
+                                        pnl_pct=pos_row.get("pnl_pct") if pd.notna(pos_row.get("pnl_pct")) else None,
+                                        reason=pos_row.get("reason"),
+                                        anomaly_type=AnomalyType.EXECUTION_PRICE_OUT_OF_RANGE,
+                                        severity="P1",
+                                        details={
+                                            "execution_type": exec_type,
+                                            "execution_price": exec_price,
+                                            "position_price": exit_price,
+                                            "price_diff_pct": price_diff_pct,
+                                        },
+                                    ))
     
     def _check_decision_proofs(
         self,

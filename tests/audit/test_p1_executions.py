@@ -27,17 +27,19 @@ def test_trade_event_without_execution():
         "reason": "tp",
     }])
     
-    # Событие открытия есть
+    # Событие открытия есть (канонический тип), но БЕЗ execution данных в meta
     events_df = pd.DataFrame([{
         "timestamp": datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
-        "event_type": "attempt_accepted_open",
+        "event_type": "POSITION_OPENED",
         "strategy": "Runner_Baseline",
         "signal_id": "sig1",
         "contract_address": "0x123",
         "position_id": "pos1",
+        "event_id": "evt1",
+        # НЕТ meta_json с execution_type - событие без execution данных
     }])
     
-    # Но нет execution для этого события
+    # Нет execution для этого события (пустой executions_df)
     executions_df = pd.DataFrame([])  # Пустой
     
     anomalies = checker.check_all(positions_df, events_df, executions_df)
@@ -106,14 +108,16 @@ def test_execution_time_before_event():
         "reason": "tp",
     }])
     
-    # Событие в 12:00
+    # Событие в 12:00 (канонический тип)
     events_df = pd.DataFrame([{
         "timestamp": datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
-        "event_type": "attempt_accepted_open",
+        "event_type": "POSITION_OPENED",
         "strategy": "Runner_Baseline",
         "signal_id": "sig1",
         "contract_address": "0x123",
         "position_id": "pos1",
+        "event_id": "evt1",
+        "meta_json": '{"execution_type": "entry", "raw_price": 100.0, "exec_price": 100.0, "qty_delta": 1.0, "fees_sol": 0.001, "pnl_sol_delta": 0.0}',
     }])
     
     # Execution в 11:59 (раньше события)
@@ -156,11 +160,13 @@ def test_execution_price_out_of_range():
     
     events_df = pd.DataFrame([{
         "timestamp": datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc),
-        "event_type": "attempt_accepted_open",
+        "event_type": "POSITION_OPENED",
         "strategy": "Runner_Baseline",
         "signal_id": "sig1",
         "contract_address": "0x123",
         "position_id": "pos1",
+        "event_id": "evt1",
+        "meta_json": '{"execution_type": "entry", "raw_price": 200.0, "exec_price": 200.0, "qty_delta": 1.0, "fees_sol": 0.001, "pnl_sol_delta": 0.0}',
     }])
     
     # Execution с ценой, сильно отличающейся от позиции (200.0 вместо 100.0)
