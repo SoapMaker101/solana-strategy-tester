@@ -295,6 +295,16 @@ class InvariantChecker:
         """
         self.anomalies = []
         
+        # Нормализуем входы: заменяем None на пустые DataFrame
+        # Это позволяет дальше по коду не проверять на None
+        if positions_df is None:
+            positions_df = pd.DataFrame()
+        if events_df is None:
+            events_df = pd.DataFrame()
+        if executions_df is None:
+            executions_df = pd.DataFrame()
+        
+        # Ранний выход, если нет позиций
         if len(positions_df) == 0:
             return []
         
@@ -342,7 +352,7 @@ class InvariantChecker:
         self._check_unknown_reasons(positions_df, events_df)
         
         # Policy consistency
-        if events_df is not None and len(events_df) > 0:
+        if len(events_df) > 0:
             self._check_policy_consistency(positions_df, events_df)
         
         # ============================================================
@@ -351,9 +361,9 @@ class InvariantChecker:
         if self.include_p1:
             # Определяем effective executions_df: используем переданный или строим из events
             effective_executions_df = executions_df
-            if effective_executions_df is None or len(effective_executions_df) == 0:
-                # Пустой или None - строим из events
-                if events_df is not None and len(events_df) > 0:
+            if len(effective_executions_df) == 0:
+                # Пустой - строим из events
+                if len(events_df) > 0:
                     effective_executions_df = self.build_executions_from_events(events_df)
             else:
                 # executions_df не пустой - проверяем наличие нужных колонок
@@ -361,7 +371,7 @@ class InvariantChecker:
                 has_required_cols = all(col in effective_executions_df.columns for col in required_cols)
                 if not has_required_cols:
                     # Нет нужных колонок - строим из events
-                    if events_df is not None and len(events_df) > 0:
+                    if len(events_df) > 0:
                         effective_executions_df = self.build_executions_from_events(events_df)
             
             indices = AuditIndices(events_df=events_df, executions_df=effective_executions_df)
@@ -369,10 +379,10 @@ class InvariantChecker:
             self._check_events_executions_consistency(positions_df, indices, events_df, effective_executions_df)
         
         # P2: Decision proofs (если включено)
-        if self.include_p2 and events_df is not None and len(events_df) > 0:
+        if self.include_p2 and len(events_df) > 0:
             effective_executions_df = executions_df
-            if effective_executions_df is None or len(effective_executions_df) == 0:
-                if events_df is not None and len(events_df) > 0:
+            if len(effective_executions_df) == 0:
+                if len(events_df) > 0:
                     effective_executions_df = self.build_executions_from_events(events_df)
             indices = AuditIndices(events_df=events_df, executions_df=effective_executions_df)
             self._check_decision_proofs(positions_df, events_df, indices)
@@ -708,6 +718,10 @@ class InvariantChecker:
         """
         observed_reasons = set()
         
+        # Guard: ранний выход, если positions_df пустой
+        if positions_df is None or positions_df.empty:
+            return
+        
         # Собираем reasons из positions
         reason_series = self._str_series(positions_df, "reason")
         for reason in reason_series:
@@ -717,7 +731,7 @@ class InvariantChecker:
                     observed_reasons.add(normalized)
         
         # Собираем reasons из events (если есть)
-        if events_df is not None and len(events_df) > 0:
+        if events_df is not None and not events_df.empty:
             event_reason_series = self._str_series(events_df, "reason")
             for reason in event_reason_series:
                 if reason and reason.strip():
@@ -961,6 +975,12 @@ class InvariantChecker:
     
     def _check_policy_consistency(self, positions_df: pd.DataFrame, events_df: pd.DataFrame) -> None:
         """Проверка консистентности политик (reset, prune)."""
+        # Guard: ранний выход, если входы пустые
+        if positions_df is None or positions_df.empty:
+            return
+        if events_df is None or events_df.empty:
+            return
+        
         # Проверяем позиции, закрытые по reset/prune
         # Используем безопасное получение колонок
         closed_by_reset_series = self._series(positions_df, "closed_by_reset", False)
@@ -971,6 +991,10 @@ class InvariantChecker:
             (closed_by_reset_series == True) |
             (reset_reason_series.notna())
         ]
+        
+        # Guard: проверяем, что есть позиции для обработки
+        if reset_positions.empty:
+            return
         
         for _, pos_row in reset_positions.iterrows():
             position_id = self._safe_str(pos_row.get("position_id")) or None
@@ -1280,6 +1304,15 @@ class InvariantChecker:
         """
         import json
         
+        # Guard: ранний выход, если events_df пустой или None
+        if events_df is None or events_df.empty:
+            column_names = [
+                "signal_id", "strategy", "event_time", "event_type", "event_id",
+                "position_id", "qty_delta", "raw_price", "exec_price", "fees_sol", "pnl_sol_delta", "reason"
+            ]
+            empty_dict = {col: [] for col in column_names}
+            return pd.DataFrame.from_dict(empty_dict)
+        
         trade_event_types = {"POSITION_OPENED", "POSITION_PARTIAL_EXIT", "POSITION_CLOSED"}
         
         executions_rows = []
@@ -1381,7 +1414,7 @@ class InvariantChecker:
         
         # Получаем все trade-events глобально
         all_trade_events = []
-        if events_df is not None and len(events_df) > 0:
+        if events_df is not None and not events_df.empty:
             for _, row in events_df.iterrows():
                 event_type = str(row.get("event_type", "")).upper()
                 if event_type in trade_event_types:
@@ -1389,14 +1422,15 @@ class InvariantChecker:
         
         # Создаем индекс позиций для быстрого поиска
         positions_by_signal = {}
-        for _, pos_row in positions_df.iterrows():
-            signal_id = self._safe_str(pos_row.get("signal_id")) or None
-            strategy = self._safe_str(pos_row.get("strategy"), "UNKNOWN")
-            if signal_id and strategy:
-                key = (strategy, signal_id)
-                if key not in positions_by_signal:
-                    positions_by_signal[key] = []
-                positions_by_signal[key].append(pos_row)
+        if positions_df is not None and not positions_df.empty:
+            for _, pos_row in positions_df.iterrows():
+                signal_id = self._safe_str(pos_row.get("signal_id")) or None
+                strategy = self._safe_str(pos_row.get("strategy"), "UNKNOWN")
+                if signal_id is not None and strategy:
+                    key = (strategy, signal_id)
+                    if key not in positions_by_signal:
+                        positions_by_signal[key] = []
+                    positions_by_signal[key].append(pos_row)
         
         # 1. TRADE_EVENT_WITHOUT_EXECUTION: проверяем каждое trade-event
         for event in all_trade_events:
@@ -1415,7 +1449,7 @@ class InvariantChecker:
             
             has_execution = False
             
-            if has_executions_df and executions_df is not None:
+            if has_executions_df and executions_df is not None and not executions_df.empty:
                 # Ищем execution в executions_df по (signal_id, strategy, event_time, event_type)
                 expected_exec_type = event_to_exec_type.get(event_type)
                 if expected_exec_type and event_time and event_signal_id and event_strategy:
@@ -1493,7 +1527,7 @@ class InvariantChecker:
                 ))
         
         # 2. EXECUTION_WITHOUT_TRADE_EVENT: проверяем каждое execution (если есть executions_df)
-        if has_executions_df and executions_df is not None:
+        if has_executions_df and executions_df is not None and not executions_df.empty:
             for _, exec_row in executions_df.iterrows():
                 # Явные проверки на None/NaN вместо truthiness
                 exec_signal_id_val = exec_row.get("signal_id")
@@ -1717,11 +1751,19 @@ class InvariantChecker:
         positions_df: pd.DataFrame,
     ) -> None:
         """P2.1: Проверка доказательства profit reset."""
+        # Guard: ранний выход, если events_df пустой или None
+        if events_df is None or events_df.empty:
+            return
+        
         # Ищем события PROFIT_RESET_TRIGGERED
         event_type_series = self._series(events_df, "event_type", "")
         profit_reset_events = events_df[
             event_type_series.str.contains("PROFIT_RESET|profit_reset", case=False, na=False)
         ]
+        
+        # Guard: проверяем, что есть события для обработки
+        if profit_reset_events.empty:
+            return
         
         for _, event_row in profit_reset_events.iterrows():
             # Извлекаем данные из meta (если есть)
