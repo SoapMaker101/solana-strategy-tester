@@ -38,8 +38,8 @@ def test_xlsx_sheets(tmp_path):
     assert path.exists()
     
     # Проверяем листы
-    xls = pd.ExcelFile(path)
-    assert set(xls.sheet_names) == {"sheet_a", "sheet_b"}
+    with pd.ExcelFile(path) as xls:
+        assert set(xls.sheet_names) == {"sheet_a", "sheet_b"}
 
 
 def test_xlsx_data_integrity(tmp_path):
@@ -52,21 +52,20 @@ def test_xlsx_data_integrity(tmp_path):
     save_xlsx(path, {"data": df1, "numbers": df2})
     
     # Читаем обратно
-    xls = pd.ExcelFile(path)
-    
-    # Проверяем первый лист
-    read_df1 = pd.read_excel(xls, sheet_name="data")
-    pd.testing.assert_frame_equal(
-        read_df1.reset_index(drop=True),
-        df1.reset_index(drop=True)
-    )
-    
-    # Проверяем второй лист
-    read_df2 = pd.read_excel(xls, sheet_name="numbers")
-    pd.testing.assert_frame_equal(
-        read_df2.reset_index(drop=True),
-        df2.reset_index(drop=True)
-    )
+    with pd.ExcelFile(path) as xls:
+        # Проверяем первый лист
+        read_df1 = pd.read_excel(xls, sheet_name="data")
+        pd.testing.assert_frame_equal(
+            read_df1.reset_index(drop=True),
+            df1.reset_index(drop=True)
+        )
+        
+        # Проверяем второй лист
+        read_df2 = pd.read_excel(xls, sheet_name="numbers")
+        pd.testing.assert_frame_equal(
+            read_df2.reset_index(drop=True),
+            df2.reset_index(drop=True)
+        )
 
 
 def test_xlsx_empty_dataframes(tmp_path):
@@ -80,13 +79,13 @@ def test_xlsx_empty_dataframes(tmp_path):
     
     assert path.exists()
     
-    xls = pd.ExcelFile(path)
-    assert set(xls.sheet_names) == {"empty1", "empty2"}
-    
-    # Проверяем что листы пустые но с правильными колонками
-    read_df1 = pd.read_excel(xls, sheet_name="empty1")
-    assert list(read_df1.columns) == ["a", "b"]
-    assert len(read_df1) == 0
+    with pd.ExcelFile(path) as xls:
+        assert set(xls.sheet_names) == {"empty1", "empty2"}
+        
+        # Проверяем что листы пустые но с правильными колонками
+        read_df1 = pd.read_excel(xls, sheet_name="empty1")
+        assert list(read_df1.columns) == ["a", "b"]
+        assert len(read_df1) == 0
 
 
 def test_xlsx_sheet_name_truncation(tmp_path):
@@ -99,10 +98,10 @@ def test_xlsx_sheet_name_truncation(tmp_path):
     long_name = "a" * 40
     save_xlsx(path, {long_name: df})
     
-    xls = pd.ExcelFile(path)
-    # Проверяем что имя обрезано до 31 символа
-    assert len(xls.sheet_names[0]) == 31
-    assert xls.sheet_names[0] == "a" * 31
+    with pd.ExcelFile(path) as xls:
+        # Проверяем что имя обрезано до 31 символа
+        assert len(xls.sheet_names[0]) == 31
+        assert xls.sheet_names[0] == "a" * 31
 
 
 def test_xlsx_regression_csv_exists(tmp_path):

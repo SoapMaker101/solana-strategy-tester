@@ -3,6 +3,7 @@ Tests for XN analyzer
 """
 import pytest
 import pandas as pd
+import warnings
 from datetime import datetime, timedelta, timezone
 
 from backtester.domain.models import Signal, Candle
@@ -281,9 +282,18 @@ def test_no_candles_after_signal_returns_none(sample_signal, basic_config):
     ]
     
     candles_df = candles_to_dataframe(candles)
-    result = XNAnalyzer.analyze_signal(sample_signal, candles_df, basic_config)
+    
+    # Подавляем ожидаемое предупреждение о отсутствии свечей после сигнала
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"\[XN\] Signal .* No candles found after signal timestamp .*\. Skipping\.",
+            category=UserWarning,
+        )
+        result = XNAnalyzer.analyze_signal(sample_signal, candles_df, basic_config)
     
     assert result is None
+
 
 
 

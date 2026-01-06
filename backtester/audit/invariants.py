@@ -990,12 +990,38 @@ class InvariantChecker:
         # Проверяем позиции, закрытые по reset/prune
         # Используем безопасное получение колонок
         closed_by_reset_series = self._series(positions_df, "closed_by_reset", False)
+        
+        # Строим маску для reset_reason на основе positions_df
+        # По умолчанию False для всех позиций
+        reset_reason_mask = pd.Series(False, index=positions_df.index, dtype=bool)
+        
+        # Проверяем, есть ли в events_df события с reset_reason
         reset_reason_series = self._series(events_df, "reset_reason", None)
+        has_reset_reason_events = reset_reason_series.notna().any() if len(reset_reason_series) > 0 else False
+        
+        if has_reset_reason_events:
+            # Собираем position_id из events_df, где reset_reason notna
+            reset_reason_notna = reset_reason_series.notna()
+            if reset_reason_notna.any() and "position_id" in events_df.columns:
+                # Фильтруем только те события, где reset_reason notna
+                reset_pos_ids_raw = events_df.loc[reset_reason_notna, "position_id"]
+                # Убираем NaN и конвертируем в set строк
+                reset_pos_ids = set(
+                    reset_pos_ids_raw.dropna().astype(str).tolist()
+                )
+                
+                # Выставляем True только тем позициям, у которых position_id в reset_pos_ids
+                if "position_id" in positions_df.columns:
+                    positions_position_id_series = self._series(positions_df, "position_id", None)
+                    # Безопасная проверка: только не-NaN position_id
+                    positions_position_id_str = positions_position_id_series.dropna().astype(str)
+                    reset_reason_mask.loc[positions_position_id_str.index] = positions_position_id_str.isin(reset_pos_ids)
+                # Если в positions_df нет position_id - маска остается False (safe default)
         
         # Используем явные проверки вместо truthiness
-        reset_positions = positions_df[
+        reset_positions = positions_df.loc[
             (closed_by_reset_series == True) |
-            (reset_reason_series.notna())
+            reset_reason_mask
         ]
         
         # Guard: проверяем, что есть позиции для обработки

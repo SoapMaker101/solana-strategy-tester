@@ -91,26 +91,29 @@ def test_report_pack_created_when_openpyxl_available(tmp_path):
     try:
         from openpyxl import load_workbook
         wb = load_workbook(result_path)
-        sheet_names = wb.sheetnames
-        
-        assert "summary" in sheet_names
-        assert "positions" in sheet_names
-        assert "portfolio_events" in sheet_names
-        
-        # Проверяем что summary содержит данные
-        ws_summary = wb["summary"]
-        assert ws_summary.max_row > 1  # Есть заголовок + данные
-        
-        # Проверяем что positions содержит данные
-        ws_positions = wb["positions"]
-        assert ws_positions.max_row > 1  # Есть заголовок + данные
+        try:
+            sheet_names = wb.sheetnames
+            
+            assert "summary" in sheet_names
+            assert "positions" in sheet_names
+            assert "portfolio_events" in sheet_names
+            
+            # Проверяем что summary содержит данные
+            ws_summary = wb["summary"]
+            assert ws_summary.max_row > 1  # Есть заголовок + данные
+            
+            # Проверяем что positions содержит данные
+            ws_positions = wb["positions"]
+            assert ws_positions.max_row > 1  # Есть заголовок + данные
+        finally:
+            wb.close()
         
     except ImportError:
         # Если openpyxl недоступен для чтения, проверяем через pandas
-        xls = pd.ExcelFile(result_path)
-        assert "summary" in xls.sheet_names
-        assert "positions" in xls.sheet_names
-        assert "portfolio_events" in xls.sheet_names
+        with pd.ExcelFile(result_path) as xls:
+            assert "summary" in xls.sheet_names
+            assert "positions" in xls.sheet_names
+            assert "portfolio_events" in xls.sheet_names
 
 
 def test_report_pack_best_effort_missing_optional_csv(tmp_path):
@@ -170,22 +173,25 @@ def test_report_pack_best_effort_missing_optional_csv(tmp_path):
     try:
         from openpyxl import load_workbook
         wb = load_workbook(result_path)
-        sheet_names = wb.sheetnames
-        
-        assert "summary" in sheet_names
-        assert "portfolio_events" in sheet_names
-        # positions может отсутствовать или быть с "missing"
-        if "positions" in sheet_names:
-            ws_positions = wb["positions"]
-            # Проверяем что есть либо данные, либо "missing"
-            if ws_positions.max_row > 1:
-                first_data_row = [cell.value for cell in ws_positions[2]]
-                # Может быть "missing" или реальные данные
-                assert len(first_data_row) > 0
+        try:
+            sheet_names = wb.sheetnames
+            
+            assert "summary" in sheet_names
+            assert "portfolio_events" in sheet_names
+            # positions может отсутствовать или быть с "missing"
+            if "positions" in sheet_names:
+                ws_positions = wb["positions"]
+                # Проверяем что есть либо данные, либо "missing"
+                if ws_positions.max_row > 1:
+                    first_data_row = [cell.value for cell in ws_positions[2]]
+                    # Может быть "missing" или реальные данные
+                    assert len(first_data_row) > 0
+        finally:
+            wb.close()
     except ImportError:
-        xls = pd.ExcelFile(result_path)
-        assert "summary" in xls.sheet_names
-        assert "portfolio_events" in xls.sheet_names
+        with pd.ExcelFile(result_path) as xls:
+            assert "summary" in xls.sheet_names
+            assert "portfolio_events" in xls.sheet_names
 
 
 def test_report_pack_skips_when_no_engine(monkeypatch, tmp_path):
@@ -285,7 +291,7 @@ def test_reporter_save_report_pack_xlsx(tmp_path):
         assert result_path.name == "report_pack.xlsx"
         
         # Проверяем листы
-        xls = pd.ExcelFile(result_path)
-        assert "summary" in xls.sheet_names
-        assert "positions" in xls.sheet_names
-        assert "portfolio_events" in xls.sheet_names
+        with pd.ExcelFile(result_path) as xls:
+            assert "summary" in xls.sheet_names
+            assert "positions" in xls.sheet_names
+            assert "portfolio_events" in xls.sheet_names
