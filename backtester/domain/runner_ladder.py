@@ -80,10 +80,16 @@ class RunnerLadderEngine:
             fraction_per_level = 1.0 / len(levels)
             fractions = [fraction_per_level] * len(levels)
         
-        # Получаем max_hold_minutes из конфига
-        max_hold_minutes = getattr(config, 'max_hold_minutes', None)
+        # Получаем max_hold_minutes из конфига (time_stop_minutes или max_hold_minutes)
+        max_hold_minutes = getattr(config, 'time_stop_minutes', None)
         if max_hold_minutes is None:
-            max_hold_minutes = 1440  # 24 часа по умолчанию
+            max_hold_minutes = getattr(config, 'max_hold_minutes', None)
+        if max_hold_minutes is None:
+            max_hold_minutes = 432000  # 30 дней по умолчанию
+        
+        # Получаем exit_on_first_tp и allow_partial_fills из конфига
+        exit_on_first_tp = getattr(config, 'exit_on_first_tp', False)
+        allow_partial_fills = getattr(config, 'allow_partial_fills', True)
         
         # Сортируем свечи по времени
         candles_df = candles_df.sort_values('timestamp').reset_index(drop=True)
@@ -91,12 +97,26 @@ class RunnerLadderEngine:
         # Инициализация
         levels_hit: Dict[float, datetime] = {}
         fractions_exited: Dict[float, float] = {}
-        remaining_fraction = 1.0
         realized_multiple = 0.0
+        
+        # Отслеживаем, сколько уже закрыто от initial size (для проверки, не превысили ли мы 1.0)
+        total_fraction_exited = 0.0
         
         # Проверяем каждый уровень
         for i, (xn, fraction) in enumerate(zip(levels, fractions)):
-            if remaining_fraction <= 0:
+            # Проверяем, не превысили ли мы 1.0 (100% от initial size)
+            if total_fraction_exited >= 1.0:
+                break
+            
+            # Если exit_on_first_tp=True и уже достигнут первый уровень, закрываем всё
+            if exit_on_first_tp and i > 0 and levels_hit:
+                # Первый уровень уже достигнут, закрываем всё на нём
+                break
+            
+            # Если allow_partial_fills=False, не делаем частичных выходов
+            # В этом случае закрываем всё на первом достигнутом уровне
+            if not allow_partial_fills and levels_hit:
+                # Уже достигнут хотя бы один уровень, закрываем всё на нём
                 break
             
             # Ищем первую свечу, где high >= entry_price * xn
@@ -121,29 +141,58 @@ class RunnerLadderEngine:
                     if hit_time_ts is not None:
                         hit_time = hit_time_ts.to_pydatetime() if isinstance(hit_time_ts, pd.Timestamp) else hit_time_ts
                         levels_hit[xn] = hit_time
-                    break
                     
-                    # Закрываем долю на этом уровне
-                    actual_fraction = min(fraction, remaining_fraction)
-                    fractions_exited[xn] = actual_fraction
-                    remaining_fraction -= actual_fraction
-                    realized_multiple += xn * actual_fraction
+                    # Вычисляем долю для закрытия (от initial size)
+                    # Если exit_on_first_tp=True, закрываем всё на первом уровне
+                    if exit_on_first_tp and i == 0:
+                        # Закрываем всё на первом уровне
+                        actual_fraction = 1.0 - total_fraction_exited
+                        fractions_exited[xn] = actual_fraction
+                        total_fraction_exited = 1.0
+                        realized_multiple += xn * actual_fraction
+                    elif not allow_partial_fills:
+                        # Если allow_partial_fills=False, закрываем всё на первом достигнутом уровне
+                        actual_fraction = 1.0 - total_fraction_exited
+                        fractions_exited[xn] = actual_fraction
+                        total_fraction_exited = 1.0
+                        realized_multiple += xn * actual_fraction
+                    else:
+                        # Частичный выход: закрываем fraction от initial size
+                        # Ограничиваем, чтобы не превысить 1.0
+                        actual_fraction = min(fraction, 1.0 - total_fraction_exited)
+                        if actual_fraction > 0:
+                            fractions_exited[xn] = actual_fraction
+                            total_fraction_exited += actual_fraction
+                            realized_multiple += xn * actual_fraction
                     break
             
             if hit_time is None:
                 # Уровень не достигнут (либо time_stop, либо цена не достигла)
+                # Продолжаем проверять следующие уровни, если позиция не закрыта полностью
+                if total_fraction_exited >= 1.0:
+                    break
+                continue
+            
+            # Если exit_on_first_tp=True и достигнут первый уровень, прекращаем обработку
+            if exit_on_first_tp and i == 0:
+                break
+            
+            # Если allow_partial_fills=False и достигнут уровень, прекращаем обработку
+            if not allow_partial_fills:
                 break
         
         # Определяем exit_time и exit_price
         exit_time: Optional[datetime] = None
         exit_price: Optional[float] = None
         
-        # Главное правило: если хотя бы один уровень достигнут → reason = "ladder_tp"
-        # Иначе → reason = "time_stop" (или "no_data" если нет данных)
+        # Главное правило:
+        # - Если позиция закрыта полностью на уровнях (total_fraction_exited >= 1.0) → reason = "ladder_tp"
+        # - Если позиция закрыта частично или не закрыта → reason = "time_stop" (остаток закрывается по time_stop)
         has_levels_hit = bool(levels_hit)
+        is_fully_closed = total_fraction_exited >= 1.0
         
-        if has_levels_hit:
-            # Хотя бы один уровень достигнут - это ladder take profit
+        if is_fully_closed and has_levels_hit:
+            # Позиция полностью закрыта на уровнях - это ladder take profit
             reason = "ladder_tp"
             # Берем время последнего достигнутого уровня
             exit_times = list(levels_hit.values())
@@ -152,7 +201,7 @@ class RunnerLadderEngine:
             else:
                 exit_time = None
         else:
-            # Ни один уровень не достигнут - проверяем time_stop
+            # Позиция не закрыта полностью или ни один уровень не достигнут - проверяем time_stop
             reason = "time_stop"
             if max_hold_minutes:
                 # Вычисляем время time_stop

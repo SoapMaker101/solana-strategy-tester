@@ -1334,6 +1334,8 @@ class Reporter:
                             })
                 
                 # Final exit или force close
+                # ВАЖНО: для Runner стратегий с partial exits нужно использовать remaining_size,
+                # а не pos.size (который может быть 0 после partial exits)
                 if pos.exit_time and pos.status == "closed":
                     exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
                     raw_exit_price = pos.meta.get("raw_exit_price", pos.exit_price) if pos.meta else pos.exit_price
@@ -1342,6 +1344,23 @@ class Reporter:
                     closed_by_reset = pos.meta.get("closed_by_reset", False) if pos.meta else False
                     reset_reason = pos.meta.get("reset_reason", None) if pos.meta else None
                     
+                    # Для Runner стратегий с partial exits используем remaining_size из последнего partial_exit
+                    # или pos.size если partial_exits нет
+                    remaining_size = pos.size
+                    if pos.meta and "partial_exits" in pos.meta:
+                        partial_exits = pos.meta.get("partial_exits", [])
+                        # Находим последний partial_exit с is_remainder=True (это final exit)
+                        remainder_exits = [e for e in partial_exits if e.get("is_remainder", False)]
+                        if remainder_exits:
+                            # Используем exit_size из remainder exit
+                            remaining_size = remainder_exits[-1].get("exit_size", pos.size)
+                        else:
+                            # Если нет remainder exit, значит позиция закрыта полностью на уровнях
+                            # Вычисляем remaining_size как original_size - sum(partial_exit_sizes)
+                            original_size = pos.meta.get("original_size", pos.size)
+                            total_exited = sum(e.get("exit_size", 0.0) for e in partial_exits if not e.get("is_remainder", False))
+                            remaining_size = max(0.0, original_size - total_exited)
+                    
                     executions_rows.append({
                         "position_id": pos.position_id,
                         "signal_id": pos.signal_id,
@@ -1349,7 +1368,7 @@ class Reporter:
                         "event_time": pos.exit_time.isoformat(),
                         "event_type": "final_exit",
                         "event_id": pos.meta.get("close_event_id") if pos.meta else None,
-                        "qty_delta": -pos.size,
+                        "qty_delta": -remaining_size,  # Используем remaining_size вместо pos.size
                         "raw_price": raw_exit_price,
                         "exec_price": exec_exit_price,
                         "fees_sol": fees_total,

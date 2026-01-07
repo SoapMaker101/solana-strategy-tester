@@ -1339,8 +1339,11 @@ class PortfolioEngine:
             balance += notional_after_fees
             balance -= network_fee_exit
             
-            # Уменьшаем размер позиции
+            # Уменьшаем размер позиции (remaining_size)
             pos.size -= exit_size
+            
+            # Сохраняем remaining_size в meta для использования в reporter
+            pos.meta["remaining_size"] = pos.size
             
             # ВАЖНО: Математический pnl_pct для meta (без учета slippage/fees)
             # Тест ожидает: pnl_pct_contrib = f * (xn - 1.0) * 100.0
@@ -1404,15 +1407,21 @@ class PortfolioEngine:
                 })
             
             # Обновляем общие fees
+            # ВАЖНО: fees_total_sol будет пересчитан в конце из всех executions (TASK 3)
+            # Здесь только накапливаем для промежуточных расчетов
             if "fees_total_sol" in pos.meta:
                 pos.meta["fees_total_sol"] += fees_partial + network_fee_exit
             else:
-                pos.meta["fees_total_sol"] = fees_partial + network_fee_exit
+                # Начальное значение: network_fee при входе (если есть) + fees_partial + network_fee_exit
+                network_fee_entry = pos.meta.get("network_fee_sol", 0.0)
+                pos.meta["fees_total_sol"] = network_fee_entry + fees_partial + network_fee_exit
             
             if "network_fee_sol" in pos.meta:
                 pos.meta["network_fee_sol"] += network_fee_exit
             else:
-                pos.meta["network_fee_sol"] = network_fee_exit
+                # Начальное значение: network_fee при входе (если есть) + network_fee_exit
+                network_fee_entry = pos.meta.get("network_fee_sol", 0.0)
+                pos.meta["network_fee_sol"] = network_fee_entry + network_fee_exit
             
             # Помечаем уровень как обработанный
             pos.meta[processed_key] = True
@@ -1501,6 +1510,7 @@ class PortfolioEngine:
                 # Помечаем остаток как закрытый
                 pos.meta[remainder_closed_key] = True
                 pos.size = 0.0
+                pos.meta["remaining_size"] = 0.0
         
         # Если позиция полностью закрыта после partial exits
         # НЕ добавляем в closed_positions здесь - это будет сделано в _process_position_exit
@@ -1510,10 +1520,71 @@ class PortfolioEngine:
             # Обновляем общий PnL позиции
             total_pnl_sol = sum(exit.get("pnl_sol", 0.0) for exit in pos.meta.get("partial_exits", []))
             pos.meta["pnl_sol"] = total_pnl_sol
-            fractions = pos.meta.get("fractions_exited", {})
-            realized_multiple = sum(float(xn) * float(frac) for xn, frac in fractions.items()) if fractions else pos.meta.get("realized_multiple", 1.0)
+            
+            # TASK 3: Пересчитываем fees_total_sol из executions (один источник истины)
+            # Суммируем fees из всех partial_exits (включая network_fee для каждого exit)
+            fees_from_partial_exits = sum(
+                exit.get("fees_sol", 0.0) + exit.get("network_fee_sol", 0.0)
+                for exit in pos.meta.get("partial_exits", [])
+            )
+            # Добавляем network_fee при входе (если есть, и если он еще не учтен)
+            # network_fee_sol в meta может содержать только entry fee, или entry + exit fees
+            # Проверяем: если network_fee_sol == sum(network_fee_exit из partial_exits), значит entry fee не учтен
+            network_fee_exits_total = sum(
+                exit.get("network_fee_sol", 0.0)
+                for exit in pos.meta.get("partial_exits", [])
+            )
+            network_fee_entry = pos.meta.get("network_fee_sol", 0.0) - network_fee_exits_total
+            if network_fee_entry < 0:
+                network_fee_entry = 0.0  # Защита от отрицательных значений
+            
+            fees_total_sol = fees_from_partial_exits + network_fee_entry
+            pos.meta["fees_total_sol"] = fees_total_sol
+            
+            # TASK 4: Пересчитываем realized_multiple / pnl_pct_total по ledger (executions)
+            # Считаем proceeds по executions:
+            # - Для partial exit: proceeds += abs(qty_delta) * xn
+            # - Для final exit (time_stop): proceeds += abs(qty_delta) * (exec_price / exec_entry_price)
+            original_size = pos.meta.get("original_size", pos.size)
+            exec_entry_price = pos.meta.get("exec_entry_price", pos.entry_price)
+            proceeds_total = 0.0
+            
+            for exit in pos.meta.get("partial_exits", []):
+                exit_size = exit.get("exit_size", 0.0)
+                if exit.get("is_remainder", False):
+                    # Final exit (time_stop) - используем exec_price / exec_entry_price
+                    exit_price = exit.get("exit_price", 0.0)
+                    if exec_entry_price > 0:
+                        xn = exit_price / exec_entry_price
+                    else:
+                        xn = 1.0
+                else:
+                    # Partial exit - используем xn из уровня
+                    xn = exit.get("xn", 1.0)
+                
+                proceeds_total += exit_size * xn
+            
+            # Если нет partial_exits, используем fallback на fractions_exited
+            if proceeds_total == 0.0:
+                fractions = pos.meta.get("fractions_exited", {})
+                realized_multiple = sum(float(xn) * float(frac) for xn, frac in fractions.items()) if fractions else pos.meta.get("realized_multiple", 1.0)
+            else:
+                # realized_multiple = proceeds_total / initial_size_sol
+                if original_size > 0:
+                    realized_multiple = proceeds_total / original_size
+                else:
+                    realized_multiple = 1.0
+            
             pos.meta["realized_multiple"] = realized_multiple
             pos.pnl_pct = float(realized_multiple) - 1.0
+            
+            # Пересчитываем pnl_sol по формуле: pnl_sol = initial_size * (realized_multiple - 1) - fees_total_sol
+            if original_size > 0:
+                pnl_sol_recalculated = original_size * (realized_multiple - 1.0) - fees_total_sol
+                # Используем пересчитанное значение, если оно отличается от суммы partial_exits
+                # (это может быть из-за округлений или других факторов)
+                pos.meta["pnl_sol"] = pnl_sol_recalculated
+            
             pos.meta["close_reason"] = "time_stop" if pos.meta.get("time_stop_triggered") else "ladder_tp"
             # НЕ добавляем в closed_positions - это будет сделано в _process_position_exit
         

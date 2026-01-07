@@ -39,9 +39,15 @@ class RunnerConfig(StrategyConfig):
         params: Словарь параметров (для обратной совместимости)
         take_profit_levels: Список уровней тейк-профита
         use_high_for_targets: Использовать HIGH свечи для определения достижения уровней
+        exit_on_first_tp: Если True, закрывать всю позицию на первом TP (по умолчанию False)
+        allow_partial_fills: Если True, разрешить частичные фиксации (по умолчанию True)
+        time_stop_minutes: Максимальное время удержания позиции в минутах (опционально)
     """
     take_profit_levels: List[RunnerTakeProfitLevel] = field(default_factory=list)
     use_high_for_targets: bool = True
+    exit_on_first_tp: bool = False
+    allow_partial_fills: bool = True
+    time_stop_minutes: Optional[int] = None
     
     def __post_init__(self):
         """Инициализация после создания dataclass."""
@@ -65,7 +71,9 @@ def create_runner_config_from_dict(
         params: Словарь параметров, содержащий:
             - take_profit_levels: список словарей с ключами "xn" и "fraction"
             - use_high_for_targets: bool (опционально, по умолчанию True)
-            - time_stop_minutes: int или None (deprecated, игнорируется)
+            - exit_on_first_tp: bool (опционально, по умолчанию False)
+            - allow_partial_fills: bool (опционально, по умолчанию True)
+            - time_stop_minutes: int или None (максимальное время удержания позиции в минутах)
     
     Returns:
         RunnerConfig объект
@@ -96,8 +104,16 @@ def create_runner_config_from_dict(
     # Извлекаем use_high_for_targets (по умолчанию True)
     use_high_for_targets = params.get("use_high_for_targets", True)
     
-    # time_stop_minutes игнорируется (удален в Этапе 3)
-    # Но не вызываем ошибку, если он присутствует для обратной совместимости
+    # Извлекаем exit_on_first_tp (по умолчанию False)
+    exit_on_first_tp = params.get("exit_on_first_tp", False)
+    
+    # Извлекаем allow_partial_fills (по умолчанию True)
+    allow_partial_fills = params.get("allow_partial_fills", True)
+    
+    # Извлекаем time_stop_minutes (опционально)
+    time_stop_minutes = params.get("time_stop_minutes", None)
+    if time_stop_minutes is not None:
+        time_stop_minutes = int(time_stop_minutes)
     
     # Создаем RunnerConfig
     config = RunnerConfig(
@@ -106,6 +122,9 @@ def create_runner_config_from_dict(
         params=params,  # Сохраняем оригинальные params для обратной совместимости
         take_profit_levels=take_profit_levels,
         use_high_for_targets=use_high_for_targets,
+        exit_on_first_tp=exit_on_first_tp,
+        allow_partial_fills=allow_partial_fills,
+        time_stop_minutes=time_stop_minutes,
     )
     
     return config
