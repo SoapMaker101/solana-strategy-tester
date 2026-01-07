@@ -13,6 +13,7 @@ from typing import Dict, Optional
 import pandas as pd
 
 from .runner_config import RunnerConfig
+from ..utils.typing_utils import as_utc_datetime
 
 
 @dataclass
