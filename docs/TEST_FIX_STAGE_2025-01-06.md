@@ -444,3 +444,16 @@ python -m pytest tests/decision -q
 
 **ВАЖНО:** Документ НЕ содержит выдуманных подробностей. Если где-то нужна проверка в коде — помечено как "TBD (найти в repo)" или "TBD: нужно подтвердить в файле X".
 
+Важно: маленькая ремарка по V2 “хаку”
+
+То, что Cursor добавил “если criteria выглядит как RunnerCriteriaV2 → использовать как runner_criteria и подставить DEFAULT_CRITERIA_V1” — ок для тестов, но это место риска.
+
+После общего прогона предлагаю (уже после зелени) сделать микро-рефактор:
+
+select_strategies(stability_df, base_criteria: SelectionCriteria, runner_criteria: Optional[RunnerCriteria])
+
+а в CLI/пайплайне явно передавать, чтобы не было магии с hasattr.
+
+Но это после того, как всё зелёное.
+
+Жду вывод pytest tests/ -q.
