@@ -114,8 +114,13 @@ class RunnerLadderEngine:
                 
                 # Проверяем, достигнут ли уровень
                 if row['high'] >= target_price:
-                    hit_time = candle_time
-                    levels_hit[xn] = hit_time.to_pydatetime() if hasattr(hit_time, 'to_pydatetime') else hit_time
+                    hit_time_raw = candle_time
+                    # Нормализуем к pd.Timestamp, затем к datetime
+                    hit_time_ts = as_utc_datetime(hit_time_raw)
+                    if hit_time_ts is not None:
+                        hit_time = hit_time_ts.to_pydatetime() if isinstance(hit_time_ts, pd.Timestamp) else hit_time_ts
+                        levels_hit[xn] = hit_time
+                    break
                     
                     # Закрываем долю на этом уровне
                     actual_fraction = min(fraction, remaining_fraction)
@@ -140,7 +145,11 @@ class RunnerLadderEngine:
             # Хотя бы один уровень достигнут - это ladder take profit
             reason = "ladder_tp"
             # Берем время последнего достигнутого уровня
-            exit_time = max(levels_hit.values())
+            exit_times = list(levels_hit.values())
+            if exit_times:
+                exit_time = max(exit_times)
+            else:
+                exit_time = None
         else:
             # Ни один уровень не достигнут - проверяем time_stop
             reason = "time_stop"
@@ -148,16 +157,25 @@ class RunnerLadderEngine:
                 # Вычисляем время time_stop
                 time_stop_time = entry_time + pd.Timedelta(minutes=max_hold_minutes)
                 # Проверяем, не превысили ли мы time_stop
-                last_candle_time = pd.to_datetime(candles_df.iloc[-1]['timestamp'])
-                if last_candle_time >= time_stop_time:
-                    exit_time = time_stop_time
+                last_candle_time_raw = pd.to_datetime(candles_df.iloc[-1]['timestamp'])
+                last_candle_time_ts = as_utc_datetime(last_candle_time_raw)
+                if last_candle_time_ts is not None and isinstance(last_candle_time_ts, pd.Timestamp):
+                    last_candle_time = last_candle_time_ts.to_pydatetime()
+                    if last_candle_time >= time_stop_time.to_pydatetime() if isinstance(time_stop_time, pd.Timestamp) else time_stop_time:
+                        exit_time = time_stop_time.to_pydatetime() if isinstance(time_stop_time, pd.Timestamp) else time_stop_time
+                    else:
+                        # Данные закончились до time_stop - закрываемся по последней свече
+                        exit_time = last_candle_time
                 else:
-                    # Данные закончились до time_stop - закрываемся по последней свече
-                    exit_time = last_candle_time.to_pydatetime() if hasattr(last_candle_time, 'to_pydatetime') else last_candle_time
+                    exit_time = None
             else:
                 # Нет max_hold_minutes - закрываемся по последней свече
-                last_candle_time = pd.to_datetime(candles_df.iloc[-1]['timestamp'])
-                exit_time = last_candle_time.to_pydatetime() if hasattr(last_candle_time, 'to_pydatetime') else last_candle_time
+                last_candle_time_raw = pd.to_datetime(candles_df.iloc[-1]['timestamp'])
+                last_candle_time_ts = as_utc_datetime(last_candle_time_raw)
+                if last_candle_time_ts is not None and isinstance(last_candle_time_ts, pd.Timestamp):
+                    exit_time = last_candle_time_ts.to_pydatetime()
+                else:
+                    exit_time = None
         
         # Находим цену на момент exit_time
         if exit_time:
@@ -179,10 +197,22 @@ class RunnerLadderEngine:
             else:
                 realized_pnl_pct = 0.0
         
+        # Нормализуем exit_time к datetime
+        exit_time_dt: Optional[datetime] = None
+        if exit_time is not None:
+            if isinstance(exit_time, pd.Timestamp):
+                exit_time_dt = exit_time.to_pydatetime()
+            elif isinstance(exit_time, datetime):
+                exit_time_dt = exit_time
+            else:
+                exit_time_ts = as_utc_datetime(exit_time)
+                if exit_time_ts is not None and isinstance(exit_time_ts, pd.Timestamp):
+                    exit_time_dt = exit_time_ts.to_pydatetime()
+        
         return RunnerTradeResult(
             entry_time=entry_time,
             entry_price=entry_price,
-            exit_time=exit_time.to_pydatetime() if exit_time and hasattr(exit_time, 'to_pydatetime') else exit_time,
+            exit_time=exit_time_dt,
             exit_price=exit_price,
             realized_pnl_pct=realized_pnl_pct,
             reason=reason,

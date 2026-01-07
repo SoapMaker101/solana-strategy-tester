@@ -86,7 +86,13 @@ class StrategyOutput:
             # Если reason уже канонический (например "ladder_tp" или "max_hold_minutes" в тестах портфеля)
             reason_str = str(self.reason).strip().lower()
             if reason_str in valid_canonical:
-                self.canonical_reason = reason_str
+                # Type narrowing: reason_str is guaranteed to be in valid_canonical
+                from typing import cast, Literal
+                CanonicalReason = Literal[
+                    "ladder_tp", "stop_loss", "time_stop", "capacity_prune",
+                    "profit_reset", "manual_close", "no_entry", "error", "max_hold_minutes"
+                ]
+                self.canonical_reason = cast(CanonicalReason, reason_str)  # type: ignore[assignment]
                 return
             
             # Маппинг legacy → canonical
@@ -99,4 +105,10 @@ class StrategyOutput:
             }
             # Маппим legacy → canonical
             # Если reason не найден в маппинге и не канонический - используем как есть (может быть "max_hold_minutes" и т.д.)
-            self.canonical_reason = legacy_to_canonical.get(reason_str, reason_str if reason_str in valid_canonical else "error")
+            mapped_reason = legacy_to_canonical.get(reason_str, reason_str if reason_str in valid_canonical else "error")
+            from typing import cast, Literal
+            CanonicalReason = Literal[
+                "ladder_tp", "stop_loss", "time_stop", "capacity_prune",
+                "profit_reset", "manual_close", "no_entry", "error", "max_hold_minutes"
+            ]
+            self.canonical_reason = cast(CanonicalReason, mapped_reason)  # type: ignore[assignment]

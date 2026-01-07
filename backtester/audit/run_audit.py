@@ -20,7 +20,11 @@ def _load_csv(path: Path) -> pd.DataFrame | None:
     if not path.exists():
         return None
     try:
-        return pd.read_csv(path)
+        df = pd.read_csv(path)
+        # pd.read_csv returns DataFrame when chunksize is not specified
+        if isinstance(df, pd.DataFrame):
+            return df
+        return None
     except Exception:
         return None
 

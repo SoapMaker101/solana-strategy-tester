@@ -3,11 +3,19 @@
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import TYPE_CHECKING, Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
 import warnings
+
+try:
+    import xlsxwriter  # type: ignore[import-not-found]
+except Exception:  # noqa: BLE001
+    xlsxwriter = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:
+    import xlsxwriter as xlsxwriter_typed  # type: ignore[import-not-found]
 
 
 def has_excel_engine() -> bool:
@@ -17,11 +25,8 @@ def has_excel_engine() -> bool:
     Returns:
         True если есть xlsxwriter или openpyxl, иначе False
     """
-    try:
-        import xlsxwriter  # noqa
+    if xlsxwriter is not None:
         return True
-    except Exception:
-        pass
     try:
         import openpyxl  # noqa
         return True
@@ -44,7 +49,8 @@ def _normalize_datetime_columns(df: pd.DataFrame) -> pd.DataFrame:
     for col in work_df.columns:
         # Проверяем pandas datetime dtype с timezone
         if pd.api.types.is_datetime64_any_dtype(work_df[col]):
-            if work_df[col].dtype.tz is not None:
+            col_dtype = work_df[col].dtype
+            if hasattr(col_dtype, 'tz') and col_dtype.tz is not None:  # type: ignore[attr-defined]
                 # Конвертируем tz-aware в UTC, затем убираем timezone
                 work_df[col] = work_df[col].dt.tz_convert("UTC").dt.tz_localize(None)
         
@@ -77,10 +83,9 @@ def _pick_excel_engine() -> str:
     Raises:
         ImportError если ни один движок не установлен
     """
-    try:
-        import xlsxwriter  # noqa
+    if xlsxwriter is not None:
         return "xlsxwriter"
-    except Exception:
+    else:
         try:
             import openpyxl  # noqa
             return "openpyxl"

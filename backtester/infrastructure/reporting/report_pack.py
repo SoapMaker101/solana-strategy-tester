@@ -23,7 +23,7 @@ def _has_excel_engine() -> bool:
     except ImportError:
         pass
     try:
-        import xlsxwriter  # noqa
+        import xlsxwriter  # type: ignore[import-not-found]  # noqa
         return True
     except ImportError:
         return False
@@ -45,7 +45,7 @@ def _pick_excel_engine() -> str:
         return "openpyxl"
     except ImportError:
         try:
-            import xlsxwriter  # noqa
+            import xlsxwriter  # type: ignore[import-not-found]  # noqa
             return "xlsxwriter"
         except ImportError:
             raise ImportError("Neither openpyxl nor xlsxwriter is installed")

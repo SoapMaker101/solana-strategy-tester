@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import math
 import pandas as pd
+from ..utils.typing_utils import safe_float, isin_values
 
 
 @dataclass(frozen=True)
@@ -101,9 +102,8 @@ class InvariantChecker:
                 reason = row.get("reason")
                 if reason == "stop_loss":
                     pnl_val = row.get(pnl_col)
-                    try:
-                        pnl_val = float(pnl_val)
-                    except (TypeError, ValueError):
+                    pnl_val = safe_float(pnl_val, default=0.0)
+                    if pnl_val == 0.0 and pd.isna(row.get(pnl_col)):
                         continue
                     if pnl_val >= 0:
                         self._add(
@@ -128,14 +128,14 @@ class InvariantChecker:
         positions_reset = []
         if self.positions_df is not None and "reset_reason" in self.positions_df.columns:
             positions_reset = self.positions_df[
-                self.positions_df["reset_reason"].isin(reset_reasons)
+                self.positions_df["reset_reason"].isin(isin_values(reset_reasons))
             ]
 
         events_reset = []
         if self.events_df is not None and "reason" in self.events_df.columns:
             events_reset = self.events_df[
                 (self.events_df["event_type"] == "POSITION_CLOSED")
-                & (self.events_df["reason"].isin(reset_reasons))
+                & (self.events_df["reason"].isin(isin_values(reset_reasons)))
             ]
 
         if (len(positions_reset) > 0 or len(events_reset) > 0) and len(reset_events) == 0:
@@ -165,7 +165,7 @@ class InvariantChecker:
             return
 
         close_events = events[events["event_type"] == "POSITION_CLOSED"]
-        close_event_ids = set(close_events["position_id"].dropna().astype(str))
+        close_event_ids = set(pd.Series(close_events["position_id"]).dropna().astype(str))
 
         for _, row in positions.iterrows():
             if str(row.get("status")).lower() == "closed":
@@ -179,7 +179,7 @@ class InvariantChecker:
                     )
 
         open_positions = positions[positions["status"].astype(str).str.lower() == "open"]
-        open_ids = set(open_positions["position_id"].dropna().astype(str))
+        open_ids = set(pd.Series(open_positions["position_id"]).dropna().astype(str))
         for _, row in close_events.iterrows():
             pid = str(row.get("position_id"))
             if pid in open_ids:

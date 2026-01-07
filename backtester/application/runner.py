@@ -12,6 +12,7 @@ from ..domain.models import StrategyInput, StrategyOutput, Signal, Candle  # О�
 from ..domain.portfolio import PortfolioConfig, PortfolioEngine, FeeModel, PortfolioResult  # Портфельный слой
 from ..domain.execution_model import ExecutionProfileConfig  # Execution profiles
 from ..utils.warn_dedup import WarnDedup  # Потокобезопасный класс для дедупликации предупреждений
+from ..utils.typing_utils import safe_float
 
 class BacktestRunner:
     """
@@ -355,7 +356,7 @@ class BacktestRunner:
         # Legacy slippage_pct (используется если profiles отсутствует)
         slippage_pct = None
         if "slippage_pct" in fee_cfg:
-            slippage_pct = float(fee_cfg.get("slippage_pct"))
+            slippage_pct = safe_float(fee_cfg.get("slippage_pct"), default=0.0)
         
         fee_model = FeeModel(
             swap_fee_pct=float(fee_cfg.get("swap_fee_pct", 0.003)),
@@ -414,7 +415,7 @@ class BacktestRunner:
             backtest_end=backtest_end,
             runner_reset_enabled=portfolio_cfg.get("runner_reset_enabled"),
             runner_reset_multiple=(
-                float(portfolio_cfg.get("runner_reset_multiple"))
+                safe_float(portfolio_cfg.get("runner_reset_multiple"), default=0.0)
                 if portfolio_cfg.get("runner_reset_multiple") is not None
                 else None
             ),

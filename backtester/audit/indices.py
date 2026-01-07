@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Set, Any
 from collections import defaultdict
 import pandas as pd
+from ..utils.typing_utils import is_nonempty_df, is_nonempty_series
 
 
 class AuditIndices:
@@ -33,10 +34,10 @@ class AuditIndices:
         self.prune_events: List[Dict[str, Any]] = []
         self.close_all_events: List[Dict[str, Any]] = []
         
-        if events_df is not None and len(events_df) > 0:
+        if is_nonempty_df(events_df):
             self._build_events_indices(events_df)
         
-        if executions_df is not None and len(executions_df) > 0:
+        if is_nonempty_df(executions_df):
             self._build_executions_indices(executions_df)
     
     def _build_events_indices(self, events_df: pd.DataFrame) -> None:
@@ -47,12 +48,12 @@ class AuditIndices:
             
             # Индекс по position_id
             position_id = row.get("position_id")
-            if pd.notna(position_id) and position_id:
+            if pd.notna(position_id) and str(position_id).strip():
                 self.events_by_position_id[str(position_id)].append(event_dict)
             
             # Индекс по signal_id
             signal_id = row.get("signal_id")
-            if pd.notna(signal_id) and signal_id:
+            if pd.notna(signal_id) and str(signal_id).strip():
                 self.events_by_signal_id[str(signal_id)].append(event_dict)
             
             # Индекс по (strategy, signal_id, contract_address)
@@ -77,12 +78,12 @@ class AuditIndices:
             
             # Индекс по position_id
             position_id = row.get("position_id")
-            if pd.notna(position_id) and position_id:
+            if pd.notna(position_id) and str(position_id).strip():
                 self.executions_by_position_id[str(position_id)].append(exec_dict)
             
             # Индекс по signal_id
             signal_id = row.get("signal_id")
-            if pd.notna(signal_id) and signal_id:
+            if pd.notna(signal_id) and str(signal_id).strip():
                 self.executions_by_signal_id[str(signal_id)].append(exec_dict)
     
     def get_events_for_position(

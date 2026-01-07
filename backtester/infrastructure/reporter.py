@@ -730,11 +730,13 @@ class Reporter:
             sheets["positions"] = pd.DataFrame(positions_data)
         else:
             # Пустой DataFrame с правильными колонками
-            sheets["positions"] = pd.DataFrame([], columns=[
-                "position_id", "signal_id", "contract_address", "entry_time", "entry_price",
-                "exit_time", "exit_price", "size_sol", "pnl_pct", "pnl_sol",
-                "raw_pnl_pct", "fee_pct", "status", "reason"
-            ])
+            sheets["positions"] = pd.DataFrame(  # type: ignore[call-overload]
+                [], columns=[
+                    "position_id", "signal_id", "contract_address", "entry_time", "entry_price",
+                    "exit_time", "exit_price", "size_sol", "pnl_pct", "pnl_sol",
+                    "raw_pnl_pct", "fee_pct", "status", "reason"
+                ]
+            )
         
         # Лист 2: Equity Curve
         valid_equity = [
@@ -744,7 +746,7 @@ class Reporter:
         if valid_equity:
             sheets["equity_curve"] = pd.DataFrame(valid_equity)
         else:
-            sheets["equity_curve"] = pd.DataFrame([], columns=["timestamp", "balance"])
+            sheets["equity_curve"] = pd.DataFrame([], columns=["timestamp", "balance"])  # type: ignore[call-overload]
         
         # Лист 3: Stats
         stats_data = {
@@ -1083,7 +1085,7 @@ class Reporter:
             df = df[expected_columns]
             # Сортируем по entry_time для консистентности
             df["entry_time_dt"] = pd.to_datetime(df["entry_time"], utc=True)
-            df = df.sort_values("entry_time_dt")
+            df = df.sort_values(by="entry_time_dt")
             df = df.drop("entry_time_dt", axis=1)
         else:
             # Создаем пустой DataFrame с правильными колонками (порядок согласно ТЗ v2.0.1)
@@ -1591,7 +1593,8 @@ class Reporter:
             # Критически важно: final_exit_json должен быть пустой строкой, а не NaN
             if "final_exit_json" in df.columns:
                 # Используем pandas nullable string dtype и заполняем NaN пустыми строками
-                df["final_exit_json"] = df["final_exit_json"].astype("string").fillna("")
+                s = pd.Series(df["final_exit_json"]) if not isinstance(df["final_exit_json"], pd.Series) else df["final_exit_json"]
+                df["final_exit_json"] = s.astype("string").fillna("")
         else:
             # Создаём пустой DataFrame с header
             df = pd.DataFrame(columns=columns)  # type: ignore[arg-type]

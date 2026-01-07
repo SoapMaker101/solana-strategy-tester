@@ -11,6 +11,7 @@ import pandas as pd
 from .selection_rules import SelectionCriteria, DEFAULT_RUNNER_CRITERIA, DEFAULT_RUNNER_CRITERIA_V2, DEFAULT_CRITERIA_V1
 import numpy as np
 import pandas as pd
+from ..utils.typing_utils import safe_float, is_nonempty_series
 
 
 def is_runner_strategy(strategy_name: str) -> bool:
@@ -53,7 +54,7 @@ def check_strategy_criteria(
         if name not in row or pd.isna(row[name]):
             failed_reasons.append(f"missing_{name}")
             return None
-        return float(row[name])
+        return safe_float(row[name], default=0.0)
     
     # Базовые критерии (SelectionCriteria v1) - обязательные
     survival = get("survival_rate")
@@ -107,7 +108,7 @@ def check_strategy_criteria(
                 if pd.isna(hit_rate_x4):
                     failed_reasons.append("missing_hit_rate_x4")
                 else:
-                    hit_rate_x4 = float(hit_rate_x4)
+                    hit_rate_x4 = safe_float(hit_rate_x4, default=0.0)
                     if hit_rate_x4 < min_hit_rate_x4:
                         failed_reasons.append(f"hit_rate_x4 {hit_rate_x4:.3f} < {min_hit_rate_x4}")
             
@@ -117,7 +118,7 @@ def check_strategy_criteria(
                 if pd.isna(tail_pnl_share):
                     failed_reasons.append("missing_tail_pnl_share")
                 else:
-                    tail_pnl_share = float(tail_pnl_share)
+                    tail_pnl_share = safe_float(tail_pnl_share, default=0.0)
                     if tail_pnl_share < min_tail_pnl_share:
                         failed_reasons.append(f"tail_pnl_share {tail_pnl_share:.3f} < {min_tail_pnl_share}")
             
@@ -127,14 +128,14 @@ def check_strategy_criteria(
                 if pd.isna(non_tail_pnl_share):
                     failed_reasons.append("missing_non_tail_pnl_share")
                 else:
-                    non_tail_pnl_share = float(non_tail_pnl_share)
+                    non_tail_pnl_share = safe_float(non_tail_pnl_share, default=0.0)
                     if non_tail_pnl_share < min_non_tail_pnl_share:
                         failed_reasons.append(f"non_tail_pnl_share {non_tail_pnl_share:.3f} < {min_non_tail_pnl_share}")
             
             # max_drawdown_pct (опционально для V2)
             if runner_criteria.max_drawdown_pct is not None and "max_drawdown_pct" in row:
-                max_drawdown_pct = row.get("max_drawdown_pct", 0.0)
-                if not pd.isna(max_drawdown_pct) and max_drawdown_pct < runner_criteria.max_drawdown_pct:
+                max_drawdown_pct = safe_float(row.get("max_drawdown_pct", 0.0), default=0.0)
+                if max_drawdown_pct < runner_criteria.max_drawdown_pct:
                     failed_reasons.append(
                         f"max_drawdown_pct {max_drawdown_pct:.3f} < {runner_criteria.max_drawdown_pct}"
                     )
@@ -170,25 +171,25 @@ def check_strategy_criteria(
                         )
                 
                 if runner_criteria.max_p90_hold_days is not None and "p90_hold_days" in row:
-                    p90_hold_days = row.get("p90_hold_days", float('inf'))
-                    if pd.isna(p90_hold_days):
-                        p90_hold_days = float('inf')
+                    p90_hold_days_raw = row.get("p90_hold_days", float('inf'))
+                    p90_hold_days = safe_float(p90_hold_days_raw, default=float('inf'))
                     if p90_hold_days > runner_criteria.max_p90_hold_days:
                         failed_reasons.append(
                             f"p90_hold_days {p90_hold_days:.2f} > {runner_criteria.max_p90_hold_days}"
                         )
                 
                 if runner_criteria.max_tail_contribution is not None:
-                    tail_contribution = row.get("tail_contribution", row.get("tail_pnl_share", 0.0))
-                    if not pd.isna(tail_contribution) and tail_contribution > runner_criteria.max_tail_contribution:
+                    tail_contribution_raw = row.get("tail_contribution", row.get("tail_pnl_share", 0.0))
+                    tail_contribution = safe_float(tail_contribution_raw, default=0.0)
+                    if tail_contribution > runner_criteria.max_tail_contribution:
                         metric_name = "tail_pnl_share" if "tail_pnl_share" in row else "tail_contribution"
                         failed_reasons.append(
                             f"{metric_name} {tail_contribution:.3f} > {runner_criteria.max_tail_contribution}"
                         )
                 
                 if runner_criteria.max_drawdown_pct is not None and "max_drawdown_pct" in row:
-                    max_drawdown_pct = row.get("max_drawdown_pct", 0.0)
-                    if not pd.isna(max_drawdown_pct) and max_drawdown_pct < runner_criteria.max_drawdown_pct:
+                    max_drawdown_pct = safe_float(row.get("max_drawdown_pct", 0.0), default=0.0)
+                    if max_drawdown_pct < runner_criteria.max_drawdown_pct:
                         failed_reasons.append(
                             f"max_drawdown_pct {max_drawdown_pct:.3f} < {runner_criteria.max_drawdown_pct}"
                         )
@@ -306,7 +307,7 @@ def normalize_stability_schema(df: pd.DataFrame) -> pd.DataFrame:
     
     # Заполняем windows_positive только если он NaN
     mask_na = pd.isna(df["windows_positive"])
-    if mask_na.any():
+    if isinstance(mask_na, pd.Series) and mask_na.any():
         if "survival_rate" in df.columns and "windows_total" in df.columns:
             # Безопасное заполнение NaN перед вычислением
             survival_rate_filled = df.loc[mask_na, "survival_rate"].fillna(0.0)
@@ -341,7 +342,8 @@ def normalize_stability_schema(df: pd.DataFrame) -> pd.DataFrame:
     for field in int_like_fields:
         if field in df.columns:
             # Безопасное заполнение NaN и каст в int
-            df[field] = pd.to_numeric(df[field], errors="coerce").fillna(0).astype(int)
+            s = pd.Series(df[field]) if not isinstance(df[field], pd.Series) else df[field]
+            df[field] = pd.to_numeric(s, errors="coerce").fillna(0).astype(int)
     
     # Float полей
     float_fields = {
@@ -353,7 +355,8 @@ def normalize_stability_schema(df: pd.DataFrame) -> pd.DataFrame:
     
     for field, default_value in float_fields.items():
         if field in df.columns:
-            df[field] = pd.to_numeric(df[field], errors="coerce").fillna(default_value)
+            s = pd.Series(df[field]) if not isinstance(df[field], pd.Series) else df[field]
+            df[field] = pd.to_numeric(s, errors="coerce").fillna(default_value)
     
     return df
 

@@ -10,6 +10,7 @@ import pandas as pd
 from .data_loader import AuditDataLoader
 from .invariants import InvariantChecker, Anomaly
 from .report import AuditReport, generate_audit_report
+from ..utils.typing_utils import ensure_df
 
 
 def run_audit(
@@ -67,6 +68,11 @@ def run_audit(
     # Запускаем проверки инвариантов
     if verbose:
         print("[audit] Running invariant checks...")
+    
+    # Нормализуем типы для type checker
+    positions_df = ensure_df(positions_df)
+    events_df = None if events_df is None else ensure_df(events_df)
+    executions_df = None if executions_df is None else ensure_df(executions_df)
     
     checker = InvariantChecker(include_p1=True, include_p2=True)
     anomalies = checker.check_all(positions_df, events_df, executions_df)
