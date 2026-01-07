@@ -55,6 +55,12 @@ def check_strategy_criteria(
             failed_reasons.append(f"missing_{name}")
             return None
         val = row[name]
+        # Явная проверка на NaN без truthiness на потенциальном Series/NDFrame
+        # row[name] из Series.iterrows() возвращает скаляр, но basedpyright может не знать это
+        if isinstance(val, (pd.DataFrame, pd.Series)):
+            # Если это Series/DataFrame (не должно быть, но для типизации)
+            failed_reasons.append(f"missing_{name}")
+            return None
         if pd.isna(val):
             failed_reasons.append(f"missing_{name}")
             return None
@@ -67,13 +73,27 @@ def check_strategy_criteria(
     median = get("median_window_pnl")
     
     # windows_total может называться windows_total или windows (alias)
-    if "windows_total" in row and not pd.isna(row["windows_total"]):
-        windows_total = int(row["windows_total"])
-    elif "windows" in row and not pd.isna(row["windows"]):
-        windows_total = int(row["windows"])
+    # Явная проверка на NaN без truthiness на потенциальном Series/NDFrame
+    if "windows_total" in row:
+        windows_total_val = row["windows_total"]
+        if (windows_total_val is not None and 
+            not isinstance(windows_total_val, (pd.DataFrame, pd.Series)) and
+            not pd.isna(windows_total_val)):
+            windows_total = int(windows_total_val)
+        else:
+            windows_total = None
     else:
-        failed_reasons.append("missing_windows_total")
         windows_total = None
+    
+    if windows_total is None and "windows" in row:
+        windows_val = row["windows"]
+        if (windows_val is not None and 
+            not isinstance(windows_val, (pd.DataFrame, pd.Series)) and
+            not pd.isna(windows_val)):
+            windows_total = int(windows_val)
+    
+    if windows_total is None:
+        failed_reasons.append("missing_windows_total")
     
     # Проверка базовых критериев (только если значения не missing)
     if survival is not None and survival < criteria.min_survival_rate:
@@ -109,32 +129,41 @@ def check_strategy_criteria(
             # hit_rate_x4
             if "hit_rate_x4" in row:
                 hit_rate_x4 = row.get("hit_rate_x4")
-                if pd.isna(hit_rate_x4):
-                    failed_reasons.append("missing_hit_rate_x4")
-                else:
+                # Явная проверка на NaN без truthiness на потенциальном Series/NDFrame
+                if (hit_rate_x4 is not None and 
+                    not isinstance(hit_rate_x4, (pd.DataFrame, pd.Series)) and
+                    not pd.isna(hit_rate_x4)):
                     hit_rate_x4 = safe_float(hit_rate_x4, default=0.0)
                     if hit_rate_x4 < min_hit_rate_x4:
                         failed_reasons.append(f"hit_rate_x4 {hit_rate_x4:.3f} < {min_hit_rate_x4}")
+                else:
+                    failed_reasons.append("missing_hit_rate_x4")
             
             # tail_pnl_share
             if "tail_pnl_share" in row:
                 tail_pnl_share = row.get("tail_pnl_share")
-                if pd.isna(tail_pnl_share):
-                    failed_reasons.append("missing_tail_pnl_share")
-                else:
+                # Явная проверка на NaN без truthiness на потенциальном Series/NDFrame
+                if (tail_pnl_share is not None and 
+                    not isinstance(tail_pnl_share, (pd.DataFrame, pd.Series)) and
+                    not pd.isna(tail_pnl_share)):
                     tail_pnl_share = safe_float(tail_pnl_share, default=0.0)
                     if tail_pnl_share < min_tail_pnl_share:
                         failed_reasons.append(f"tail_pnl_share {tail_pnl_share:.3f} < {min_tail_pnl_share}")
+                else:
+                    failed_reasons.append("missing_tail_pnl_share")
             
             # non_tail_pnl_share
             if "non_tail_pnl_share" in row:
                 non_tail_pnl_share = row.get("non_tail_pnl_share")
-                if pd.isna(non_tail_pnl_share):
-                    failed_reasons.append("missing_non_tail_pnl_share")
-                else:
+                # Явная проверка на NaN без truthiness на потенциальном Series/NDFrame
+                if (non_tail_pnl_share is not None and 
+                    not isinstance(non_tail_pnl_share, (pd.DataFrame, pd.Series)) and
+                    not pd.isna(non_tail_pnl_share)):
                     non_tail_pnl_share = safe_float(non_tail_pnl_share, default=0.0)
                     if non_tail_pnl_share < min_non_tail_pnl_share:
                         failed_reasons.append(f"non_tail_pnl_share {non_tail_pnl_share:.3f} < {min_non_tail_pnl_share}")
+                else:
+                    failed_reasons.append("missing_non_tail_pnl_share")
             
             # max_drawdown_pct (опционально для V2)
             if runner_criteria.max_drawdown_pct is not None and "max_drawdown_pct" in row:
@@ -318,6 +347,9 @@ def normalize_stability_schema(df: pd.DataFrame) -> pd.DataFrame:
             # Вычисляем и безопасно кастуем
             windows_positive_calc = (survival_rate_filled * windows_total_filled).round()
             # Заменяем NaN/Inf на 0 перед кастом
+            # Runtime guard для basedpyright: df.loc[] и операции над Series возвращают Series
+            # В runtime это всегда Series, но basedpyright не может это гарантировать
+            assert isinstance(windows_positive_calc, pd.Series), "windows_positive_calc должен быть Series в runtime"
             windows_positive_calc = windows_positive_calc.fillna(0).replace([float('inf'), float('-inf')], 0)
             df.loc[mask_na, "windows_positive"] = windows_positive_calc.astype(int)
             
@@ -345,7 +377,11 @@ def normalize_stability_schema(df: pd.DataFrame) -> pd.DataFrame:
         if field in df.columns:
             # Безопасное заполнение NaN и каст в int
             s = pd.Series(df[field]) if not isinstance(df[field], pd.Series) else df[field]
-            df[field] = pd.to_numeric(s, errors="coerce").fillna(0).astype(int)
+            # Runtime guard для basedpyright: pd.to_numeric() на Series возвращает Series
+            # В runtime это всегда Series, но basedpyright не может это гарантировать
+            numeric_result = pd.to_numeric(s, errors="coerce")
+            assert isinstance(numeric_result, pd.Series), "pd.to_numeric() на Series должен возвращать Series в runtime"
+            df[field] = numeric_result.fillna(0).astype(int)
     
     # Float полей
     float_fields = {
