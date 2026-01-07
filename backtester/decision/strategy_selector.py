@@ -51,10 +51,14 @@ def check_strategy_criteria(
     
     def get(name):
         """Безопасное получение значения из row."""
-        if name not in row or pd.isna(row[name]):
+        if name not in row:
             failed_reasons.append(f"missing_{name}")
             return None
-        return safe_float(row[name], default=0.0)
+        val = row[name]
+        if pd.isna(val):
+            failed_reasons.append(f"missing_{name}")
+            return None
+        return safe_float(val, default=0.0)
     
     # Базовые критерии (SelectionCriteria v1) - обязательные
     survival = get("survival_rate")
@@ -153,18 +157,16 @@ def check_strategy_criteria(
             if has_runner_metrics:
                 # Применяем Runner критерии V1 только если есть нужные колонки
                 if runner_criteria.min_hit_rate_x2 is not None and "hit_rate_x2" in row:
-                    hit_rate_x2 = row.get("hit_rate_x2", 0.0)
-                    if pd.isna(hit_rate_x2):
-                        hit_rate_x2 = 0.0
+                    hit_rate_x2_raw = row.get("hit_rate_x2", 0.0)
+                    hit_rate_x2 = safe_float(hit_rate_x2_raw, default=0.0)
                     if hit_rate_x2 < runner_criteria.min_hit_rate_x2:
                         failed_reasons.append(
                             f"hit_rate_x2 {hit_rate_x2:.3f} < {runner_criteria.min_hit_rate_x2}"
                         )
                 
                 if runner_criteria.min_hit_rate_x5 is not None and "hit_rate_x5" in row:
-                    hit_rate_x5 = row.get("hit_rate_x5", 0.0)
-                    if pd.isna(hit_rate_x5):
-                        hit_rate_x5 = 0.0
+                    hit_rate_x5_raw = row.get("hit_rate_x5", 0.0)
+                    hit_rate_x5 = safe_float(hit_rate_x5_raw, default=0.0)
                     if hit_rate_x5 < runner_criteria.min_hit_rate_x5:
                         failed_reasons.append(
                             f"hit_rate_x5 {hit_rate_x5:.3f} < {runner_criteria.min_hit_rate_x5}"
@@ -476,7 +478,7 @@ def generate_selection_table_from_stability(
             sheets["criteria_snapshot"] = pd.DataFrame(criteria_data)
         else:
             # Пустой DataFrame с базовыми колонками
-            sheets["criteria_snapshot"] = pd.DataFrame([], columns=["criteria_type"])
+            sheets["criteria_snapshot"] = pd.DataFrame([], columns=pd.Index(["criteria_type"]))
         
         save_xlsx(xlsx_path, sheets)
     

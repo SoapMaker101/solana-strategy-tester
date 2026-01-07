@@ -43,12 +43,20 @@ def filter_signals(
         filtered = filtered[filtered['status'] == 'ok']
     
     # Удаляем служебные колонки перед возвратом
-    # Гарантируем, что это DataFrame, не Series
-    if isinstance(filtered, pd.DataFrame):
-        result = filtered.drop(columns=['market_cap_proxy', 'status'], errors='ignore')
-    else:
-        # Если это Series (не должно быть, но для безопасности)
-        result = filtered.to_frame().drop(columns=['market_cap_proxy', 'status'], errors='ignore')
+    # Гарантируем, что это DataFrame, не Series или ndarray
+    if not isinstance(filtered, pd.DataFrame):
+        # Если это Series или ndarray, конвертируем в DataFrame
+        if isinstance(filtered, pd.Series):
+            filtered = filtered.to_frame()
+        else:
+            # Если это ndarray или другой тип, создаём DataFrame
+            import numpy as np
+            if isinstance(filtered, np.ndarray):
+                filtered = pd.DataFrame(filtered)
+            else:
+                filtered = pd.DataFrame(filtered)
+    
+    result = filtered.drop(columns=['market_cap_proxy', 'status'], errors='ignore')
     
     # Гарантируем возврат DataFrame
     if isinstance(result, pd.Series):

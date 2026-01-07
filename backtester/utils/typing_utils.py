@@ -49,13 +49,21 @@ def as_utc_datetime(value: Any) -> Optional[pd.Timestamp]:
     """
     Normalize value to pd.Timestamp for type safety.
     Does NOT change timezone/value if already Timestamp.
+    Returns None if value is None, NaT, or invalid.
     """
     if value is None:
         return None
     if isinstance(value, pd.Timestamp):
+        # Check if it's NaT
+        if pd.isna(value):
+            return None
         return value
     try:
-        return pd.Timestamp(value)
+        ts = pd.Timestamp(value)
+        # Check if conversion resulted in NaT
+        if pd.isna(ts):
+            return None
+        return ts
     except Exception:
         return None
 

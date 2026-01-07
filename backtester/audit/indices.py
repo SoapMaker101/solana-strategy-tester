@@ -40,21 +40,27 @@ class AuditIndices:
         if is_nonempty_df(executions_df):
             self._build_executions_indices(executions_df)
     
-    def _build_events_indices(self, events_df: pd.DataFrame) -> None:
+    def _build_events_indices(self, events_df: Optional[pd.DataFrame]) -> None:
         """Строит индексы по событиям."""
+        if events_df is None or events_df.empty:
+            return
         for _, row in events_df.iterrows():
             event_dict = row.to_dict()
             event_type = str(row.get("event_type", "")).lower()
             
             # Индекс по position_id
             position_id = row.get("position_id")
-            if pd.notna(position_id) and str(position_id).strip():
-                self.events_by_position_id[str(position_id)].append(event_dict)
+            if pd.notna(position_id):
+                position_id_str = str(position_id).strip()
+                if position_id_str:
+                    self.events_by_position_id[position_id_str].append(event_dict)
             
             # Индекс по signal_id
             signal_id = row.get("signal_id")
-            if pd.notna(signal_id) and str(signal_id).strip():
-                self.events_by_signal_id[str(signal_id)].append(event_dict)
+            if pd.notna(signal_id):
+                signal_id_str = str(signal_id).strip()
+                if signal_id_str:
+                    self.events_by_signal_id[signal_id_str].append(event_dict)
             
             # Индекс по (strategy, signal_id, contract_address)
             strategy = row.get("strategy")
@@ -71,20 +77,26 @@ class AuditIndices:
             if "close_all" in event_type:
                 self.close_all_events.append(event_dict)
     
-    def _build_executions_indices(self, executions_df: pd.DataFrame) -> None:
+    def _build_executions_indices(self, executions_df: Optional[pd.DataFrame]) -> None:
         """Строит индексы по исполнениям."""
+        if executions_df is None or executions_df.empty:
+            return
         for _, row in executions_df.iterrows():
             exec_dict = row.to_dict()
             
             # Индекс по position_id
             position_id = row.get("position_id")
-            if pd.notna(position_id) and str(position_id).strip():
-                self.executions_by_position_id[str(position_id)].append(exec_dict)
+            if pd.notna(position_id):
+                position_id_str = str(position_id).strip()
+                if position_id_str:
+                    self.executions_by_position_id[position_id_str].append(exec_dict)
             
             # Индекс по signal_id
             signal_id = row.get("signal_id")
-            if pd.notna(signal_id) and str(signal_id).strip():
-                self.executions_by_signal_id[str(signal_id)].append(exec_dict)
+            if pd.notna(signal_id):
+                signal_id_str = str(signal_id).strip()
+                if signal_id_str:
+                    self.executions_by_signal_id[signal_id_str].append(exec_dict)
     
     def get_events_for_position(
         self,

@@ -101,9 +101,10 @@ class InvariantChecker:
             for _, row in df.iterrows():
                 reason = row.get("reason")
                 if reason == "stop_loss":
-                    pnl_val = row.get(pnl_col)
-                    pnl_val = safe_float(pnl_val, default=0.0)
-                    if pnl_val == 0.0 and pd.isna(row.get(pnl_col)):
+                    pnl_val_raw = row.get(pnl_col)
+                    pnl_val = safe_float(pnl_val_raw, default=0.0)
+                    # Skip if value was actually NaN (not just 0.0)
+                    if pnl_val == 0.0 and (pnl_val_raw is None or (isinstance(pnl_val_raw, (int, float)) and pd.isna(pnl_val_raw))):
                         continue
                     if pnl_val >= 0:
                         self._add(

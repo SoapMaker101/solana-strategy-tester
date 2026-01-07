@@ -26,7 +26,7 @@ class PortfolioEventType(Enum):
     PORTFOLIO_RESET_TRIGGERED = "portfolio_reset_triggered"
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=False)
 class PortfolioEvent:
     """
     Canonical portfolio event (v2.0.1).

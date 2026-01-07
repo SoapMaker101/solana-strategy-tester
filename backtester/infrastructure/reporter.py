@@ -730,12 +730,12 @@ class Reporter:
             sheets["positions"] = pd.DataFrame(positions_data)
         else:
             # Пустой DataFrame с правильными колонками
-            sheets["positions"] = pd.DataFrame(  # type: ignore[call-overload]
-                [], columns=[
+            sheets["positions"] = pd.DataFrame(
+                [], columns=pd.Index([
                     "position_id", "signal_id", "contract_address", "entry_time", "entry_price",
                     "exit_time", "exit_price", "size_sol", "pnl_pct", "pnl_sol",
                     "raw_pnl_pct", "fee_pct", "status", "reason"
-                ]
+                ])
             )
         
         # Лист 2: Equity Curve
@@ -746,7 +746,7 @@ class Reporter:
         if valid_equity:
             sheets["equity_curve"] = pd.DataFrame(valid_equity)
         else:
-            sheets["equity_curve"] = pd.DataFrame([], columns=["timestamp", "balance"])  # type: ignore[call-overload]
+            sheets["equity_curve"] = pd.DataFrame([], columns=pd.Index(["timestamp", "balance"]))  # type: ignore[call-overload]
         
         # Лист 3: Stats
         stats_data = {
