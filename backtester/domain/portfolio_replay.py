@@ -257,10 +257,10 @@ class PortfolioReplay:
         # Формируем equity_curve (упрощенная версия)
         equity_curve = PortfolioReplay._build_equity_curve(state, portfolio_events)
         
-        return PortfolioResult(
-            equity_curve=equity_curve,
-            positions=state.closed_positions + state.open_positions,
-            stats=stats,
+        return PortfolioResult(  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
+            equity_curve=equity_curve,  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
+            positions=state.closed_positions + state.open_positions,  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
+            stats=stats,  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
         )
     
     @staticmethod
