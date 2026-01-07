@@ -61,9 +61,15 @@ def as_utc_datetime(value: Any) -> Optional[pd.Timestamp]:
     try:
         ts = pd.Timestamp(value)
         # Check if conversion resulted in NaT
-        if pd.isna(ts):
-            return None
-        return ts
+        # Явная проверка: pd.Timestamp() всегда возвращает pd.Timestamp (не NDFrame),
+        # но basedpyright может не знать это, поэтому проверяем тип перед pd.isna()
+        if isinstance(ts, pd.Timestamp):
+            # pd.isna() на pd.Timestamp всегда возвращает bool
+            if pd.isna(ts):
+                return None
+            return ts
+        # Если не pd.Timestamp (не должно быть в runtime) - возвращаем None
+        return None
     except Exception:
         return None
 

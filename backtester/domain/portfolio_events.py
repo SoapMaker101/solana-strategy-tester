@@ -26,7 +26,7 @@ class PortfolioEventType(Enum):
     PORTFOLIO_RESET_TRIGGERED = "portfolio_reset_triggered"
 
 
-@dataclass(frozen=True, kw_only=True, slots=False)
+@dataclass(frozen=True, kw_only=True, slots=False)  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
 class PortfolioEvent:
     """
     Canonical portfolio event (v2.0.1).
@@ -76,7 +76,7 @@ class PortfolioEvent:
         meta: Optional[Dict[str, Any]] = None,
     ) -> "PortfolioEvent":
         """Create POSITION_OPENED event."""
-        return cls(  # type: ignore[call-arg]
+        return cls(  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
             timestamp=timestamp,
             strategy=strategy,
             signal_id=signal_id,
@@ -123,7 +123,7 @@ class PortfolioEvent:
             "pnl_pct_contrib": pnl_pct_contrib,
             "pnl_sol_contrib": pnl_sol_contrib,
         })
-        return cls(  # type: ignore[call-arg]
+        return cls(  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
             timestamp=timestamp,
             strategy=strategy,
             signal_id=signal_id,
@@ -169,7 +169,7 @@ class PortfolioEvent:
             event_meta["pnl_pct"] = pnl_pct
         if pnl_sol is not None:
             event_meta["pnl_sol"] = pnl_sol
-        return cls(  # type: ignore[call-arg]
+        return cls(  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
             timestamp=timestamp,
             strategy=strategy,
             signal_id=signal_id,
@@ -206,7 +206,7 @@ class PortfolioEvent:
             "closed_positions_count": closed_positions_count,
             "reset_reason": reason,
         })
-        return cls(  # type: ignore[call-arg]
+        return cls(  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
             timestamp=timestamp,
             strategy=strategy,
             signal_id=signal_id,

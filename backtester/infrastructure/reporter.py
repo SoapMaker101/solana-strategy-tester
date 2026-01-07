@@ -1085,7 +1085,8 @@ class Reporter:
             df = df[expected_columns]
             # Сортируем по entry_time для консистентности
             df["entry_time_dt"] = pd.to_datetime(df["entry_time"], utc=True)
-            df = df.sort_values(by="entry_time_dt")
+            # Runtime guard для basedpyright: df это DataFrame, sort_values принимает by= как keyword
+            df = df.sort_values(by=["entry_time_dt"])
             df = df.drop("entry_time_dt", axis=1)
         else:
             # Создаем пустой DataFrame с правильными колонками (порядок согласно ТЗ v2.0.1)
@@ -1594,7 +1595,13 @@ class Reporter:
             if "final_exit_json" in df.columns:
                 # Используем pandas nullable string dtype и заполняем NaN пустыми строками
                 s = pd.Series(df["final_exit_json"]) if not isinstance(df["final_exit_json"], pd.Series) else df["final_exit_json"]
-                df["final_exit_json"] = s.astype("string").fillna("")
+                # Runtime guard для basedpyright: astype("string") может вернуть ndarray, гарантируем Series
+                s_string = s.astype("string")
+                if isinstance(s_string, pd.Series):
+                    df["final_exit_json"] = s_string.fillna("")
+                else:
+                    # Если не Series (не должно быть в runtime, но для типизации) - создаём Series
+                    df["final_exit_json"] = pd.Series(s_string, index=df.index, dtype="string").fillna("")
         else:
             # Создаём пустой DataFrame с header
             df = pd.DataFrame(columns=columns)  # type: ignore[arg-type]

@@ -162,10 +162,20 @@ class RunnerLadderEngine:
                 last_candle_time_ts = as_utc_datetime(last_candle_time_raw)
                 if last_candle_time_ts is not None and isinstance(last_candle_time_ts, pd.Timestamp):
                     last_candle_time = last_candle_time_ts.to_pydatetime()
-                    if last_candle_time >= time_stop_time.to_pydatetime() if isinstance(time_stop_time, pd.Timestamp) else time_stop_time:
-                        exit_time = time_stop_time.to_pydatetime() if isinstance(time_stop_time, pd.Timestamp) else time_stop_time
+                    # Нормализуем time_stop_time через as_utc_datetime для гарантии datetime|None (NaT -> None)
+                    # В runtime time_stop_time всегда pd.Timestamp (результат entry_time + Timedelta),
+                    # но basedpyright не может это гарантировать, поэтому нормализуем
+                    time_stop_ts = as_utc_datetime(time_stop_time)
+                    if time_stop_ts is not None and isinstance(time_stop_ts, pd.Timestamp):
+                        time_stop_dt = time_stop_ts.to_pydatetime()
+                        if last_candle_time >= time_stop_dt:
+                            exit_time = time_stop_dt
+                        else:
+                            # Данные закончились до time_stop - закрываемся по последней свече
+                            exit_time = last_candle_time
                     else:
-                        # Данные закончились до time_stop - закрываемся по последней свече
+                        # time_stop_time был NaT или не pd.Timestamp (не должно быть в runtime) - используем last_candle_time
+                        # Эквивалентно оригиналу, где использовалось бы исходное значение, но безопаснее для типизации
                         exit_time = last_candle_time
                 else:
                     exit_time = None
