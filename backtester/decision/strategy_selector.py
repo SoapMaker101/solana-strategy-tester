@@ -394,7 +394,14 @@ def normalize_stability_schema(df: pd.DataFrame) -> pd.DataFrame:
     for field, default_value in float_fields.items():
         if field in df.columns:
             s = pd.Series(df[field]) if not isinstance(df[field], pd.Series) else df[field]
-            df[field] = pd.to_numeric(s, errors="coerce").fillna(default_value)
+            # Runtime guard для basedpyright: pd.to_numeric() на Series возвращает Series
+            # В runtime это всегда Series, но basedpyright не может это гарантировать
+            numeric_result = pd.to_numeric(s, errors="coerce")
+            if isinstance(numeric_result, pd.Series):
+                df[field] = numeric_result.fillna(default_value)
+            else:
+                # Если не Series (не должно быть в runtime, но для типизации) - создаём Series
+                df[field] = pd.Series([numeric_result] * len(df), index=df.index, dtype="float64").fillna(default_value)
     
     return df
 

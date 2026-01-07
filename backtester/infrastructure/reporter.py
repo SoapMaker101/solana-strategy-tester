@@ -1085,8 +1085,8 @@ class Reporter:
             df = df[expected_columns]
             # Сортируем по entry_time для консистентности
             df["entry_time_dt"] = pd.to_datetime(df["entry_time"], utc=True)
-            # Runtime guard для basedpyright: df это DataFrame, sort_values принимает by= как keyword
-            df = df.sort_values(by=["entry_time_dt"])
+            # Используем строку вместо списка для basedpyright (один элемент - поведение эквивалентно)
+            df = df.sort_values(by="entry_time_dt")
             df = df.drop("entry_time_dt", axis=1)
         else:
             # Создаем пустой DataFrame с правильными колонками (порядок согласно ТЗ v2.0.1)
