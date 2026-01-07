@@ -75,6 +75,43 @@
 
 ---
 
+## v2.2 — Stability & Typing Hardening
+
+**Статус:** ✅ Stable  
+**Дата:** 2025-01-XX  
+**Тесты:** Все зелёные, 0 basedpyright проблем
+
+### Key Points
+- No behavior changes
+- No test changes
+- Runner-only pipeline preserved
+- basedpyright reduced to zero noise
+- Explicit guards instead of pandas truthiness
+- Optional datetime normalization (NaT → None)
+
+This release is a stability anchor before further evolution.
+
+### What Changed
+- Explicit pandas checks (`is None`, `.empty`, `.any()`) instead of implicit truthiness
+- Normalization of Optional types (NaT → None at boundaries)
+- Localized type ignores for known stub limitations (dataclass kwargs, pandas overloads)
+- Runtime guards for type narrowing (Series/DataFrame checks before method calls)
+
+### What Did NOT Change
+- Strategy logic
+- Portfolio logic
+- Stage A / Stage B behavior
+- Test suite
+- Event contracts
+- Data contracts
+
+### Documentation
+- `docs/V2.2_IMPLEMENTATION_STATUS.md` — детали изменений
+- `docs/TYPING_POLICY.md` — политика типизации
+- `docs/KNOWN_LIMITATIONS.md` — известные ограничения
+
+---
+
 ## v2.0.0 (Runner-only)
 
 ### Highlights

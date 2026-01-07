@@ -3,9 +3,21 @@
 Runner-only backtesting framework for Solana signals. The system is now fully
 event-driven and uses a single, canonical Runner ladder contract.
 
-**Version 2.1.9** (FROZEN BASELINE) — Stable release with fixed contracts, full test coverage, and documented known issues.
+**Version 2.2** (CURRENT STABLE) — Stability anchor with typing hardening, zero basedpyright noise, and preserved behavior.
 
-**See:** `docs/RELEASE_2.1.9.md` for complete release documentation.
+**Previous baseline:** Version 2.1.9 (FROZEN BASELINE) — see `docs/RELEASE_2.1.9.md` for complete release documentation.
+
+### Current Stable Version
+
+The current stable baseline is **v2.2 (Runner-only)**.
+
+This version focuses on:
+- pipeline correctness
+- explicit data contracts
+- static typing hygiene
+- full test coverage
+
+Recommended starting point for new work.
 
 ## Quick start
 

@@ -558,3 +558,20 @@ Execution profiles позволяют задавать разные slippage mul
 - `docs/TEST_GREEN_BASELINE_2025-01-06.md` — контракты и guard-тесты
 - `docs/CANONICAL_LEDGER_CONTRACT.md` — спецификация канонического ledger
 - `docs/PIPELINE_GUIDE.md` — описание пайплайна данных
+
+---
+
+## v2.2 — Status Update (Typing & Stability)
+
+**Актуально для v2.2**
+
+В версии v2.2:
+- Поведение пайплайна не изменялось
+- Все изменения касались:
+  - явных проверок вместо truthiness pandas объектов
+  - нормализации Optional-типов (NaT → None)
+  - устранения ложных basedpyright предупреждений
+- Все тесты остаются source of truth
+- Runner-only архитектура подтверждена как стабильная
+
+Важно: архитектура не переписывалась, схемы не менялись — только зафиксирован статус стабильности.
