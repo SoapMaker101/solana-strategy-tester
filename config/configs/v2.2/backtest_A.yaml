@@ -1,0 +1,70 @@
+backtest:
+  # start_at: "2024-06-01T00:00:00Z"
+  # end_at: "2024-07-01T00:00:00Z"
+
+data:
+  loader: "csv"
+  candles_dir: "data/candles/cached"
+  timeframe: "1m"
+  before_minutes: 60
+  after_minutes: 43200
+  rate_limit:
+    enabled: false
+    max_calls_per_minute: 30
+    on_429: "wait"
+
+portfolio:
+  initial_balance_sol: 10.0
+  allocation_mode: "fixed"
+  percent_per_trade: 0.01
+  max_exposure: 0.95
+  max_open_positions: 100
+
+  profit_reset_enabled: false
+  profit_reset_multiple: 1.3  # не используется, но оставляем одинаковым
+
+  capacity_reset:
+    enabled: false
+    window_type: "time"
+    window_size: 10d
+    max_blocked_ratio: 0.7
+    max_avg_hold_days: 30.0
+    mode: "prune"
+    prune_fraction: 0.5
+    prune_min_hold_days: 1.0
+    prune_max_mcap_usd: 20000
+    prune_max_current_pnl_pct: -0.80
+    prune_cooldown_signals: 200
+    prune_cooldown_days: null
+    prune_min_candidates: 3
+    prune_protect_min_max_xn: 2.0
+
+  execution_profile: "realistic"
+  fee:
+    swap_fee_pct: 0.003
+    lp_fee_pct: 0.001
+    network_fee_sol: 0.0005
+    profiles:
+      realistic:
+        base_slippage_pct: 0.03
+        slippage_multipliers:
+          entry: 1.0
+          exit_tp: 0.6
+          exit_sl: 1.3
+          exit_timeout: 0.25
+          exit_manual: 0.5
+      stress:
+        base_slippage_pct: 0.10
+        slippage_multipliers:
+          entry: 1.0
+          exit_tp: 0.6
+          exit_sl: 1.3
+          exit_timeout: 0.2
+          exit_manual: 0.5
+
+report:
+  output_dir: "runs/v1.10/exp_A"
+
+runtime:
+  max_signals: 100000
+  parallel: false

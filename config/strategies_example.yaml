@@ -20,7 +20,7 @@
       - { xn: 3.0, fraction: 0.20 }
       - { xn: 7.0, fraction: 0.30 }
       - { xn: 15.0, fraction: 0.50 }
-    time_stop_minutes: 64800   # 45d
+    time_stop_minutes: 28800   # 20d
     use_high_for_targets: true
     exit_on_first_tp: false
     allow_partial_fills: true # Разрешить частичные фиксации

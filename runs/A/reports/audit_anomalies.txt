@@ -1,0 +1,6 @@
+severity,code,message,context
+P1,missing_events_chain,Closed position f0e9ea0997dd410c984408ff316faafe has no POSITION_CLOSED event,{'position_id': 'f0e9ea0997dd410c984408ff316faafe'}
+P1,missing_events_chain,Closed position a31fa7b82a72454baded08ad93a940e8 has no POSITION_CLOSED event,{'position_id': 'a31fa7b82a72454baded08ad93a940e8'}
+P1,missing_events_chain,Closed position 4a62cb7c85384476b9ce92bce92d39a2 has no POSITION_CLOSED event,{'position_id': '4a62cb7c85384476b9ce92bce92d39a2'}
+P1,missing_events_chain,Closed position 626f4336662a44fc9a7d6240d29ee699 has no POSITION_CLOSED event,{'position_id': '626f4336662a44fc9a7d6240d29ee699'}
+P1,missing_events_chain,Closed position 6881f3c362c349fb9976847f7804c41c has no POSITION_CLOSED event,{'position_id': '6881f3c362c349fb9976847f7804c41c'}

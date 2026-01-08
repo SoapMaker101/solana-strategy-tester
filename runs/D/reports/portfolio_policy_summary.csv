@@ -1,0 +1,2 @@
+strategy,portfolio_reset_profit_count,portfolio_reset_capacity_count,portfolio_capacity_prune_count,avg_pruned_positions_per_event,median_pruned_hold_days,median_pruned_current_pnl_pct,pruned_positions_share_of_all_closed
+Runner_Tail_3_7_15_45d,2,0,0,0.0,,,0.0

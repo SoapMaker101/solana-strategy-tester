@@ -315,3 +315,4 @@ select_strategies(
 - `docs/PIPELINE_GUIDE.md` — описание пайплайна данных
 
 
+
