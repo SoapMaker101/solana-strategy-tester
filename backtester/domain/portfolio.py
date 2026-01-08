@@ -1475,6 +1475,7 @@ class PortfolioEngine:
                     level_xn = pos.exit_price / pos.entry_price if pos.entry_price and pos.entry_price > 0 else 1.0
                     fraction_remainder = pos.size / original_size if original_size and original_size > 0 else 0.0
                     
+                    # Remainder exit: передаём reason="time_stop" для правильной семантики
                     event = PortfolioEvent.create_position_partial_exit(
                         timestamp=pos.exit_time or current_time,
                         strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
@@ -1487,6 +1488,7 @@ class PortfolioEngine:
                         exec_price=effective_exit_price,
                         pnl_pct_contrib=exit_pnl_pct * 100.0,  # В процентах
                         pnl_sol_contrib=exit_pnl_sol,
+                        reason="time_stop",  # Remainder exit по time_stop должен иметь reason="time_stop"
                         meta={
                             "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
                             "exit_time": pos.exit_time.isoformat() if pos.exit_time else None,
@@ -1494,7 +1496,7 @@ class PortfolioEngine:
                             "fees_sol": fees_remainder,
                             "network_fee_sol": network_fee_exit,
                             "is_remainder": True,
-                            "reason": "time_stop",  # Сохраняем reason в meta
+                            "reason": "time_stop",  # Сохраняем reason в meta для совместимости
                         },
                     )
                     pos.meta["partial_exits"][-1]["event_id"] = event.event_id
@@ -1653,8 +1655,22 @@ class PortfolioEngine:
                 
                 # Эмитим событие POSITION_CLOSED для runner ladder позиции
                 if portfolio_events is not None:
-                    # ВАЖНО: override_reason имеет приоритет над ladder_reason
-                    close_reason = override_reason if override_reason is not None else (pos.meta.get("ladder_reason", "ladder_tp") if pos.meta else "ladder_tp")
+                    # TASK B: Правильный reason для POSITION_CLOSED
+                    # Если time_stop_triggered=True → "time_stop"
+                    # Иначе если закрыли после ladder TP → "ladder_tp"
+                    # override_reason имеет приоритет
+                    if override_reason is not None:
+                        close_reason = override_reason
+                    elif pos.meta and pos.meta.get("time_stop_triggered", False):
+                        # Финальный выход по time_stop
+                        close_reason = "time_stop"
+                    elif pos.meta and pos.meta.get("close_reason"):
+                        # Используем close_reason из meta (установлен в _process_runner_partial_exits)
+                        close_reason = pos.meta.get("close_reason")
+                    else:
+                        # Fallback на ladder_reason
+                        close_reason = pos.meta.get("ladder_reason", "ladder_tp") if pos.meta else "ladder_tp"
+                    
                     pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
                     fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
                     raw_exit_price = pos.exit_price
@@ -1668,7 +1684,7 @@ class PortfolioEngine:
                             signal_id=pos.signal_id,
                             contract_address=pos.contract_address,
                             position_id=pos.position_id,
-                            reason=close_reason,  # Используем override_reason если задан
+                            reason=close_reason,  # Используем правильный reason
                             raw_price=raw_exit_price,
                             exec_price=exec_exit_price,
                             pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах

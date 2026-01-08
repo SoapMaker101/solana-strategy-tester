@@ -25,10 +25,11 @@ class RunnerTradeResult:
     exit_time: Optional[datetime]
     exit_price: Optional[float]
     realized_pnl_pct: float  # PnL в процентах (например, 150.0 = 150%)
-    reason: str  # "all_levels_hit", "time_stop", "no_data"
+    reason: str  # BC: ladder_reason ("ladder_tp" или "time_stop")
     levels_hit: Dict[float, datetime]  # {xn: timestamp} - когда был достигнут каждый уровень
     fractions_exited: Dict[float, float]  # {xn: fraction} - какая доля закрыта на каждом уровне
     realized_multiple: float  # Реализованный множитель (сумма xn * fraction)
+    time_stop_triggered: bool = False  # Сработал ли time_stop (даже если был hit TP)
 
 
 class RunnerLadderEngine:
@@ -68,6 +69,7 @@ class RunnerLadderEngine:
                 levels_hit={},
                 fractions_exited={},
                 realized_multiple=1.0,
+                time_stop_triggered=False,
             )
         
         # Получаем уровни из конфига
@@ -187,34 +189,97 @@ class RunnerLadderEngine:
         
         # Главное правило:
         # - Если позиция закрыта полностью на уровнях (total_fraction_exited >= 1.0) → reason = "ladder_tp"
-        # - Если позиция закрыта частично или не закрыта → reason = "time_stop" (остаток закрывается по time_stop)
+        # - Если позиция НЕ закрыта полностью и сработал time_stop → reason = "time_stop", time_stop_triggered = True
+        # - Наличие levels_hit/partial exits НЕ отменяет time_stop
         has_levels_hit = bool(levels_hit)
         is_fully_closed = total_fraction_exited >= 1.0
         
+        # Определяем exit_time для случаев, когда он еще не установлен
+        exit_time_from_levels = None
+        if is_fully_closed and has_levels_hit:
+            # Позиция полностью закрыта на уровнях - берем время последнего достигнутого уровня
+            exit_times = list(levels_hit.values())
+            if exit_times:
+                exit_time_from_levels = max(exit_times)
+        
+        # A) Исправляем определение time_stop_triggered
+        # time_stop_triggered должен быть True только если финальный exit произошёл по time_stop
+        # То есть: если позиция закрылась по TP (полностью или на последнем уровне) → time_stop_triggered=False
+        # Если позиция дожила до таймстопа и остаток закрыт по таймстопу → True
+        time_stop_triggered = False
+        time_stop_time_dt: Optional[datetime] = None
+        
+        # Проверяем time_stop только если позиция НЕ закрылась полностью на уровнях
+        if max_hold_minutes and not is_fully_closed:
+            # Вычисляем время time_stop
+            time_stop_time_calc = entry_time + pd.Timedelta(minutes=max_hold_minutes)
+            # Проверяем, не превысили ли мы time_stop
+            last_candle_time_raw = pd.to_datetime(candles_df.iloc[-1]['timestamp'])
+            last_candle_time_ts = as_utc_datetime(last_candle_time_raw)
+            if last_candle_time_ts is not None and isinstance(last_candle_time_ts, pd.Timestamp):
+                last_candle_time = last_candle_time_ts.to_pydatetime()
+                time_stop_ts = as_utc_datetime(time_stop_time_calc)
+                if time_stop_ts is not None and isinstance(time_stop_ts, pd.Timestamp):
+                    time_stop_dt = time_stop_ts.to_pydatetime()
+                    if last_candle_time >= time_stop_dt:
+                        # Финальный exit произошёл по time_stop (позиция не закрылась полностью на уровнях)
+                        time_stop_triggered = True
+                        time_stop_time_dt = time_stop_dt
+                    # Если данные закончились до time_stop, но позиция не закрылась полностью,
+                    # это НЕ считается time_stop_triggered (данные просто закончились)
+                    # time_stop_triggered остается False
+        
+        # B) Исправляем выбор ladder_reason
+        # ladder_reason отражает финальную причину закрытия позиции, а не факт достижения уровней
+        # Правило:
+        # - если time_stop_triggered == True → ladder_reason = "time_stop" (финальный exit по time_stop)
+        # - иначе если позиция закрыта через ladder TP (полностью/последний уровень) → ladder_reason = "ladder_tp"
+        # - иначе (fallback) → ladder_reason = "time_stop" или "ladder_tp" в зависимости от контекста
+        if time_stop_triggered:
+            # Финальный exit произошёл по time_stop (позиция не закрылась полностью на уровнях)
+            ladder_reason = "time_stop"
+        elif is_fully_closed and has_levels_hit:
+            # Позиция закрылась полностью через ladder TP (все уровни достигнуты или exit_on_first_tp)
+            ladder_reason = "ladder_tp"
+        elif has_levels_hit:
+            # Достигнут хотя бы один уровень, но позиция не закрылась полностью
+            # (данные закончились до time_stop или нет max_hold_minutes)
+            # Это edge case - считаем ladder_tp для BC (частичный exit, но не time_stop)
+            ladder_reason = "ladder_tp"
+        else:
+            # Ни один уровень не достигнут - fallback (данные закончились или нет уровней)
+            ladder_reason = "time_stop"
+        
+        # Определяем reason и exit_time (для внутренней логики)
         if is_fully_closed and has_levels_hit:
             # Позиция полностью закрыта на уровнях - это ladder take profit
             reason = "ladder_tp"
-            # Берем время последнего достигнутого уровня
-            exit_times = list(levels_hit.values())
-            if exit_times:
-                exit_time = max(exit_times)
-            else:
-                exit_time = None
-        else:
-            # Позиция не закрыта полностью или ни один уровень не достигнут - проверяем time_stop
+            exit_time = exit_time_from_levels
+        elif time_stop_triggered:
+            # FIX 1: Time stop сработал (даже если был hit TP, но позиция не закрыта полностью)
             reason = "time_stop"
+            exit_time = time_stop_time_dt
+        elif has_levels_hit:
+            # Достигнут хотя бы один уровень, но позиция не закрыта полностью и time_stop не сработал
+            # (данные закончились до time_stop или нет max_hold_minutes) - это ladder_tp для обратной совместимости
+            reason = "ladder_tp"
+            exit_time = exit_time_from_levels if exit_time_from_levels else None
+        else:
+            # Ни один уровень не достигнут - проверяем time_stop
+            reason = "time_stop"
+            exit_time = time_stop_time_dt
+        
+        # Если exit_time еще не установлен, определяем его
+        if exit_time is None:
             if max_hold_minutes:
                 # Вычисляем время time_stop
-                time_stop_time = entry_time + pd.Timedelta(minutes=max_hold_minutes)
+                time_stop_calc = entry_time + pd.Timedelta(minutes=max_hold_minutes)
                 # Проверяем, не превысили ли мы time_stop
                 last_candle_time_raw = pd.to_datetime(candles_df.iloc[-1]['timestamp'])
                 last_candle_time_ts = as_utc_datetime(last_candle_time_raw)
                 if last_candle_time_ts is not None and isinstance(last_candle_time_ts, pd.Timestamp):
                     last_candle_time = last_candle_time_ts.to_pydatetime()
-                    # Нормализуем time_stop_time через as_utc_datetime для гарантии datetime|None (NaT -> None)
-                    # В runtime time_stop_time всегда pd.Timestamp (результат entry_time + Timedelta),
-                    # но basedpyright не может это гарантировать, поэтому нормализуем
-                    time_stop_ts = as_utc_datetime(time_stop_time)
+                    time_stop_ts = as_utc_datetime(time_stop_calc)
                     if time_stop_ts is not None and isinstance(time_stop_ts, pd.Timestamp):
                         time_stop_dt = time_stop_ts.to_pydatetime()
                         if last_candle_time >= time_stop_dt:
@@ -223,8 +288,6 @@ class RunnerLadderEngine:
                             # Данные закончились до time_stop - закрываемся по последней свече
                             exit_time = last_candle_time
                     else:
-                        # time_stop_time был NaT или не pd.Timestamp (не должно быть в runtime) - используем last_candle_time
-                        # Эквивалентно оригиналу, где использовалось бы исходное значение, но безопаснее для типизации
                         exit_time = last_candle_time
                 else:
                     exit_time = None
@@ -269,16 +332,20 @@ class RunnerLadderEngine:
                 if exit_time_ts is not None and isinstance(exit_time_ts, pd.Timestamp):
                     exit_time_dt = exit_time_ts.to_pydatetime()
         
+        # BC FIX: Используем ladder_reason для обратной совместимости
+        # ladder_reason = "ladder_tp" если достигнут хотя бы один уровень (независимо от total_fraction_exited)
+        # ladder_reason = "time_stop" если сработал time_stop и НЕ было levels_hit
         return RunnerTradeResult(
             entry_time=entry_time,
             entry_price=entry_price,
             exit_time=exit_time_dt,
             exit_price=exit_price,
             realized_pnl_pct=realized_pnl_pct,
-            reason=reason,
+            reason=ladder_reason,  # BC: используем ladder_reason для обратной совместимости
             levels_hit=levels_hit,
             fractions_exited=fractions_exited,
             realized_multiple=realized_multiple if realized_multiple > 0 else 1.0,
+            time_stop_triggered=time_stop_triggered,  # Сохраняем time_stop_triggered отдельно
         )
 
 

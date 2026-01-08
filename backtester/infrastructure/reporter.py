@@ -251,7 +251,13 @@ class Reporter:
         
         df = pd.DataFrame(csv_data)
         csv_path = self.output_dir / f"{strategy_name}.csv"
-        df.to_csv(csv_path, index=False)
+        try:
+            df.to_csv(csv_path, index=False)
+        except PermissionError:
+            raise PermissionError(
+                f"Файл открыт в Excel или заблокирован. Закройте его и повторите.\n"
+                f"Файл: {csv_path}"
+            )
         print(f"[report] Saved CSV report to {csv_path}")
 
     def save_trades_table(self, strategy_name: str, results: List[Dict[str, Any]]) -> None:
@@ -320,7 +326,13 @@ class Reporter:
         # Создаём DataFrame и сохраняем
         df = pd.DataFrame(csv_rows)
         csv_path = self.output_dir / f"{strategy_name}_trades.csv"
-        df.to_csv(csv_path, index=False)
+        try:
+            df.to_csv(csv_path, index=False)
+        except PermissionError:
+            raise PermissionError(
+                f"Файл открыт в Excel или заблокирован. Закройте его и повторите.\n"
+                f"Файл: {csv_path}"
+            )
         print(f"📄 Saved trades table to {csv_path}")
 
     def generate_html_report(self, strategy_name: str, metrics: Dict[str, Any], results: List[Dict[str, Any]]) -> None:
@@ -874,6 +886,81 @@ class Reporter:
         # Нет данных
         return None
 
+    def _collect_executions_fees_by_position(
+        self, portfolio_results: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """
+        Собирает executions и возвращает fees_total_sol по position_id.
+        
+        Используется для пересчета fees_total_sol из executions ledger (один источник истины).
+        
+        Returns:
+            Dict[position_id, fees_total_sol]
+        """
+        from ..domain.portfolio import PortfolioResult
+        
+        fees_by_position: Dict[str, float] = {}
+        
+        for strategy_name, portfolio_result in portfolio_results.items():
+            if not isinstance(portfolio_result, PortfolioResult):
+                continue
+            
+            for pos in portfolio_result.positions:
+                if not pos.entry_time:
+                    continue
+                
+                position_fees = 0.0
+                
+                # Entry fees
+                network_fee_entry = pos.meta.get("network_fee_sol", 0.0) if pos.meta else 0.0
+                # Для entry fees обычно только network fee (swap/lp применяются при выходе)
+                fees_entry = network_fee_entry
+                position_fees += fees_entry
+                
+                # Partial exits fees
+                if pos.meta and "partial_exits" in pos.meta:
+                    partial_exits = pos.meta.get("partial_exits", [])
+                    for partial in partial_exits:
+                        if isinstance(partial, dict):
+                            fees_partial = partial.get("fees_sol", 0.0) + partial.get("network_fee_sol", 0.0)
+                            position_fees += fees_partial
+                
+                # Final exit fees (если позиция закрыта)
+                if pos.exit_time and pos.status == "closed":
+                    # Для Runner стратегий с partial_exits используем fees из remainder_exit
+                    # Для обычных позиций используем fees_total
+                    is_runner_with_partial_exits = pos.meta and pos.meta.get("runner_ladder", False) and "partial_exits" in pos.meta
+                    
+                    if is_runner_with_partial_exits:
+                        remainder_exits = [e for e in pos.meta.get("partial_exits", []) if e.get("is_remainder", False)]
+                        if remainder_exits:
+                            remainder_exit = remainder_exits[-1]
+                            fees_final_exit = remainder_exit.get("fees_sol", 0.0) + remainder_exit.get("network_fee_sol", 0.0)
+                        else:
+                            # Позиция закрыта полностью на уровнях - final_exit не имеет fees
+                            fees_final_exit = 0.0
+                    else:
+                        # Обычная позиция (не Runner или Runner без partial_exits)
+                        # Используем fees_total, но вычитаем уже учтенные fees (entry + partial_exits)
+                        fees_total_meta = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
+                        # Вычитаем fees_entry и fees из partial_exits (если есть)
+                        fees_already_counted = fees_entry
+                        if pos.meta and "partial_exits" in pos.meta:
+                            fees_already_counted += sum(
+                                e.get("fees_sol", 0.0) + e.get("network_fee_sol", 0.0)
+                                for e in pos.meta.get("partial_exits", [])
+                                if not e.get("is_remainder", False)
+                            )
+                        fees_final_exit = max(0.0, fees_total_meta - fees_already_counted)
+                        # Если fees_final_exit получился 0, но fees_total_meta > 0, значит все fees уже учтены
+                        # В этом случае fees_final_exit = 0 (все fees уже в entry/partial_exits)
+                    
+                    position_fees += fees_final_exit
+                
+                fees_by_position[pos.position_id] = position_fees
+        
+        return fees_by_position
+    
     def save_portfolio_positions_table(self, portfolio_results: Dict[str, Any]) -> None:
         """
         Сохраняет positions-level таблицу для всех стратегий в CSV.
@@ -944,14 +1031,17 @@ class Reporter:
                 raw_entry_price = pos.meta.get("raw_entry_price", pos.entry_price) if pos.meta else pos.entry_price
                 raw_exit_price = pos.meta.get("raw_exit_price", pos.exit_price) if pos.meta else pos.exit_price
                 
-                # Считаем комиссии
-                network_fee_sol = pos.meta.get("network_fee_sol", 0.0) if pos.meta else 0.0
-                # Полные комиссии включают network_fee при входе и выходе, плюс swap/lp fees
-                # Для простоты берем из meta если есть, иначе оцениваем
-                fees_total_sol = pos.meta.get("fees_total_sol")
-                if fees_total_sol is None:
-                    # Fallback: оцениваем через размер позиции и комиссии
-                    # Это приблизительно, но лучше чем ничего
+                # FIX 2: fees_total_sol должен быть суммой fees_sol из executions ledger
+                # Собираем executions и агрегируем fees по position_id
+                fees_by_position = self._collect_executions_fees_by_position(portfolio_results)
+                fees_total_sol = fees_by_position.get(pos.position_id, 0.0)
+                
+                # Fallback: если не нашли в executions, используем meta (для обратной совместимости)
+                if fees_total_sol == 0.0 and pos.meta and pos.meta.get("fees_total_sol") is not None:
+                    fees_total_sol = pos.meta.get("fees_total_sol", 0.0)
+                elif fees_total_sol == 0.0:
+                    # Последний fallback: оцениваем через размер позиции и комиссии
+                    network_fee_sol = pos.meta.get("network_fee_sol", 0.0) if pos.meta else 0.0
                     fees_total_sol = network_fee_sol * 2  # вход + выход
                 
                 # Флаги reset
@@ -1262,12 +1352,17 @@ class Reporter:
                 if not pos.entry_time:
                     continue
                 
+                # TASK C: Пересчитываем fees_total_sol из executions перед экспортом
+                # Собираем все executions для этой позиции
+                position_executions_fees: List[float] = []
+                
                 # Entry event
                 exec_entry_price = pos.meta.get("exec_entry_price", pos.entry_price) if pos.meta else pos.entry_price
                 raw_entry_price = pos.meta.get("raw_entry_price", pos.entry_price) if pos.meta else pos.entry_price
                 network_fee_entry = pos.meta.get("network_fee_sol", 0.0) if pos.meta else 0.0
                 # Для entry fees обычно только network fee (swap/lp применяются при выходе)
                 fees_entry = network_fee_entry
+                position_executions_fees.append(fees_entry)
                 
                 executions_rows.append({
                     "position_id": pos.position_id,
@@ -1287,10 +1382,16 @@ class Reporter:
                 })
                 
                 # Partial exits (для Runner стратегий)
+                # ВАЖНО: remainder exit (is_remainder=True) НЕ записываем как partial_exit execution,
+                # он будет отражён только в final_exit ниже
                 if pos.meta and "partial_exits" in pos.meta:
                     partial_exits = pos.meta.get("partial_exits", [])
                     for partial in partial_exits:
                         if isinstance(partial, dict):
+                            # Пропускаем remainder exit - он будет отражён в final_exit
+                            if partial.get("is_remainder", False):
+                                continue
+                            
                             hit_time_str = partial.get("hit_time", "")
                             try:
                                 if isinstance(hit_time_str, str):
@@ -1328,10 +1429,12 @@ class Reporter:
                                 "exec_price": exit_price,
                                 "fees_sol": fees_partial,
                                 "pnl_sol_delta": pnl_sol,
-                                "reason": "forced_close" if partial.get("is_remainder") else "ladder_tp",
+                                "reason": "ladder_tp",  # TP partial exits всегда имеют reason="ladder_tp"
                                 "xn": partial.get("xn"),
                                 "fraction": fraction,
                             })
+                            # TASK C: Добавляем fees в список для пересчета fees_total_sol
+                            position_executions_fees.append(fees_partial)
                 
                 # Final exit или force close
                 # ВАЖНО: для Runner стратегий с partial exits нужно использовать remaining_size,
@@ -1361,22 +1464,55 @@ class Reporter:
                             total_exited = sum(e.get("exit_size", 0.0) for e in partial_exits if not e.get("is_remainder", False))
                             remaining_size = max(0.0, original_size - total_exited)
                     
+                    # TASK C: Для final_exit fees_sol должен быть только fees для этого exit
+                    # Для Runner стратегий с partial_exits ищем remainder exit
+                    # Для обычных позиций используем fees_total
+                    fees_final_exit = 0.0
+                    is_runner_with_partial_exits = pos.meta and pos.meta.get("runner_ladder", False) and "partial_exits" in pos.meta
+                    
+                    # Определяем event_id для final_exit
+                    # Для remainder exit используем event_id из remainder exit event
+                    final_exit_event_id = pos.meta.get("close_event_id") if pos.meta else None
+                    if is_runner_with_partial_exits:
+                        # Runner стратегия с partial_exits
+                        remainder_exits = [e for e in pos.meta.get("partial_exits", []) if e.get("is_remainder", False)]
+                        if remainder_exits:
+                            # Используем fees из remainder exit (это final exit по time_stop)
+                            remainder_exit = remainder_exits[-1]
+                            fees_final_exit = remainder_exit.get("fees_sol", 0.0) + remainder_exit.get("network_fee_sol", 0.0)
+                            # Используем event_id из remainder exit event для связи
+                            final_exit_event_id = remainder_exit.get("event_id", final_exit_event_id)
+                        else:
+                            # Если нет remainder exit, значит позиция закрыта полностью на уровнях
+                            # В этом случае final_exit не должен иметь fees (все уже учтено в partial_exits)
+                            fees_final_exit = 0.0
+                    else:
+                        # Обычная позиция (не Runner или Runner без partial_exits) - используем fees_total
+                        fees_final_exit = fees_total
+                    
                     executions_rows.append({
                         "position_id": pos.position_id,
                         "signal_id": pos.signal_id,
                         "strategy": strategy_name,
                         "event_time": pos.exit_time.isoformat(),
                         "event_type": "final_exit",
-                        "event_id": pos.meta.get("close_event_id") if pos.meta else None,
+                        "event_id": final_exit_event_id,  # Используем event_id из remainder exit если есть
                         "qty_delta": -remaining_size,  # Используем remaining_size вместо pos.size
                         "raw_price": raw_exit_price,
                         "exec_price": exec_exit_price,
-                        "fees_sol": fees_total,
+                        "fees_sol": fees_final_exit,  # Используем fees только для final_exit
                         "pnl_sol_delta": pnl_sol,
                         "reason": reset_reason if closed_by_reset else pos.meta.get("close_reason") if pos.meta else None,
                         "xn": None,
                         "fraction": None,
                     })
+                    # TASK C: Добавляем fees в список для пересчета fees_total_sol
+                    position_executions_fees.append(fees_final_exit)
+                    
+                    # TASK C: Пересчитываем fees_total_sol из executions (один источник истины)
+                    fees_total_sol_from_executions = sum(position_executions_fees)
+                    if pos.meta:
+                        pos.meta["fees_total_sol"] = fees_total_sol_from_executions
         
         # Создаем DataFrame
         if executions_rows:

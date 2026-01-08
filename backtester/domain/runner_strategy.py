@@ -106,27 +106,33 @@ class RunnerStrategy(Strategy):
         # config уже проверен в on_signal, используем cast для типизации
         config = cast(RunnerConfig, self.config)
 
-        # Определяем reason (legacy) и canonical_reason на основе ladder_result.reason
-        # RunnerLadderEngine теперь возвращает канонический reason: "ladder_tp" или "time_stop"
+        # BC FIX: Определяем reason (legacy) и canonical_reason на основе ladder_result.reason
+        # RunnerLadderEngine теперь возвращает ladder_reason в поле reason для BC
+        # ladder_reason отражает финальную причину закрытия позиции:
+        # - "ladder_tp" если позиция закрылась полностью через ladder TP ИЛИ данные закончились до time_stop с достигнутыми уровнями
+        # - "time_stop" если финальный exit произошёл по time_stop (позиция не закрылась полностью на уровнях)
         has_levels_hit = bool(ladder_result.levels_hit)
         
-        if ladder_result.reason == "ladder_tp":
-            # Достигнут хотя бы один уровень - это take profit
+        # ladder_result.reason теперь содержит ladder_reason (для BC)
+        ladder_reason = ladder_result.reason
+        
+        if ladder_reason == "ladder_tp":
+            # Позиция закрылась через ladder TP (полностью или частично, но не по time_stop) - это take profit (BC)
             reason_legacy = "tp"  # Legacy: "tp"
             reason_canon = "ladder_tp"  # Канон: "ladder_tp"
-        elif ladder_result.reason == "time_stop":
-            # Уровни не достигнуты, закрыли по времени/концу данных
+        elif ladder_reason == "time_stop":
+            # Финальный exit произошёл по time_stop (позиция не закрылась полностью на уровнях)
             reason_legacy = "timeout"  # Legacy: "timeout"
             reason_canon = "time_stop"  # Канон: "time_stop"
-        elif ladder_result.reason == "stop_loss":
+        elif ladder_reason == "stop_loss":
             reason_legacy = "sl"  # Legacy: "sl"
             reason_canon = "stop_loss"  # Канон: "stop_loss"
-        elif ladder_result.reason in ("no_data", "no_entry"):
+        elif ladder_reason in ("no_data", "no_entry"):
             reason_legacy = "no_entry"
             reason_canon = "no_entry"
         else:
             # Fallback для обратной совместимости (если engine вернул "all_levels_hit")
-            if ladder_result.reason == "all_levels_hit" or bool(ladder_result.levels_hit):
+            if ladder_reason == "all_levels_hit" or has_levels_hit:
                 reason_legacy = "tp"
                 reason_canon = "ladder_tp"
             else:
@@ -187,20 +193,23 @@ class RunnerStrategy(Strategy):
         
         # Формируем meta с данными из RunnerTradeResult
         # Гарантируем обязательные ключи
-        # time_stop_triggered должен зависеть ТОЛЬКО от ladder_result.reason
+        # FIX 1: time_stop_triggered должен срабатывать даже если был hit TP
+        # Используем поле time_stop_triggered из RunnerTradeResult (сохранено отдельно)
+        time_stop_triggered = ladder_result.time_stop_triggered
+        
         meta = {
             # Данные из RunnerTradeResult
             "levels_hit": {str(k): v.isoformat() for k, v in ladder_result.levels_hit.items()} if ladder_result.levels_hit else {},
             "fractions_exited": {str(k): v for k, v in ladder_result.fractions_exited.items()} if ladder_result.fractions_exited else {},
             "realized_multiple": realized_multiple,
-            # time_stop_triggered зависит ТОЛЬКО от ladder_result.reason (не от has_levels_hit, не от exit_time)
-            "time_stop_triggered": (ladder_result.reason == "time_stop"),
+            # time_stop_triggered = True если reason == "time_stop" (даже если были partial exits)
+            "time_stop_triggered": time_stop_triggered,
             # Дополнительная информация
             "runner_ladder": True,
             "entry_idx": 0,
-            # Сохраняем канонический reason для ladder (ladder_tp/time_stop вместо tp/timeout)
-            # Для обратной совместимости
-            "ladder_reason": reason_canon,  # "ladder_tp" или "time_stop" или "no_entry"
+            # BC FIX: Сохраняем канонический reason для ladder (ladder_tp/time_stop вместо tp/timeout)
+            # ladder_reason всегда содержит точное значение из ladder_result.reason
+            "ladder_reason": ladder_reason,  # "ladder_tp" или "time_stop" или "no_entry"
         }
         
         # Добавляем trade features

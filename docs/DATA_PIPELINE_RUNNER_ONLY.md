@@ -42,8 +42,8 @@
 
 **Execution** — запись о фактическом исполнении (fill). Создается для каждого события торговли:
 - Entry execution: покупка по `exec_entry_price`
-- Partial exit execution: продажа части позиции по `exec_price` на уровне `xn`
-- Final exit execution: продажа остатка по `exec_exit_price`
+- Partial exit execution: продажа части позиции по `exec_price` на уровне `xn` (только для TP уровней)
+- Final exit execution: продажа остатка по `exec_exit_price` (time_stop или полное закрытие на уровнях)
 
 ---
 
@@ -263,6 +263,34 @@ pnl_pct_total = (3.4 - 1.0) × 100 = 240%
 - `portfolio_positions.csv`: колонки `realized_multiple`, `pnl_pct_total`, `pnl_sol`
 - `portfolio_events.csv`: в `meta_json` для `POSITION_PARTIAL_EXIT` есть `pnl_pct_contrib`, `pnl_sol_contrib`
 - `portfolio_executions.csv`: каждая строка partial exit имеет `pnl_sol_delta`
+
+### Интерпретация Executions/Events для Ladder
+
+**Правило:** Remainder по time_stop = final_exit в executions, reason=time_stop в events
+
+#### Пример: TP partial + time_stop final
+
+**Сценарий:**
+- Позиция: 0.1 SOL, entry_price = 100
+- Достигнут уровень 3x (20% закрыто)
+- Price откатывается
+- time_stop срабатывает (остаток 80% закрыт)
+
+**В portfolio_events.csv:**
+1. `POSITION_OPENED` (entry)
+2. `POSITION_PARTIAL_EXIT` (reason="ladder_tp", level_xn=3.0, fraction=0.20) - TP partial
+3. `POSITION_PARTIAL_EXIT` (reason="time_stop", is_remainder=True) - remainder exit
+4. `POSITION_CLOSED` (reason="time_stop")
+
+**В portfolio_executions.csv:**
+1. `entry` (qty_delta=+0.1)
+2. `partial_exit` (qty_delta=-0.02, reason="ladder_tp", xn=3.0) - TP partial
+3. `final_exit` (qty_delta=-0.08, reason="time_stop") - remainder (НЕ дублируется как partial_exit)
+
+**Важно:**
+- Remainder exit (`is_remainder=True`) НЕ записывается как `partial_exit` execution
+- Remainder exit отражается только в `final_exit` execution
+- `event_id` в `final_exit` ссылается на remainder exit event
 
 ### Пример расчета PnL
 

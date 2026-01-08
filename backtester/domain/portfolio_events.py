@@ -102,9 +102,10 @@ class PortfolioEvent:
         pnl_pct_contrib: float,
         pnl_sol_contrib: float,
         meta: Optional[Dict[str, Any]] = None,
+        reason: Optional[str] = None,  # BC: если None, используется "ladder_tp"
     ) -> "PortfolioEvent":
         """
-        Create POSITION_PARTIAL_EXIT event (ladder TP).
+        Create POSITION_PARTIAL_EXIT event (ladder TP or time_stop remainder).
         
         Args:
             level_xn: Target level (e.g., 2.0 for 2x)
@@ -113,6 +114,8 @@ class PortfolioEvent:
             exec_price: Execution price (after slippage)
             pnl_pct_contrib: PnL contribution in percent (e.g., 80.0 for 80%)
             pnl_sol_contrib: PnL contribution in SOL
+            reason: Event reason. If None, defaults to "ladder_tp" for backward compatibility.
+                    Use "time_stop" for remainder exits.
         """
         event_meta = meta or {}
         event_meta.update({
@@ -123,6 +126,8 @@ class PortfolioEvent:
             "pnl_pct_contrib": pnl_pct_contrib,
             "pnl_sol_contrib": pnl_sol_contrib,
         })
+        # BC: Если reason не передан, используем "ladder_tp" по умолчанию
+        event_reason = reason if reason is not None else "ladder_tp"
         return cls(  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
             timestamp=timestamp,  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
             strategy=strategy,  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
@@ -130,7 +135,7 @@ class PortfolioEvent:
             contract_address=contract_address,  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
             position_id=position_id,  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
             event_type=PortfolioEventType.POSITION_PARTIAL_EXIT,  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
-            reason="ladder_tp",  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
+            reason=event_reason,  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
             meta=event_meta,  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
         )
 

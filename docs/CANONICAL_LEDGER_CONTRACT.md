@@ -136,3 +136,26 @@ Execution данные хранятся в `PortfolioEvent.meta` и экспор
 - Ровно одно POSITION_CLOSED событие (для closed позиций)
 - Порядок: OPENED → PARTIAL_EXIT* → CLOSED (по timestamp)
 
+### Runner Exits Semantics
+
+**Partial Exits (TP уровни):**
+- Создаются при достижении TP уровня (например, 3x, 7x, 15x)
+- `event_type = "position_partial_exit"`
+- `reason = "ladder_tp"`
+- В `portfolio_executions.csv`: `event_type = "partial_exit"`, `reason = "ladder_tp"`
+
+**Final Exit (time_stop остаток):**
+- Создается при закрытии остатка позиции по time_stop
+- В событиях: `POSITION_PARTIAL_EXIT` с `meta["is_remainder"] = True` и `reason = "time_stop"`
+- В `portfolio_executions.csv`: `event_type = "final_exit"`, `reason = "time_stop"` (или из `pos.meta["close_reason"]`)
+- **Важно:** Remainder exit НЕ дублируется как `partial_exit` execution, только как `final_exit`
+
+**Правило:**
+- `partial_exit` execution → только TP-уровни (reason="ladder_tp")
+- `final_exit` execution → ровно 1 на позицию (reason="time_stop" для remainder, или "ladder_tp" для полного закрытия на уровнях)
+- time_stop остаток → всегда отражается как `final_exit` в executions, но как `POSITION_PARTIAL_EXIT` с `reason="time_stop"` в events
+
+**Пример:**
+- TP partial exit на 3x (20%) → `POSITION_PARTIAL_EXIT` (reason="ladder_tp") + `partial_exit` execution
+- time_stop остаток (80%) → `POSITION_PARTIAL_EXIT` (reason="time_stop", is_remainder=True) + `final_exit` execution (НЕ `partial_exit`)
+

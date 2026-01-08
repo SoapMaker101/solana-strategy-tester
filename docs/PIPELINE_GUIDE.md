@@ -262,6 +262,16 @@ test1,So11111111111111111111111111111111111111112,2025-01-01T10:00:00,bot
 - Для каждого `position_id`: `POSITION_OPENED` → `POSITION_PARTIAL_EXIT*` → `POSITION_CLOSED`
 - `PORTFOLIO_RESET_TRIGGERED` эмитится после закрытий всех позиций при reset
 
+**Где смотреть подтверждение partial/final:**
+- **portfolio_events.csv:** 
+  - TP partial exits: `POSITION_PARTIAL_EXIT` с `reason="ladder_tp"`
+  - Remainder exit: `POSITION_PARTIAL_EXIT` с `reason="time_stop"` и `meta.is_remainder=True`
+  - Final close: `POSITION_CLOSED` с `reason="time_stop"` или `"ladder_tp"`
+- **portfolio_executions.csv:**
+  - TP partial exits: `event_type="partial_exit"`, `reason="ladder_tp"`
+  - Remainder exit: `event_type="final_exit"`, `reason="time_stop"` (НЕ дублируется как partial_exit)
+  - Final close: `event_type="final_exit"` (если позиция закрыта полностью на уровнях)
+
 ### Capacity rules
 
 **Где:** `backtester/domain/portfolio.py` — `PortfolioEngine._check_capacity()`
