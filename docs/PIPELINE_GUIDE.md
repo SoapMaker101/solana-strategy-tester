@@ -262,15 +262,16 @@ test1,So11111111111111111111111111111111111111112,2025-01-01T10:00:00,bot
 - Для каждого `position_id`: `POSITION_OPENED` → `POSITION_PARTIAL_EXIT*` → `POSITION_CLOSED`
 - `PORTFOLIO_RESET_TRIGGERED` эмитится после закрытий всех позиций при reset
 
-**Где смотреть подтверждение partial/final:**
-- **portfolio_events.csv:** 
+**Где смотреть подтверждение partial/final (Variant C):**
+- **portfolio_events.csv:**
   - TP partial exits: `POSITION_PARTIAL_EXIT` с `reason="ladder_tp"`
-  - Remainder exit: `POSITION_PARTIAL_EXIT` с `reason="time_stop"` и `meta.is_remainder=True`
-  - Final close: `POSITION_CLOSED` с `reason="time_stop"` или `"ladder_tp"`
+  - Final close (remainder): `POSITION_CLOSED` с `reason="time_stop"` (НЕ отдельный `POSITION_PARTIAL_EXIT` для remainder)
+  - Final close (полное закрытие на уровнях): `POSITION_CLOSED` с `reason="ladder_tp"`
 - **portfolio_executions.csv:**
   - TP partial exits: `event_type="partial_exit"`, `reason="ladder_tp"`
-  - Remainder exit: `event_type="final_exit"`, `reason="time_stop"` (НЕ дублируется как partial_exit)
-  - Final close: `event_type="final_exit"` (если позиция закрыта полностью на уровнях)
+  - Final exit (remainder): `event_type="final_exit"`, `reason="time_stop"`, `event_id` ссылается на `POSITION_CLOSED.event_id`
+  - Final exit (полное закрытие на уровнях): `event_type="final_exit"`, `reason="ladder_tp"`
+- **Важно:** Остаток закрыт по time_stop → проверяйте `executions.final_exit` + `events.position_closed` (reason="time_stop")
 
 ### Capacity rules
 

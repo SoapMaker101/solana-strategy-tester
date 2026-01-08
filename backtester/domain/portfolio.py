@@ -1456,7 +1456,8 @@ class PortfolioEngine:
                 balance += notional_after_fees
                 balance -= network_fee_exit
                 
-                # Сохраняем информацию о закрытии остатка
+                # Variant C: Сохраняем информацию о закрытии остатка в meta для использования в _process_position_exit
+                # НЕ создаём POSITION_PARTIAL_EXIT event для remainder - только POSITION_CLOSED будет создан позже
                 if "partial_exits" not in pos.meta:
                     pos.meta["partial_exits"] = []
                 pos.meta["partial_exits"].append({
@@ -1470,37 +1471,17 @@ class PortfolioEngine:
                     "network_fee_sol": network_fee_exit,
                     "is_remainder": True,
                 })
-                if portfolio_events is not None:
-                    # Вычисляем level_xn для time_stop
-                    level_xn = pos.exit_price / pos.entry_price if pos.entry_price and pos.entry_price > 0 else 1.0
-                    fraction_remainder = pos.size / original_size if original_size and original_size > 0 else 0.0
-                    
-                    # Remainder exit: передаём reason="time_stop" для правильной семантики
-                    event = PortfolioEvent.create_position_partial_exit(
-                        timestamp=pos.exit_time or current_time,
-                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        position_id=pos.position_id,
-                        level_xn=level_xn,
-                        fraction=fraction_remainder,
-                        raw_price=pos.exit_price,  # Используем exit_price как raw_price
-                        exec_price=effective_exit_price,
-                        pnl_pct_contrib=exit_pnl_pct * 100.0,  # В процентах
-                        pnl_sol_contrib=exit_pnl_sol,
-                        reason="time_stop",  # Remainder exit по time_stop должен иметь reason="time_stop"
-                        meta={
-                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
-                            "exit_time": pos.exit_time.isoformat() if pos.exit_time else None,
-                            "exit_size": pos.size,
-                            "fees_sol": fees_remainder,
-                            "network_fee_sol": network_fee_exit,
-                            "is_remainder": True,
-                            "reason": "time_stop",  # Сохраняем reason в meta для совместимости
-                        },
-                    )
-                    pos.meta["partial_exits"][-1]["event_id"] = event.event_id
-                    portfolio_events.append(event)
+                # Сохраняем данные remainder в meta для использования в _process_position_exit при создании POSITION_CLOSED
+                pos.meta["remainder_exit_data"] = {
+                    "raw_price": pos.exit_price,
+                    "exec_price": effective_exit_price,
+                    "pnl_sol": exit_pnl_sol,
+                    "pnl_pct": exit_pnl_pct,
+                    "fees_sol": fees_remainder,
+                    "network_fee_sol": network_fee_exit,
+                    "exit_size": pos.size,
+                }
+                # НЕ создаём POSITION_PARTIAL_EXIT event для remainder - это будет сделано через POSITION_CLOSED в _process_position_exit
                 
                 # Обновляем fees
                 pos.meta["fees_total_sol"] = pos.meta.get("fees_total_sol", 0.0) + fees_remainder + network_fee_exit
@@ -1673,30 +1654,42 @@ class PortfolioEngine:
                     
                     pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
                     fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
-                    raw_exit_price = pos.exit_price
-                    exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+                    
+                    # Variant C: Если есть remainder_exit_data, используем его для правильных цен и PnL
+                    remainder_data = pos.meta.get("remainder_exit_data") if pos.meta else None
+                    if remainder_data:
+                        # Используем данные remainder для финального закрытия
+                        raw_exit_price = remainder_data.get("raw_price", pos.exit_price)
+                        exec_exit_price = remainder_data.get("exec_price", pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price)
+                        # PnL уже пересчитан в pos.meta["pnl_sol"] из всех partial_exits, включая remainder
+                    else:
+                        # Обычный случай (позиция закрыта полностью на уровнях)
+                        raw_exit_price = pos.exit_price
+                        exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
                     
                     # Каноническое событие POSITION_CLOSED с position_id
-                    portfolio_events.append(
-                        PortfolioEvent.create_position_closed(
-                            timestamp=current_time,
-                            strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
-                            signal_id=pos.signal_id,
-                            contract_address=pos.contract_address,
-                            position_id=pos.position_id,
-                            reason=close_reason,  # Используем правильный reason
-                            raw_price=raw_exit_price,
-                            exec_price=exec_exit_price,
-                            pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах
-                            pnl_sol=pnl_sol,
-                            meta={
-                                "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
-                                "exit_time": current_time.isoformat(),
-                                "fees_total_sol": fees_total,
-                                "runner_ladder": True,
-                            },
-                        )
+                    close_event = PortfolioEvent.create_position_closed(
+                        timestamp=current_time,
+                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        position_id=pos.position_id,
+                        reason=close_reason,  # Используем правильный reason
+                        raw_price=raw_exit_price,
+                        exec_price=exec_exit_price,
+                        pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах
+                        pnl_sol=pnl_sol,
+                        meta={
+                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                            "exit_time": current_time.isoformat(),
+                            "fees_total_sol": fees_total,
+                            "runner_ladder": True,
+                        },
                     )
+                    portfolio_events.append(close_event)
+                    # Сохраняем event_id для использования в reporter
+                    if pos.meta:
+                        pos.meta["close_event_id"] = close_event.event_id
                 
                 # Добавляем в closed_positions только если еще не добавлена
                 if pos not in state.closed_positions:

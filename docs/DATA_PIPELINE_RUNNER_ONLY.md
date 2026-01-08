@@ -284,21 +284,21 @@ pnl_pct_total = (3.4 - 1.0) × 100 = 240%
 - Price откатывается
 - time_stop срабатывает (остаток 80% закрыт)
 
-**В portfolio_events.csv:**
+**В portfolio_events.csv (Variant C):**
 1. `POSITION_OPENED` (entry)
 2. `POSITION_PARTIAL_EXIT` (reason="ladder_tp", level_xn=3.0, fraction=0.20) - TP partial
-3. `POSITION_PARTIAL_EXIT` (reason="time_stop", is_remainder=True) - remainder exit
-4. `POSITION_CLOSED` (reason="time_stop")
+3. `POSITION_CLOSED` (reason="time_stop") - финальное закрытие остатка (НЕ отдельный POSITION_PARTIAL_EXIT для remainder)
 
 **В portfolio_executions.csv:**
 1. `entry` (qty_delta=+0.1)
 2. `partial_exit` (qty_delta=-0.02, reason="ladder_tp", xn=3.0) - TP partial
-3. `final_exit` (qty_delta=-0.08, reason="time_stop") - remainder (НЕ дублируется как partial_exit)
+3. `final_exit` (qty_delta=-0.08, reason="time_stop", event_id ссылается на POSITION_CLOSED) - remainder
 
-**Важно:**
-- Remainder exit (`is_remainder=True`) НЕ записывается как `partial_exit` execution
-- Remainder exit отражается только в `final_exit` execution
-- `event_id` в `final_exit` ссылается на remainder exit event
+**Важно (Variant C):**
+- Remainder не является отдельным event типа `POSITION_PARTIAL_EXIT`
+- Финальный остаток отражается только через `POSITION_CLOSED` (reason="time_stop")
+- `final_exit` execution отражает remainder и ссылается на `POSITION_CLOSED.event_id` (через `pos.meta["close_event_id"]`)
+- Данные remainder (fees, prices, pnl) хранятся в `pos.meta["remainder_exit_data"]` для использования в reporter
 
 ### Пример расчета PnL
 

@@ -950,13 +950,13 @@ class Reporter:
                     
                     if has_partial_exits:
                         # Позиция с partial_exits
-                        remainder_exits = [e for e in pos.meta.get("partial_exits", []) if e.get("is_remainder", False)]
-                        if remainder_exits:
-                            # Используем fees из remainder exit (это final exit по time_stop)
-                            remainder_exit = remainder_exits[-1]
-                            fees_final_exit = remainder_exit.get("fees_sol", 0.0) + remainder_exit.get("network_fee_sol", 0.0)
+                        # Variant C: Проверяем наличие remainder_exit_data вместо поиска в partial_exits
+                        remainder_data = pos.meta.get("remainder_exit_data") if pos.meta else None
+                        if remainder_data:
+                            # Используем fees из remainder_exit_data (это final exit по time_stop)
+                            fees_final_exit = remainder_data.get("fees_sol", 0.0) + remainder_data.get("network_fee_sol", 0.0)
                         else:
-                            # Если нет remainder exit, значит позиция закрыта полностью на уровнях
+                            # Если нет remainder_exit_data, значит позиция закрыта полностью на уровнях
                             # В этом случае final_exit не должен иметь fees (все уже учтено в partial_exits)
                             fees_final_exit = 0.0
                     else:
@@ -1376,11 +1376,18 @@ class Reporter:
                 
                 # Алгоритм расчёта fees_sol в executions (устойчивый)
                 # Шаг 1: Собрать exit_fee_sum = Σ (exit["fees_sol"] + exit["network_fee_sol"]) по всем partial_exits
-                # (включая is_remainder=True, это final remainder fee)
+                # Variant C: НЕ включаем remainder в partial_exits (он теперь в remainder_exit_data)
                 exit_fee_sum = 0.0
                 if has_partial_exits:
                     for exit in pos.meta.get("partial_exits", []):
-                        exit_fee_sum += exit.get("fees_sol", 0.0) + exit.get("network_fee_sol", 0.0)
+                        # Пропускаем remainder (is_remainder=True) - он теперь в remainder_exit_data
+                        if not exit.get("is_remainder", False):
+                            exit_fee_sum += exit.get("fees_sol", 0.0) + exit.get("network_fee_sol", 0.0)
+                
+                # Добавляем fees из remainder_exit_data, если есть
+                remainder_data = pos.meta.get("remainder_exit_data") if pos.meta else None
+                if remainder_data:
+                    exit_fee_sum += remainder_data.get("fees_sol", 0.0) + remainder_data.get("network_fee_sol", 0.0)
                 
                 # Шаг 2: Взять fees_total = pos.meta["fees_total_sol"] (если нет — 0)
                 fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
@@ -1475,31 +1482,37 @@ class Reporter:
                 # ВАЖНО: для позиций с partial exits нужно использовать remaining_size,
                 # а не pos.size (который может быть 0 после partial exits)
                 if pos.exit_time and pos.status == "closed":
-                    exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
-                    raw_exit_price = pos.meta.get("raw_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+                    # Variant C: Если есть remainder_exit_data, используем его для правильных цен
+                    remainder_data = pos.meta.get("remainder_exit_data") if pos.meta else None
+                    if remainder_data:
+                        exec_exit_price = remainder_data.get("exec_price", pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price)
+                        raw_exit_price = remainder_data.get("raw_price", pos.meta.get("raw_exit_price", pos.exit_price) if pos.meta else pos.exit_price)
+                    else:
+                        exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
+                        raw_exit_price = pos.meta.get("raw_exit_price", pos.exit_price) if pos.meta else pos.exit_price
                     pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
                     closed_by_reset = pos.meta.get("closed_by_reset", False) if pos.meta else False
                     reset_reason = pos.meta.get("reset_reason", None) if pos.meta else None
                     
-                    # Для позиций с partial exits используем remaining_size из последнего partial_exit
+                    # Variant C: Для позиций с partial exits используем remaining_size
                     # или pos.size если partial_exits нет
                     remaining_size = pos.size
                     if has_partial_exits:
-                        partial_exits = pos.meta.get("partial_exits", [])
-                        # Находим последний partial_exit с is_remainder=True (это final exit)
-                        remainder_exits = [e for e in partial_exits if e.get("is_remainder", False)]
-                        if remainder_exits:
-                            # Используем exit_size из remainder exit
-                            remaining_size = remainder_exits[-1].get("exit_size", pos.size)
+                        # Variant C: Проверяем наличие remainder_exit_data вместо поиска в partial_exits
+                        remainder_data = pos.meta.get("remainder_exit_data") if pos.meta else None
+                        if remainder_data:
+                            # Используем exit_size из remainder_exit_data
+                            remaining_size = remainder_data.get("exit_size", pos.size)
                         else:
-                            # Если нет remainder exit, значит позиция закрыта полностью на уровнях
+                            # Если нет remainder_exit_data, значит позиция закрыта полностью на уровнях
                             # Вычисляем remaining_size как original_size - sum(partial_exit_sizes)
+                            partial_exits = pos.meta.get("partial_exits", [])
                             original_size = pos.meta.get("original_size", pos.size)
                             total_exited = sum(e.get("exit_size", 0.0) for e in partial_exits if not e.get("is_remainder", False))
                             remaining_size = max(0.0, original_size - total_exited)
                     
-                    # Для final_exit fees_sol:
-                    # - если есть remainder (is_remainder=True) → fees_sol = remainder.fees_sol + remainder.network_fee_sol
+                    # Variant C: Для final_exit fees_sol:
+                    # - если есть remainder_exit_data в meta → fees_sol = remainder.fees_sol + remainder.network_fee_sol
                     # - если remainder нет (позиция полностью закрылась на уровнях) → fees_sol = 0.0
                     #   (потому что все exit fees уже учтены в partial exits)
                     fees_final_exit = 0.0
@@ -1507,15 +1520,15 @@ class Reporter:
                     
                     if has_partial_exits:
                         # Позиция с partial_exits
-                        remainder_exits = [e for e in pos.meta.get("partial_exits", []) if e.get("is_remainder", False)]
-                        if remainder_exits:
-                            # Используем fees из remainder exit (это final exit по time_stop)
-                            remainder_exit = remainder_exits[-1]
-                            fees_final_exit = remainder_exit.get("fees_sol", 0.0) + remainder_exit.get("network_fee_sol", 0.0)
-                            # Используем event_id из remainder exit event для связи
-                            final_exit_event_id = remainder_exit.get("event_id", final_exit_event_id)
+                        # Variant C: Проверяем наличие remainder_exit_data вместо поиска в partial_exits
+                        remainder_data = pos.meta.get("remainder_exit_data") if pos.meta else None
+                        if remainder_data:
+                            # Используем fees из remainder_exit_data (это final exit по time_stop)
+                            fees_final_exit = remainder_data.get("fees_sol", 0.0) + remainder_data.get("network_fee_sol", 0.0)
+                            # event_id должен ссылаться на POSITION_CLOSED event (close_event_id)
+                            # final_exit_event_id уже установлен выше из close_event_id
                         else:
-                            # Если нет remainder exit, значит позиция закрыта полностью на уровнях
+                            # Если нет remainder_exit_data, значит позиция закрыта полностью на уровнях
                             # В этом случае final_exit не должен иметь fees (все уже учтено в partial_exits)
                             fees_final_exit = 0.0
                     else:
@@ -1532,7 +1545,7 @@ class Reporter:
                         "strategy": strategy_name,
                         "event_time": pos.exit_time.isoformat(),
                         "event_type": "final_exit",
-                        "event_id": final_exit_event_id,  # Используем event_id из remainder exit если есть
+                        "event_id": final_exit_event_id,  # Используем event_id из POSITION_CLOSED (close_event_id)
                         "qty_delta": -remaining_size,  # Используем remaining_size вместо pos.size
                         "raw_price": raw_exit_price,
                         "exec_price": exec_exit_price,
