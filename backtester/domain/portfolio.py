@@ -1569,6 +1569,9 @@ class PortfolioEngine:
                 pos.meta["pnl_sol"] = pnl_sol_recalculated
             
             pos.meta["close_reason"] = "time_stop" if pos.meta.get("time_stop_triggered") else "ladder_tp"
+            # ВАЖНО: Помечаем, что событие POSITION_CLOSED должно быть создано в _process_position_exit
+            # Это гарантирует, что событие будет создано даже если позиция уже закрыта
+            pos.meta["_needs_close_event"] = True
             # НЕ добавляем в closed_positions - это будет сделано в _process_position_exit
         
         return {"balance": balance}
@@ -1593,8 +1596,37 @@ class PortfolioEngine:
             override_reason: Принудительный reason для POSITION_CLOSED (если задан, имеет приоритет)
         """
         # ВАЖНО: Если позиция уже закрыта reset'ом, не перезаписываем reason
+        # Но проверяем, было ли событие создано
         if pos.meta and pos.meta.get("closed_by_reset", False) and override_reason is None:
-            # Позиция уже закрыта reset'ом, событие уже эмитчено в _apply_reset
+            # Позиция уже закрыта reset'ом, событие должно быть эмитчено в _apply_reset
+            # Проверяем, что событие было создано (если нет, создаем его)
+            if portfolio_events is not None and not pos.meta.get("close_event_id"):
+                # Событие не было создано, создаем его сейчас
+                close_reason = pos.meta.get("reset_reason", "manual_close")
+                pnl_sol = pos.meta.get("pnl_sol", 0.0)
+                fees_total = pos.meta.get("fees_total_sol", 0.0)
+                raw_exit_price = pos.exit_price
+                exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price)
+                
+                close_event = PortfolioEvent.create_position_closed(
+                    timestamp=current_time,
+                    strategy=pos.meta.get("strategy", "unknown"),
+                    signal_id=pos.signal_id,
+                    contract_address=pos.contract_address,
+                    position_id=pos.position_id,
+                    reason=close_reason,
+                    raw_price=raw_exit_price,
+                    exec_price=exec_exit_price,
+                    pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,
+                    pnl_sol=pnl_sol,
+                    meta={
+                        "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                        "exit_time": current_time.isoformat(),
+                        "fees_total_sol": fees_total,
+                    },
+                )
+                portfolio_events.append(close_event)
+                pos.meta["close_event_id"] = close_event.event_id
             # Не обрабатываем повторно
             return
         
@@ -1631,11 +1663,13 @@ class PortfolioEngine:
             
             # Если позиция полностью закрыта после partial exits (size <= 0), удаляем из open
             # Проверяем, не добавлена ли уже в closed_positions
+            # ВАЖНО: Проверяем, не было ли событие уже создано
             if pos.size <= 1e-9:
                 pos.status = "closed"
                 
                 # Эмитим событие POSITION_CLOSED для runner ladder позиции
-                if portfolio_events is not None:
+                # Проверяем, не было ли событие уже создано (из _process_runner_partial_exits)
+                if portfolio_events is not None and not pos.meta.get("close_event_id"):
                     # TASK B: Правильный reason для POSITION_CLOSED
                     # Если time_stop_triggered=True → "time_stop"
                     # Иначе если закрыли после ladder TP → "ladder_tp"
@@ -2567,6 +2601,72 @@ class PortfolioEngine:
         # Все позиции помечаем closed для консистентности
         for pos in state.closed_positions:
             pos.status = "closed"
+        
+        # ВАЖНО: Гарантируем, что для всех закрытых позиций есть событие POSITION_CLOSED
+        # Это исправляет проблему missing_events_chain (P1)
+        if portfolio_events is not None:
+            closed_position_ids = {pos.position_id for pos in state.closed_positions}
+            close_event_ids = {
+                e.position_id for e in portfolio_events 
+                if e.event_type == PortfolioEventType.POSITION_CLOSED
+            }
+            missing_close_events = closed_position_ids - close_event_ids
+            
+            # Self-check debug-лог (без изменения поведения)
+            if missing_close_events:
+                logger.debug(
+                    f"[PORTFOLIO_SELF_CHECK] Found {len(missing_close_events)} closed positions "
+                    f"without POSITION_CLOSED events: {list(missing_close_events)[:5]}"
+                )
+            else:
+                logger.debug(
+                    f"[PORTFOLIO_SELF_CHECK] All {len(closed_position_ids)} closed positions "
+                    f"have POSITION_CLOSED events ({len(close_event_ids)} events found)"
+                )
+            
+            # Для каждой позиции без события создаем его
+            for pos in state.closed_positions:
+                if pos.position_id in missing_close_events:
+                    # Определяем reason для события
+                    close_reason = "time_stop"  # По умолчанию
+                    if pos.meta:
+                        if pos.meta.get("closed_by_reset", False):
+                            close_reason = pos.meta.get("reset_reason", "manual_close")
+                        elif pos.meta.get("close_reason"):
+                            close_reason = pos.meta.get("close_reason")
+                        elif pos.meta.get("time_stop_triggered", False):
+                            close_reason = "time_stop"
+                        elif pos.meta.get("runner_ladder", False):
+                            close_reason = "ladder_tp"
+                    
+                    # Используем exit_time или текущее время
+                    exit_time = pos.exit_time if pos.exit_time else datetime.now(timezone.utc)
+                    
+                    pnl_sol = pos.meta.get("pnl_sol", 0.0) if pos.meta else 0.0
+                    fees_total = pos.meta.get("fees_total_sol", 0.0) if pos.meta else 0.0
+                    raw_exit_price = pos.exit_price if pos.exit_price else pos.entry_price
+                    exec_exit_price = pos.meta.get("exec_exit_price", raw_exit_price) if pos.meta else raw_exit_price
+                    
+                    close_event = PortfolioEvent.create_position_closed(
+                        timestamp=exit_time,
+                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                        signal_id=pos.signal_id,
+                        contract_address=pos.contract_address,
+                        position_id=pos.position_id,
+                        reason=close_reason,
+                        raw_price=raw_exit_price,
+                        exec_price=exec_exit_price,
+                        pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,
+                        pnl_sol=pnl_sol,
+                        meta={
+                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                            "exit_time": exit_time.isoformat(),
+                            "fees_total_sol": fees_total,
+                        },
+                    )
+                    portfolio_events.append(close_event)
+                    if pos.meta:
+                        pos.meta["close_event_id"] = close_event.event_id
 
         # Логируем момент возврата результата
         reset_positions = [p for p in state.closed_positions if p.meta.get("closed_by_reset", False)]

@@ -140,6 +140,8 @@ Execution данные хранятся в `PortfolioEvent.meta` и экспор
 - Ровно одно POSITION_CLOSED событие (для closed позиций)
 - Порядок: OPENED → PARTIAL_EXIT* → CLOSED (по timestamp)
 
+**Критический инвариант (P1):** Каждая позиция со `status="closed"` в `portfolio_positions.csv` обязана иметь ровно одно событие `POSITION_CLOSED` с тем же `position_id` в `portfolio_events.csv`. Это гарантируется на уровне Domain (portfolio.py) и проверяется audit'ом.
+
 ### Runner Exits Semantics
 
 **Partial Exits (TP уровни):**

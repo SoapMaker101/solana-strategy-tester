@@ -276,6 +276,17 @@ pnl_pct_total = (3.4 - 1.0) × 100 = 240%
 
 **Правило:** Remainder по time_stop = final_exit в executions, reason=time_stop в events
 
+#### Цепочка событий для позиции
+
+**Каноническая цепочка для каждой позиции:**
+1. `POSITION_OPENED` - открытие позиции (обязательно, ровно одно)
+2. `POSITION_PARTIAL_EXIT`* - частичные выходы по TP уровням (0 или более)
+3. `POSITION_CLOSED` - финальное закрытие позиции (обязательно для closed позиций, ровно одно)
+
+**Критический инвариант (P1):** Каждая позиция со `status="closed"` в `portfolio_positions.csv` обязана иметь ровно одно событие `POSITION_CLOSED` с тем же `position_id` в `portfolio_events.csv`. Это гарантируется на уровне Domain (portfolio.py) и проверяется audit'ом.
+
+**Порядок событий:** События должны быть упорядочены по `timestamp`: OPENED → PARTIAL_EXIT* → CLOSED.
+
 #### Пример: TP partial + time_stop final
 
 **Сценарий:**

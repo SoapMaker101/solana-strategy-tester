@@ -342,7 +342,49 @@ python -m backtester.audit.run_audit --reports-dir output/reports
   - `ENTRY_PRICE_INVALID` — entry_price <= 0 или NaN
   - `EXIT_PRICE_INVALID` — exit_price <= 0 или NaN
   - `TIME_ORDER_INVALID` — entry_time > exit_time
-  - `MISSING_EVENTS_CHAIN` — нет цепочки событий для позиции
+  - `MISSING_EVENTS_CHAIN` — нет цепочки событий для позиции (P1)
+
+### Как дебажить missing_events_chain (P1)
+
+**Проблема:** Audit сообщает, что закрытая позиция не имеет события `POSITION_CLOSED`.
+
+**Шаги дебага:**
+
+1. **Проверить position_id в audit_anomalies.csv:**
+   ```bash
+   python -m backtester.audit.run_audit --reports-dir "runs/A/reports"
+   ```
+   Найти `position_id` из аномалии `missing_events_chain`.
+
+2. **Проверить позицию в portfolio_positions.csv:**
+   - Найти строку с этим `position_id`
+   - Проверить `status` (должен быть "closed")
+   - Проверить `reason` (time_stop, ladder_tp, reset, и т.д.)
+   - Проверить `exit_time` и `exit_price`
+
+3. **Проверить события в portfolio_events.csv:**
+   - Найти все события с этим `position_id`
+   - Должны быть: `POSITION_OPENED`, возможно несколько `POSITION_PARTIAL_EXIT`, и обязательно `POSITION_CLOSED`
+   - Если `POSITION_CLOSED` отсутствует — это проблема
+
+4. **Определить closure-path:**
+   - `reason="time_stop"` → закрытие по таймауту
+   - `reason="ladder_tp"` → закрытие после частичных выходов
+   - `reason="profit_reset"` или `reason="capacity_prune"` → закрытие через reset
+   - `closed_by_reset=True` → принудительное закрытие
+
+5. **Проверить executions в portfolio_executions.csv:**
+   - Найти все executions с этим `position_id`
+   - Должны быть: `entry`, возможно несколько `partial_exit`, и `final_exit`
+   - `final_exit.event_id` должен ссылаться на `POSITION_CLOSED.event_id`
+
+6. **Проверить debug-лог:**
+   - В логах искать `[PORTFOLIO_SELF_CHECK]` — это self-check, который показывает количество закрытых позиций без событий
+   - Если есть предупреждения — это указывает на проблему
+
+**Исправление:**
+- Проблема исправлена на уровне Domain (portfolio.py): в конце симуляции для всех закрытых позиций гарантируется создание события `POSITION_CLOSED`
+- Если проблема все еще возникает, проверьте, что `portfolio_events` передается во все методы закрытия позиций
 
 - **P1 (важные):**
   - `POSITION_CLOSED_BUT_NO_CLOSE_EVENT` — позиция закрыта, но нет события закрытия
