@@ -1,2 +1,0 @@
-strategy,final_balance_sol,total_return_pct,max_drawdown_pct,trades_executed,trades_skipped_by_risk,trades_skipped_by_reset,reset_count,last_reset_time,cycle_start_equity,equity_peak_in_cycle
-Runner_Tail_3_7_15_45d,9.74151306771327,-0.025848693228672913,-0.05025000000000013,5,0,0,0,,10.0,10.0
