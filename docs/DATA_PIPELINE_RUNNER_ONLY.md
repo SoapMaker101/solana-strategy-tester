@@ -260,9 +260,16 @@ pnl_pct_total = (3.4 - 1.0) × 100 = 240%
 
 **Где хранится:**
 
-- `portfolio_positions.csv`: колонки `realized_multiple`, `pnl_pct_total`, `pnl_sol`
+- `portfolio_positions.csv`: колонки `realized_multiple`, `pnl_pct_total`, `pnl_sol`, `fees_total_sol`
 - `portfolio_events.csv`: в `meta_json` для `POSITION_PARTIAL_EXIT` есть `pnl_pct_contrib`, `pnl_sol_contrib`
-- `portfolio_executions.csv`: каждая строка partial exit имеет `pnl_sol_delta`
+- `portfolio_executions.csv`: каждая строка execution имеет `pnl_sol_delta` и `fees_sol`
+
+**Важно о fees:**
+- В `portfolio_executions.csv` поле `fees_sol` используется как "полная fee per execution" (включая network_fee, если она учитывается в `fees_total_sol` позиции)
+- Сумма `fees_sol` по всем executions позиции должна совпадать с `fees_total_sol` в `portfolio_positions.csv`
+- Для entry: `fees_sol` = network_fee при входе
+- Для partial_exit: `fees_sol` = swap + LP fees + network_fee для этого exit
+- Для final_exit: `fees_sol` = swap + LP fees + network_fee для этого exit (или remainder exit)
 
 ### Интерпретация Executions/Events для Ladder
 

@@ -76,10 +76,12 @@ Execution данные хранятся в `PortfolioEvent.meta` и экспор
 - `raw_price: float` (цена до slippage)
 - `exec_price: float` (цена после slippage)
 - `qty_delta: float` (изменение размера, для entry положительное, для exit отрицательное)
-- `fees_sol: float` (комиссии)
+- `fees_sol: float` (комиссии, включая network_fee если она учитывается в fees_total_sol позиции)
 - `pnl_sol_delta: float` (изменение PnL для этого execution)
 
 Смысл: исполнение (цены, комиссии, slippage) для каждого события торговли.
+
+**Важно:** В `portfolio_executions.csv` поле `fees_sol` включает network_fee (если она учитывается в `fees_total_sol` позиции), чтобы сумма `fees_sol` по всем executions позиции совпадала с `fees_total_sol` в `portfolio_positions.csv`.
 
 ## Linkage
 
