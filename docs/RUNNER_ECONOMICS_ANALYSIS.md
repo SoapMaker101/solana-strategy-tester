@@ -5,6 +5,11 @@
 **Статус:** Анализ + Решение принято и реализовано  
 **Цель:** Понять текущую механику partial/final exits и выявить проблемы
 
+**Обновление (C + reporter fix):**
+- `portfolio-derived strategy_summary` считает `fees_total_sol` только из `positions-level` (сумма `fees_total_sol` по всем позициям стратегии)
+- `executions.fees_sol` — это распределение `fees_total_sol` по execution-строкам для проверки и дебага, и сумма должна сходиться
+- Никаких пересчётов через executions или helper методы в strategy_summary
+
 ---
 
 ## 1️⃣ Анализ текущего состояния

@@ -83,6 +83,8 @@ Execution данные хранятся в `PortfolioEvent.meta` и экспор
 
 **Важно:** В `portfolio_executions.csv` поле `fees_sol` включает network_fee (если она учитывается в `fees_total_sol` позиции), чтобы сумма `fees_sol` по всем executions позиции совпадала с `fees_total_sol` в `portfolio_positions.csv`.
 
+**Важно о strategy_summary:** `portfolio-derived strategy_summary` считает `fees_total_sol` только из `positions-level` (сумма `fees_total_sol` по всем позициям стратегии). Никаких пересчётов через executions или helper методы.
+
 ## Linkage
 
 ### Events ↔ Executions

@@ -589,6 +589,11 @@ if runner_criteria is None:
 | `audit_anomalies.csv` | Audit (`run_audit.py`) | Пользователь | Can |
 | `portfolio_summary.csv` | `Reporter` | Пользователь | Can |
 | `strategy_summary.csv` | `Reporter` | Пользователь | Can |
+
+**Важно о strategy_summary:**
+- `portfolio-derived strategy_summary` считает `fees_total_sol` только из `positions-level` (сумма `fees_total_sol` по всем позициям стратегии)
+- Никаких пересчётов через executions или helper методы
+- `executions.fees_sol` — это распределение `fees_total_sol` по execution-строкам для проверки и дебага, и сумма должна сходиться
 | XLSX report pack | `Reporter` | Пользователь | Can |
 
 ### Особые требования

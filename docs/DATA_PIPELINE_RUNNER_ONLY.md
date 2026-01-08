@@ -267,9 +267,10 @@ pnl_pct_total = (3.4 - 1.0) × 100 = 240%
 **Важно о fees:**
 - В `portfolio_executions.csv` поле `fees_sol` используется как "полная fee per execution" (включая network_fee, если она учитывается в `fees_total_sol` позиции)
 - Сумма `fees_sol` по всем executions позиции должна совпадать с `fees_total_sol` в `portfolio_positions.csv`
-- Для entry: `fees_sol` = network_fee при входе
+- Для entry: `fees_sol` = network_fee при входе (для Runner с partial_exits) или 0 (для обычных позиций)
 - Для partial_exit: `fees_sol` = swap + LP fees + network_fee для этого exit
-- Для final_exit: `fees_sol` = swap + LP fees + network_fee для этого exit (или remainder exit)
+- Для final_exit: `fees_sol` = swap + LP fees + network_fee для этого exit (или remainder exit), или `fees_total_sol` для обычных позиций
+- **Важно:** `executions.fees_sol` — это распределение `fees_total_sol` по execution-строкам для проверки и дебага, и сумма должна сходиться
 
 ### Интерпретация Executions/Events для Ladder
 
