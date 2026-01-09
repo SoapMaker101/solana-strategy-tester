@@ -30,9 +30,38 @@ def _load_csv(path: Path) -> pd.DataFrame | None:
 
 
 def audit_run(reports_dir: Path) -> Tuple[int, int]:
-    positions_df = _load_csv(reports_dir / "portfolio_positions.csv")
-    events_df = _load_csv(reports_dir / "portfolio_events.csv")
-    executions_df = _load_csv(reports_dir / "portfolio_executions.csv")
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Resolve absolute path and log it
+    reports_dir_abs = reports_dir.resolve()
+    print(f"[audit] Reports directory (resolved): {reports_dir_abs}")
+    
+    # Load CSVs and log file paths and row counts
+    positions_path = reports_dir_abs / "portfolio_positions.csv"
+    events_path = reports_dir_abs / "portfolio_events.csv"
+    executions_path = reports_dir_abs / "portfolio_executions.csv"
+    
+    print(f"[audit] Loading positions from: {positions_path}")
+    positions_df = _load_csv(positions_path)
+    if positions_df is not None:
+        print(f"[audit] Loaded {len(positions_df)} positions")
+    else:
+        print(f"[audit] Positions file not found or empty")
+    
+    print(f"[audit] Loading events from: {events_path}")
+    events_df = _load_csv(events_path)
+    if events_df is not None:
+        print(f"[audit] Loaded {len(events_df)} events")
+    else:
+        print(f"[audit] Events file not found or empty")
+    
+    print(f"[audit] Loading executions from: {executions_path}")
+    executions_df = _load_csv(executions_path)
+    if executions_df is not None:
+        print(f"[audit] Loaded {len(executions_df)} executions")
+    else:
+        print(f"[audit] Executions file not found or empty")
 
     checker = InvariantChecker(positions_df, events_df, executions_df)
     anomalies = checker.check()

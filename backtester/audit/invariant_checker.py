@@ -120,9 +120,9 @@ class InvariantChecker:
 
         reset_events = []
         if self.events_df is not None and "event_type" in self.events_df.columns:
-            reset_events = self.events_df[
-                self.events_df["event_type"] == "PORTFOLIO_RESET_TRIGGERED"
-            ]
+            # Normalize event_type for case-insensitive comparison
+            event_type_norm = self.events_df["event_type"].astype(str).str.strip().str.upper()
+            reset_events = self.events_df[event_type_norm == "PORTFOLIO_RESET_TRIGGERED"]
 
         reset_reasons = {"profit_reset", "capacity_prune"}
 
@@ -134,8 +134,10 @@ class InvariantChecker:
 
         events_reset = []
         if self.events_df is not None and "reason" in self.events_df.columns:
+            # Normalize event_type for case-insensitive comparison
+            event_type_norm = self.events_df["event_type"].astype(str).str.strip().str.upper()
             events_reset = self.events_df[
-                (self.events_df["event_type"] == "POSITION_CLOSED")
+                (event_type_norm == "POSITION_CLOSED")
                 & (self.events_df["reason"].isin(isin_values(reset_reasons)))
             ]
 
@@ -165,25 +167,69 @@ class InvariantChecker:
         if positions is None or events is None:
             return
 
-        close_events = events[events["event_type"] == "POSITION_CLOSED"]
-        close_event_ids = set(pd.Series(close_events["position_id"]).dropna().astype(str))
+        # Normalize event_type to uppercase for case-insensitive comparison
+        events_normalized = events.copy()
+        events_normalized["_event_type_norm"] = events["event_type"].astype(str).str.strip().str.upper()
+        events_normalized["_position_id_norm"] = events["position_id"].astype(str).str.strip()
+        
+        # Normalize positions data
+        positions_normalized = positions.copy()
+        positions_normalized["_status_norm"] = positions["status"].astype(str).str.strip().str.lower()
+        positions_normalized["_position_id_norm"] = positions["position_id"].astype(str).str.strip()
 
-        for _, row in positions.iterrows():
-            if str(row.get("status")).lower() == "closed":
-                pid = str(row.get("position_id"))
-                if pid not in close_event_ids:
+        # Find close events using normalized event_type (matches both "position_closed" and "POSITION_CLOSED")
+        close_events = events_normalized[events_normalized["_event_type_norm"] == "POSITION_CLOSED"]
+        close_event_ids = set(close_events["_position_id_norm"].dropna())
+
+        for _, row in positions_normalized.iterrows():
+            if row.get("_status_norm") == "closed":
+                pid = row.get("_position_id_norm")
+                if pid and pid not in close_event_ids:
+                    # Collect debug information for this position
+                    position_events = events_normalized[events_normalized["_position_id_norm"] == pid]
+                    events_total = len(position_events)
+                    close_events_found = len(position_events[position_events["_event_type_norm"] == "POSITION_CLOSED"])
+                    event_types_seen = sorted(position_events["_event_type_norm"].unique().tolist())
+                    
+                    # Get timestamps if available
+                    first_event_ts = None
+                    last_event_ts = None
+                    if "timestamp" in position_events.columns and len(position_events) > 0:
+                        timestamps = position_events["timestamp"].dropna()
+                        if len(timestamps) > 0:
+                            first_event_ts = str(timestamps.min())
+                            last_event_ts = str(timestamps.max())
+                    
+                    # Check exit_time if available
+                    exit_time_info = None
+                    if "exit_time" in row.index:
+                        exit_time_info = str(row.get("exit_time")) if pd.notna(row.get("exit_time")) else None
+                    
+                    context = {
+                        "position_id": pid,
+                        "events_total_for_position": events_total,
+                        "close_events_found": close_events_found,
+                        "event_types_seen": event_types_seen,
+                    }
+                    if first_event_ts:
+                        context["first_event_ts"] = first_event_ts
+                    if last_event_ts:
+                        context["last_event_ts"] = last_event_ts
+                    if exit_time_info:
+                        context["exit_time"] = exit_time_info
+                    
                     self._add(
                         "P1",
                         "missing_events_chain",
                         f"Closed position {pid} has no POSITION_CLOSED event",
-                        {"position_id": pid},
+                        context,
                     )
 
-        open_positions = positions[positions["status"].astype(str).str.lower() == "open"]
-        open_ids = set(pd.Series(open_positions["position_id"]).dropna().astype(str))
+        open_positions = positions_normalized[positions_normalized["_status_norm"] == "open"]
+        open_ids = set(open_positions["_position_id_norm"].dropna())
         for _, row in close_events.iterrows():
-            pid = str(row.get("position_id"))
-            if pid in open_ids:
+            pid = row.get("_position_id_norm")
+            if pid and pid in open_ids:
                 self._add(
                     "P1",
                     "close_event_but_position_open",
@@ -203,9 +249,10 @@ class InvariantChecker:
         executions = self.executions_df
         events = self.events_df
 
-        event_positions = set(events["position_id"].dropna().astype(str))
+        # Normalize position_id for consistent comparison
+        event_positions = set(events["position_id"].dropna().astype(str).str.strip())
         for _, row in executions.iterrows():
-            pid = str(row.get("position_id"))
+            pid = str(row.get("position_id")).strip()
             if pid and pid not in event_positions:
                 self._add(
                     "P1",
@@ -217,7 +264,9 @@ class InvariantChecker:
         if "event_id" in executions.columns and "event_id" in events.columns:
             execution_event_ids = set(executions["event_id"].dropna().astype(str))
             for _, row in events.iterrows():
-                if row.get("event_type") in ("POSITION_PARTIAL_EXIT", "POSITION_CLOSED"):
+                # Normalize event_type for case-insensitive comparison
+                event_type = str(row.get("event_type")).strip().upper()
+                if event_type in ("POSITION_PARTIAL_EXIT", "POSITION_CLOSED"):
                     event_id = str(row.get("event_id"))
                     if event_id and event_id not in execution_event_ids:
                         self._add(
