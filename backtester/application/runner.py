@@ -1,6 +1,6 @@
 from __future__ import annotations  # Позволяет использовать аннотации типов для классов, объявленных ниже по коду
 
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone
 from typing import Any, Dict, List, Sequence, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -93,6 +93,40 @@ class BacktestRunner:
             start_time=start_time,
             end_time=end_time,
         )
+
+        # Сортируем свечи по timestamp (ascending) и дедуплицируем по timestamp
+        # Важно: гарантируем сортировку для правильного выбора exit candle (min timestamp >= exit_time)
+        if candles:
+            # Нормализуем timestamps к UTC (timezone-aware) и дедуплицируем
+            normalized_candles = []
+            seen_timestamps = {}
+            
+            for candle in candles:
+                # Нормализуем timestamp к UTC
+                if candle.timestamp.tzinfo is None:
+                    # Если timestamp naive, считаем его UTC
+                    normalized_ts = candle.timestamp.replace(tzinfo=timezone.utc)
+                elif candle.timestamp.tzinfo != timezone.utc:
+                    # Конвертируем в UTC
+                    normalized_ts = candle.timestamp.astimezone(timezone.utc)
+                else:
+                    normalized_ts = candle.timestamp
+                
+                # Дедупликация: оставляем первую свечу с каждым timestamp
+                if normalized_ts not in seen_timestamps:
+                    seen_timestamps[normalized_ts] = True
+                    # Создаем новую свечу с нормализованным timestamp
+                    normalized_candles.append(Candle(
+                        timestamp=normalized_ts,
+                        open=candle.open,
+                        high=candle.high,
+                        low=candle.low,
+                        close=candle.close,
+                        volume=candle.volume
+                    ))
+            
+            # Сортировка по timestamp (ascending) - гарантируем правильный порядок
+            candles = sorted(normalized_candles, key=lambda c: c.timestamp)
 
         # Логируем диагностику по свечам
         if candles:

@@ -301,12 +301,16 @@ class RunnerLadderEngine:
                     exit_time = None
         
         # Находим цену на момент exit_time
+        # Важно: выбираем свечу с минимальным timestamp >= exit_time
+        # candles_df уже отсортирован по timestamp (строка 97), поэтому можно использовать первый цикл
+        # Но для дополнительной гарантии, используем min() для защиты от несортированных данных
         if exit_time:
-            for _, row in candles_df.iterrows():
-                if pd.to_datetime(row['timestamp']) >= exit_time:
-                    exit_price = float(row['close'])
-                    break
-            if exit_price is None:
+            matching_rows = candles_df[pd.to_datetime(candles_df['timestamp']) >= exit_time]
+            if not matching_rows.empty:
+                # Выбираем свечу с минимальным timestamp >= exit_time
+                exit_row = matching_rows.iloc[0]  # Первая строка уже минимальная после сортировки
+                exit_price = float(exit_row['close'])
+            else:
                 # Fallback: используем последнюю доступную цену
                 exit_price = float(candles_df.iloc[-1]['close'])
         

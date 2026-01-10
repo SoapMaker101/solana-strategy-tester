@@ -82,7 +82,13 @@ class RunnerStrategy(Strategy):
         )
 
     def _candles_to_dataframe(self, candles: List[Candle]) -> pd.DataFrame:
-        """Преобразует List[Candle] в DataFrame для RunnerLadderEngine."""
+        """
+        Преобразует List[Candle] в DataFrame для RunnerLadderEngine.
+        
+        Важно: гарантирует сортировку по timestamp для правильного выбора exit candle.
+        Свечи уже отсортированы в on_signal (строка 45-48), но для дополнительной гарантии
+        сортируем DataFrame перед возвратом.
+        """
         candles_data = []
         for candle in candles:
             candles_data.append({
@@ -93,7 +99,10 @@ class RunnerStrategy(Strategy):
                 "close": candle.close,
                 "volume": candle.volume
             })
-        return pd.DataFrame(candles_data)
+        df = pd.DataFrame(candles_data)
+        # Гарантируем сортировку по timestamp (ascending) для правильного выбора exit candle
+        df = df.sort_values("timestamp").reset_index(drop=True)
+        return df
 
     def _ladder_result_to_strategy_output(
         self,
@@ -143,22 +152,27 @@ class RunnerStrategy(Strategy):
         # exit_price должен быть market close, а НЕ синтетика entry * realized_multiple
         exit_price = entry_candle.close  # Fallback на entry price если не найдена свеча
         
-        # Если уровни не достигнуты - закрываемся по последней доступной свече
-        if not has_levels_hit:
-            # Данные закончились или time_stop — закрываемся по последней доступной close
-            if candles:
-                exit_price = candles[-1].close
-        elif ladder_result.exit_time:
-            # Уровни достигнуты - ищем свечу на момент exit_time
-            # Ищем свечу с timestamp >= exit_time (первая свеча на момент или после закрытия)
-            for candle in candles:
-                if candle.timestamp >= ladder_result.exit_time:
-                    exit_price = candle.close  # Market close цена на момент закрытия
-                    break
+        # Всегда выбираем свечу на момент exit_time (если он установлен)
+        # Это важно для time_stop и ladder_tp случаев
+        if ladder_result.exit_time:
+            # Ищем свечу на момент exit_time (минимальный timestamp >= exit_time)
+            # Важно: выбираем свечу с минимальным timestamp >= exit_time (первая свеча на момент или после закрытия)
+            # Свечи уже отсортированы по timestamp (в runner.py и в on_signal), поэтому можно использовать min()
+            # Но для дополнительной гарантии, находим min() для защиты от несортированных данных
+            matching_candles = [c for c in candles if c.timestamp >= ladder_result.exit_time]
+            if matching_candles:
+                # Выбираем свечу с минимальным timestamp >= exit_time
+                exit_candle = min(matching_candles, key=lambda c: c.timestamp)
+                exit_price = exit_candle.close  # Market close цена на момент закрытия
             else:
-                # Если не нашли свечу >= exit_time, берем последнюю доступную
+                # Если не нашли свечу >= exit_time, берем последнюю доступную (fallback)
                 if candles:
                     exit_price = candles[-1].close
+        elif not has_levels_hit:
+            # Если exit_time не установлен и уровни не достигнуты - закрываемся по последней доступной свече
+            # Это edge case (данные закончились до time_stop)
+            if candles:
+                exit_price = candles[-1].close
 
         # PnL уже рассчитан в ladder_result.realized_pnl_pct (в процентах)
         # Преобразуем в десятичную форму
