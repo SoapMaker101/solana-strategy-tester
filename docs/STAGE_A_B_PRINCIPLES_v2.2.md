@@ -312,13 +312,13 @@ python -m backtester.decision.run_stage_b --stability-csv output/reports/strateg
 
 ### 3.3 Входные данные
 
-**Основной вход:** `strategy_stability.csv` из Stage A
+**Основной вход:** `strategy_stability.csv` из Stage A (или `strategy_stability_agg.csv` для aggregated decision)
 
 **Обязательные колонки (V1 core):**
 - `strategy` — название стратегии
-- `split_count` — количество окон
+- `split_count` — количество окон (отсутствует в aggregated файле)
 - `survival_rate` — доля выживших окон
-- `pnl_variance` — дисперсия PnL
+- `pnl_variance` — дисперсия PnL (legacy)
 - `worst_window_pnl` — наихудший PnL окна
 - `median_window_pnl` — медианный PnL окна
 - `windows_total` или `windows` — общее количество окон (алиас)
@@ -327,6 +327,27 @@ python -m backtester.decision.run_stage_b --stability-csv output/reports/strateg
 - `hit_rate_x2`, `hit_rate_x5` — для V1 критериев
 - `hit_rate_x4`, `tail_pnl_share`, `non_tail_pnl_share` — для V2 критериев
 - `p90_hold_days`, `max_drawdown_pct` — дополнительные критерии
+
+**Опциональные колонки (normalized variance):**
+- `pnl_variance_norm` — нормализованная дисперсия PnL (предпочтительная метрика для decision)
+
+### 3.3.1 Что считает Stage B
+
+Stage B применяет критерии отбора к результатам Stage A и генерирует два типа артефактов:
+
+**Per-split selection (explainability/debug view):**
+- Читает `strategy_stability.csv` (per split_count)
+- Генерирует `strategy_selection.csv` — по одной строке на (strategy, split_count)
+- Показывает результаты отбора для каждого значения `split_count` отдельно
+- Используется для диагностики и анализа чувствительности к разбиению на окна
+
+**Aggregated selection (primary decision artifact):**
+- Читает `strategy_stability.csv` (с колонкой `split_count`)
+- Генерирует `strategy_selection_agg.csv` — **1 строка на стратегию** (агрегировано по всем `split_count`)
+- **Decision about a strategy SHOULD be made using aggregated selection (`strategy_selection_agg.csv`).**
+- **Per-split selection exists for diagnostics and sensitivity analysis.**
+
+**Важно:** Stage B генерирует оба файла автоматически. Aggregated файл является основным артефактом для принятия решений, per-split файл используется для анализа и отладки.
 
 ### 3.4 Выходные данные
 

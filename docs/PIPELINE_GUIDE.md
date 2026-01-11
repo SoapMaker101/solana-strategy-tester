@@ -45,9 +45,11 @@ Reporting (CSV / XLSX)
 Пайплайн заканчивается генерацией артефактов:
 
 - **CSV файлы:** `portfolio_positions.csv`, `portfolio_events.csv`, `portfolio_executions.csv`
-- **Stage A:** `strategy_stability.csv`
-- **Stage B:** `strategy_selection.csv`
+- **Stage A:** `strategy_stability.csv`, `strategy_stability_agg.csv` (aggregated)
+- **Stage B:** `strategy_selection.csv`, `strategy_selection_agg.csv` (aggregated, primary decision artifact)
 - **XLSX:** Report pack (best-effort)
+
+См. `docs/STAGE_A_B_PRINCIPLES_v2.2.md` для детального описания aggregated artifacts.
 
 ---
 
@@ -486,6 +488,7 @@ Stage A не принимает решений:
    - Колонки: `strategy`, `split_count`, `survival_rate`, `worst_window_pnl`, `median_window_pnl`, `pnl_variance`, `windows_total`
    - Для Runner: дополнительные колонки с метриками
    - **Aggregated:** `strategy_stability_agg.csv` (1 строка на стратегию, агрегировано по всем `split_count`)
+   - См. `docs/STAGE_A_B_PRINCIPLES_v2.2.md` для детального описания aggregation
 
 2. **`stage_a_summary.csv`:**
    - Детальная таблица со всеми окнами
@@ -500,6 +503,14 @@ Stage A не принимает решений:
 ## 7. Stage B (Decision)
 
 > **Подробная документация:** См. `docs/STAGE_A_B_PRINCIPLES_v2.2.md` для полного описания принципов работы Stage A/B, критериев отбора, low-N evolution и debug cookbook.
+
+### Что считает Stage B
+
+Stage B применяет критерии отбора к результатам Stage A и генерирует артефакты:
+- **Per-split:** `strategy_selection.csv` (по split_count, для диагностики)
+- **Aggregated:** `strategy_selection_agg.csv` (**primary decision artifact**, 1 строка на стратегию)
+
+См. `docs/STAGE_A_B_PRINCIPLES_v2.2.md` для детального описания aggregation.
 
 ### Criteria V1
 
