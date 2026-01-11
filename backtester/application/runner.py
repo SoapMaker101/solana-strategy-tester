@@ -454,7 +454,7 @@ class BacktestRunner:
                 else None
             ),
             profit_reset_enabled=profit_reset_enabled,
-            profit_reset_multiple=profit_reset_multiple,
+            profit_reset_multiple=float(profit_reset_multiple) if profit_reset_multiple is not None else None,
             capacity_reset_enabled=capacity_reset_enabled,
             capacity_window_type=capacity_window_type,
             capacity_window_size=capacity_window_size,

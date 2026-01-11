@@ -83,6 +83,8 @@
 
 - **profit_reset_enabled** (Optional[bool]) — включить/выключить profit reset
 - **profit_reset_multiple** (Optional[float]) — множитель для порога (например, 1.3 = 130%, 2.0 = 200%)
+  - **ВАЛИДАЦИЯ**: должен быть float > 1.0, иначе reset автоматически disabled
+  - Если <= 1.0 или invalid (inf, nan) — reset disabled, warning в лог
 - **profit_reset_trigger_basis** (Literal["equity_peak", "realized_balance"]) — основа для триггера reset (по умолчанию "equity_peak")
 
 **[FOUND]** `backtester/domain/portfolio.py:147-175` — методы `resolved_profit_reset_enabled()` и `resolved_profit_reset_multiple()` с fallback на deprecated `runner_reset_enabled`/`runner_reset_multiple`.
@@ -132,6 +134,14 @@ elif self.config.profit_reset_trigger_basis == "realized_balance":
 **[FOUND]** `backtester/domain/portfolio.py:2263-2273` — если `marker_position` не найден, создается временная позиция с `signal_id="__profit_reset_marker__"`.
 
 **[FOUND]** `backtester/domain/portfolio.py:2245-2248` — собираются только реальные открытые позиции (исключается marker по `meta["marker"]`).
+
+### Anti-Spam Guard (v2.2)
+
+**[FOUND]** `backtester/domain/portfolio.py:2467-2469` — anti-spam guard предотвращает повторные reset на одном timestamp:
+
+- Если `last_portfolio_reset_time == current_time` — reset пропускается (уже был reset на этом timestamp)
+- Это предотвращает множественные reset при неправильной конфигурации или багах
+- **Инвариант**: reset не может срабатывать повторно "сразу же" без изменения цикла/баланса
 
 ---
 

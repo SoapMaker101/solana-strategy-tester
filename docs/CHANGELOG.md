@@ -1,5 +1,40 @@
 # Changelog
 
+## v2.2.1 (Runner-only) — Profit Reset Multiple Parsing + Anti-Spam Guard + Reset Ledger Fixes
+
+**Дата:** 2025-01-XX  
+**Статус:** ✅ Development
+
+### Fixed
+- **Profit reset multiple validation**: Добавлена жёсткая валидация `profit_reset_multiple`:
+  - Должен быть `float > 1.0`, иначе reset автоматически disabled
+  - Если `<= 1.0` или invalid (inf, nan) — reset disabled, warning в лог
+  - Исправлен парсинг из YAML (гарантированно float)
+- **Anti-spam guard**: Добавлен защитный механизм против множественных reset на одном timestamp:
+  - Reset не может сработать повторно если `last_portfolio_reset_time == current_time`
+  - Предотвращает reset spam при неправильной конфигурации или багах
+- **Reset ledger improvements**:
+  - Уникальный `reset_id` (UUID) генерируется для каждого reset события
+  - Уникальный `position_id` для каждого marker позиции (создается заново для каждого reset)
+  - `reset_id` добавляется в `meta` marker позиций и reset событий
+  - `closed_positions_count` корректно считает только force-closed позиции (без marker)
+
+### Tests
+- Создан `tests/portfolio/test_profit_reset_sanity_and_ledger.py` с 6 тестами:
+  - `test_profit_reset_multiple_float_parsed_correctly_no_spam` — проверка что reset не спамит при правильном multiple
+  - `test_profit_reset_multiple_le_1_disables_reset` — проверка что multiple <= 1.0 отключает reset
+  - `test_profit_reset_emits_reset_id_and_unique_marker_position_id` — проверка уникальности reset_id и marker position_id
+  - `test_profit_reset_guard_prevents_multiple_resets_same_timestamp` — проверка anti-spam guard
+  - `test_profit_reset_multiple_float_type` — проверка типизации profit_reset_multiple
+  - `test_profit_reset_config_c_scenario_no_spam` — имитация сценария конфига C (убыточный результат не триггерит reset)
+
+### Documentation
+- Обновлен `docs/PRUNE_AND_PROFIT_RESET_RULES.md`:
+  - Добавлено описание валидации `profit_reset_multiple` (float > 1.0)
+  - Добавлено описание anti-spam guard как инварианта
+
+---
+
 ## v2.2.0 (Runner-only) — Profit Reset Realized Balance + Hybrid Sizing
 
 **Дата:** 2025-01-XX  
