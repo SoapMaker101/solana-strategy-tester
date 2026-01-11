@@ -22,12 +22,13 @@
 - **Balance** — доступный баланс в SOL (уже уменьшенный на размер открытых позиций)
 - **Realized PnL** — реализованная прибыль/убыток из закрытых позиций
 
-### Cycle: cycle_start_equity, equity_peak_in_cycle
+### Cycle: cycle_start_equity, equity_peak_in_cycle, cycle_start_balance
 
-**[FOUND]** `backtester/domain/portfolio.py:214-215`
+**[FOUND]** `backtester/domain/portfolio.py:216-217` и `backtester/domain/portfolio_reset.py:96-97`
 
 - **cycle_start_equity** (float) — Equity в начале текущего цикла (сбрасывается после reset)
 - **equity_peak_in_cycle** (float) — Пик equity в текущем цикле (обновляется при росте equity)
+- **cycle_start_balance** (float) — Реализованный баланс (cash) в начале текущего цикла (для realized_balance trigger, сбрасывается после reset)
 
 **[FOUND]** `backtester/domain/portfolio_reset.py:115-119` — метод `update_equity_peak()` обновляет `equity_peak_in_cycle` до текущей equity, если текущая equity больше.
 
@@ -82,21 +83,35 @@
 
 - **profit_reset_enabled** (Optional[bool]) — включить/выключить profit reset
 - **profit_reset_multiple** (Optional[float]) — множитель для порога (например, 1.3 = 130%, 2.0 = 200%)
+- **profit_reset_trigger_basis** (Literal["equity_peak", "realized_balance"]) — основа для триггера reset (по умолчанию "equity_peak")
 
 **[FOUND]** `backtester/domain/portfolio.py:147-175` — методы `resolved_profit_reset_enabled()` и `resolved_profit_reset_multiple()` с fallback на deprecated `runner_reset_enabled`/`runner_reset_multiple`.
 
 ### Точное условие срабатывания
 
-**[FOUND]** `backtester/domain/portfolio.py:2241-2243`:
+**[FOUND]** `backtester/domain/portfolio.py:2405-2417`:
 
+**Режим "equity_peak" (legacy, по умолчанию):**
 ```python
-if self.config.resolved_profit_reset_enabled():
+if self.config.profit_reset_trigger_basis == "equity_peak":
     reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
-    if state.equity_peak_in_cycle >= reset_threshold:
-        # Reset triggered
+    should_trigger = state.equity_peak_in_cycle >= reset_threshold
 ```
 
 **Формула:** `equity_peak_in_cycle >= cycle_start_equity * profit_reset_multiple`
+
+**Режим "realized_balance" (новый):**
+```python
+elif self.config.profit_reset_trigger_basis == "realized_balance":
+    reset_threshold = state.cycle_start_balance * self.config.resolved_profit_reset_multiple()
+    should_trigger = state.balance >= reset_threshold
+```
+
+**Формула:** `balance >= cycle_start_balance * profit_reset_multiple`
+
+**Различия:**
+- **equity_peak**: проверяется ДО обработки EXIT событий, учитывает floating PnL открытых позиций
+- **realized_balance**: проверяется ПОСЛЕ обработки EXIT событий, учитывает только реализованный cash balance (без floating PnL)
 
 **[FOUND]** `backtester/domain/portfolio_reset.py:111-119` — `current_equity()` вычисляет equity как `balance + sum(p.size for p in open_positions)`, `update_equity_peak()` обновляет `equity_peak_in_cycle` если текущая equity больше.
 

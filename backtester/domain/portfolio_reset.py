@@ -95,6 +95,7 @@ class PortfolioState:
     
     cycle_start_equity: float = 0.0  # Equity в начале текущего цикла
     equity_peak_in_cycle: float = 0.0  # Пик equity в текущем цикле
+    cycle_start_balance: float = 0.0  # Реализованный баланс (cash) в начале текущего цикла (для realized_balance trigger)
     
     # Capacity tracking метрики (v1.6)
     blocked_by_capacity_in_window: int = 0  # Количество отклоненных сигналов по capacity за окно
@@ -310,6 +311,7 @@ def apply_portfolio_reset(
             state.last_portfolio_reset_time = context.reset_time
         state.cycle_start_equity = state.balance
         state.equity_peak_in_cycle = state.cycle_start_equity
+        state.cycle_start_balance = state.balance  # Обновляем cycle_start_balance для realized_balance trigger
     elif context.reason == ResetReason.CAPACITY_PRUNE:
         # Portfolio-level capacity reset (close-all or prune)
         state.portfolio_reset_count += 1
@@ -318,3 +320,4 @@ def apply_portfolio_reset(
             state.last_portfolio_reset_time = context.reset_time
         state.cycle_start_equity = state.balance
         state.equity_peak_in_cycle = state.cycle_start_equity
+        state.cycle_start_balance = state.balance  # Обновляем cycle_start_balance для consistency

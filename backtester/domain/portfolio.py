@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Literal, Optional, Union, TYPE_CHECKING
 from enum import Enum
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from .strategy_trade_blueprint import StrategyTradeBlueprint
@@ -100,7 +101,7 @@ class PortfolioConfig:
     Конфигурация портфеля.
     """
     initial_balance_sol: float = 10.0
-    allocation_mode: Literal["fixed", "dynamic"] = "dynamic"
+    allocation_mode: Literal["fixed", "dynamic", "fixed_then_dynamic_after_profit_reset"] = "dynamic"
     percent_per_trade: float = 0.1
     max_exposure: float = 0.5
     max_open_positions: int = 10
@@ -114,6 +115,7 @@ class PortfolioConfig:
     # Profit reset конфигурация (reset по росту equity портфеля)
     profit_reset_enabled: Optional[bool] = None
     profit_reset_multiple: Optional[float] = None  # Множитель для profit reset (например, 2.0 = x2)
+    profit_reset_trigger_basis: Literal["equity_peak", "realized_balance"] = "equity_peak"  # Основа для триггера: equity_peak (legacy) или realized_balance (новый)
 
     # DEPRECATED: legacy alias для profit reset
     runner_reset_enabled: Optional[bool] = None
@@ -213,6 +215,7 @@ class PortfolioStats:
     
     cycle_start_equity: float = 0.0  # Equity в начале текущего цикла
     equity_peak_in_cycle: float = 0.0  # Пик equity в текущем цикле
+    cycle_start_balance: float = 0.0  # Реализованный баланс (cash) в начале текущего цикла (для realized_balance trigger)
     
     # Capacity prune tracking (v1.7)
     portfolio_capacity_prune_count: int = 0  # Количество срабатываний capacity prune
@@ -450,13 +453,32 @@ class PortfolioEngine:
             "effective_exit_price": effective_exit_price,
         }
 
-    def _position_size(self, current_balance: float) -> float:
+    def _position_size(self, current_balance: float, state: Optional[PortfolioState] = None) -> float:
         """
         Вычисляет размер позиции на основе текущего баланса и режима аллокации.
+        
+        Args:
+            current_balance: Текущий баланс (cash)
+            state: Состояние портфеля (опционально, требуется для fixed_then_dynamic_after_profit_reset)
         """
         if self.config.allocation_mode == "fixed":
             base = self.config.initial_balance_sol
+        elif self.config.allocation_mode == "dynamic":
+            base = current_balance
+        elif self.config.allocation_mode == "fixed_then_dynamic_after_profit_reset":
+            # До первого profit reset: fixed (initial_balance)
+            # После первого profit reset: dynamic (current_balance)
+            if state is None:
+                # Fallback для обратной совместимости: используем fixed
+                base = self.config.initial_balance_sol
+            elif state.portfolio_reset_profit_count == 0:
+                # До первого reset: fixed
+                base = self.config.initial_balance_sol
+            else:
+                # После первого reset: dynamic
+                base = current_balance
         else:
+            # Fallback для неизвестных режимов
             base = current_balance
         return max(0.0, base * self.config.percent_per_trade)
     
@@ -1205,19 +1227,48 @@ class PortfolioEngine:
             # 2. Эмитим PORTFOLIO_RESET_TRIGGERED (1 событие) - ПОСЛЕ всех POSITION_CLOSED
             # Используем marker_from_state (найденный в state) или fallback на marker_position
             final_marker = marker_from_state if marker_from_state is not None else marker_position
+            
+            # Генерируем уникальный reset_id для каждого reset
+            reset_id = uuid4().hex
+            
+            # closed_positions_count должен быть количеством реальных позиций (без marker)
+            # positions_to_force_close уже содержит только реальные позиции (marker исключен)
+            closed_positions_count = len(positions_to_force_close)
+            
+            # Создаем уникальный marker position_id для этого reset (если marker создается заново)
+            # Если marker уже существует, используем его position_id
+            marker_position_id = final_marker.position_id if final_marker is not None else marker_position.position_id
+            
+            # Добавляем reset_id в meta marker'а (для всех marker позиций)
+            # Ищем все marker позиции в closed_positions и добавляем reset_id
+            for pos in state.closed_positions:
+                if pos.meta and pos.meta.get("marker", False) and pos.signal_id == "__profit_reset_marker__":
+                    # Проверяем что это marker для текущего reset (по времени)
+                    if pos.exit_time == reset_time:
+                        pos.meta["reset_id"] = reset_id
+            # Также добавляем в final_marker если он еще открыт
+            if final_marker is not None and final_marker.meta is not None:
+                final_marker.meta["reset_id"] = reset_id
+                final_marker.meta["marker"] = True
+            elif marker_position.meta is not None:
+                marker_position.meta["reset_id"] = reset_id
+                marker_position.meta["marker"] = True
+            
             portfolio_events.append(
                 PortfolioEvent.create_portfolio_reset_triggered(
                     timestamp=reset_time,  # Строго reset_time
                     reason=reset_reason_str,  # Строго reset_reason_str
-                    closed_positions_count=len(all_open_positions_at_reset),
-                    position_id=final_marker.position_id if final_marker is not None else marker_position.position_id,
+                    closed_positions_count=closed_positions_count,  # Только реальные позиции (без marker)
+                    position_id=marker_position_id,
                     signal_id=final_marker.signal_id if final_marker is not None else marker_position.signal_id,
                     contract_address=final_marker.contract_address if final_marker is not None else marker_position.contract_address,
                     strategy=final_marker.meta.get("strategy", "portfolio") if final_marker and final_marker.meta else (marker_position.meta.get("strategy", "portfolio") if marker_position.meta else "portfolio"),
                     meta={
+                        "reset_id": reset_id,  # Уникальный ID для каждого reset
                         "reset_time": reset_time.isoformat(),
                         "cycle_start_equity": state.cycle_start_equity,
                         "equity_peak_in_cycle": state.equity_peak_in_cycle,
+                        "cycle_start_balance": state.cycle_start_balance,  # Для realized_balance trigger
                         "current_balance": state.balance,
                     },
                 )
@@ -1883,8 +1934,14 @@ class PortfolioEngine:
         # В fixed mode total_capital должен быть равен initial_balance_sol,
         # так как размер позиции рассчитывается от начального баланса.
         # В dynamic mode total_capital = available_balance + total_open_notional.
+        # В fixed_then_dynamic_after_profit_reset: до reset как fixed, после reset как dynamic.
         if self.config.allocation_mode == "fixed":
             total_capital = self.config.initial_balance_sol
+        elif self.config.allocation_mode == "fixed_then_dynamic_after_profit_reset":
+            if state.portfolio_reset_profit_count == 0:
+                total_capital = self.config.initial_balance_sol
+            else:
+                total_capital = available_balance + total_open_notional
         else:
             total_capital = available_balance + total_open_notional
         
@@ -1901,7 +1958,7 @@ class PortfolioEngine:
                 max_allowed_notional = numerator / (1.0 - self.config.max_exposure)
 
         # Размер позиции рассчитываем от доступного баланса
-        desired_size = self._position_size(available_balance)
+        desired_size = self._position_size(available_balance, state=state)
         
         # Проверяем, что желаемый размер не превышает лимит экспозиции
         if desired_size > max_allowed_notional:
@@ -2126,6 +2183,7 @@ class PortfolioEngine:
                 max_drawdown_pct=0.0,
                 trades_executed=0,
                 trades_skipped_by_risk=0,
+                cycle_start_balance=initial,
             )
             # Используем текущее время для equity curve, если нет сделок
             return PortfolioResult(  # type: ignore[reportCallIssue]  # basedpyright limitation; runtime covered by tests
@@ -2168,6 +2226,7 @@ class PortfolioEngine:
             equity_curve=[],
             cycle_start_equity=initial_balance,  # Начало цикла = начальный баланс
             equity_peak_in_cycle=initial_balance,  # Пик equity в текущем цикле
+            cycle_start_balance=initial_balance,  # Реализованный баланс в начале цикла
         )
 
         # Создаем marker_position для profit reset (если включен)
@@ -2235,10 +2294,11 @@ class PortfolioEngine:
             if self.config.resolved_profit_reset_enabled():
                 state.update_equity_peak()
             
-            # ВАЖНО: Проверяем profit reset ДО обработки EXIT событий, чтобы закрыть позиции с reason="profit_reset"
-            # Это гарантирует, что открытые позиции будут закрыты reset'ом, а не нормальным EXIT
+            # ВАЖНО: Проверяем profit reset ДО обработки EXIT событий ТОЛЬКО для equity_peak
+            # Для realized_balance проверка происходит ПОСЛЕ EXIT событий (чтобы cash balance был обновлен)
             profit_reset_triggered_before_exit = False
-            if self.config.resolved_profit_reset_enabled():
+            if (self.config.resolved_profit_reset_enabled() 
+                and self.config.profit_reset_trigger_basis == "equity_peak"):
                 reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
                 if state.equity_peak_in_cycle >= reset_threshold:
                     # Собираем открытые позиции ДО обработки EXIT событий (исключаем marker)
@@ -2346,12 +2406,24 @@ class PortfolioEngine:
             
             # После обработки всех событий на текущем timestamp: проверяем profit reset ПЕРЕД capacity
             # Порядок приоритетов: profit reset > capacity (hardening v1.7.1)
-            # НО: profit reset уже мог быть обработан ДО EXIT событий (profit_reset_triggered_before_exit)
+            # НО: profit reset уже мог быть обработан ДО EXIT событий (profit_reset_triggered_before_exit) для equity_peak
+            # Для realized_balance проверка происходит ПОСЛЕ EXIT событий (чтобы cash balance был обновлен)
             profit_reset_triggered = profit_reset_triggered_before_exit
             if not profit_reset_triggered_before_exit and self.config.resolved_profit_reset_enabled():
-                state.update_equity_peak()
-                reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
-                if state.equity_peak_in_cycle >= reset_threshold:
+                should_trigger = False
+                reset_threshold = 0.0
+                
+                if self.config.profit_reset_trigger_basis == "equity_peak":
+                    # Legacy режим: проверка по equity_peak
+                    state.update_equity_peak()
+                    reset_threshold = state.cycle_start_equity * self.config.resolved_profit_reset_multiple()
+                    should_trigger = state.equity_peak_in_cycle >= reset_threshold
+                elif self.config.profit_reset_trigger_basis == "realized_balance":
+                    # Новый режим: проверка по realized balance (cash) ПОСЛЕ exits
+                    reset_threshold = state.cycle_start_balance * self.config.resolved_profit_reset_multiple()
+                    should_trigger = state.balance >= reset_threshold
+                
+                if should_trigger:
                     # Формируем список позиций для принудительного закрытия
                     # ВАЖНО: собираем ВСЕ открытые позиции (status == "open" и exit_time is None или exit_time > current_time)
                     # Исключаем marker_position из реальных позиций
@@ -2362,30 +2434,18 @@ class PortfolioEngine:
                         and not (p.meta and p.meta.get("marker", False))  # Исключаем marker
                     ]
                     
-                    # Используем marker_position, созданный при старте, или выбираем из закрытых
-                    reset_marker_position = marker_position
-                    if reset_marker_position is None:
-                        # Fallback: выбираем marker из закрытых позиций
-                        closed_candidates = state.closed_positions
-                        open_candidates = positions_to_force_close
-                        reset_marker_position = self._select_profit_reset_marker(
-                            state=state,
-                            closed_positions_candidates=closed_candidates,
-                            open_positions_candidates=open_candidates,
-                        )
-                    
-                    # Если marker_position не найден, создаем временный
-                    if reset_marker_position is None:
-                        reset_marker_position = Position(
-                            signal_id="__profit_reset_marker__",
-                            contract_address="__profit_reset_marker__",
-                            entry_time=current_time,
-                            entry_price=1.0,
-                            size=0.0,
-                            status="open",
-                            meta={"marker": True, "strategy": strategy_name},
-                        )
-                        state.open_positions.append(reset_marker_position)
+                    # ВАЖНО: Создаем новый marker для каждого reset (уникальный position_id)
+                    # Не переиспользуем старый marker, чтобы каждый reset имел уникальный marker
+                    reset_marker_position = Position(
+                        signal_id="__profit_reset_marker__",
+                        contract_address="__profit_reset_marker__",
+                        entry_time=current_time,
+                        entry_price=1.0,
+                        size=0.0,
+                        status="open",
+                        meta={"marker": True, "strategy": strategy_name},
+                    )
+                    state.open_positions.append(reset_marker_position)
                     
                     self._apply_reset(
                         state=state,
@@ -2594,6 +2654,7 @@ class PortfolioEngine:
             portfolio_reset_capacity_count=getattr(state, 'portfolio_reset_capacity_count', 0),
             cycle_start_equity=state.cycle_start_equity,
             equity_peak_in_cycle=state.equity_peak_in_cycle,
+            cycle_start_balance=getattr(state, 'cycle_start_balance', state.balance),
             portfolio_capacity_prune_count=getattr(state, 'portfolio_capacity_prune_count', 0),
             last_capacity_prune_time=getattr(state, 'last_capacity_prune_time', None),
             capacity_prune_events=capacity_prune_events,

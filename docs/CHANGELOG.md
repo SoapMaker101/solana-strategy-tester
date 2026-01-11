@@ -1,5 +1,43 @@
 # Changelog
 
+## v2.2.0 (Runner-only) — Profit Reset Realized Balance + Hybrid Sizing
+
+**Дата:** 2025-01-XX  
+**Статус:** ✅ Development
+
+### Added
+- **Profit reset trigger basis**: Новый параметр `profit_reset_trigger_basis` с двумя режимами:
+  - `"equity_peak"` (legacy, default) — проверка по equity peak (включая floating PnL)
+  - `"realized_balance"` (новый) — проверка по реализованному cash balance (без floating PnL)
+- **Hybrid allocation mode**: Новый режим `"fixed_then_dynamic_after_profit_reset"`:
+  - До первого profit reset: размер считается от `initial_balance_sol` (как `"fixed"`)
+  - После первого profit reset: размер считается от текущего баланса (как `"dynamic"`)
+- **Reset ledger improvements**:
+  - Уникальный `reset_id` (UUID) для каждого reset события
+  - Уникальный `position_id` для каждого marker позиции
+  - Корректный `closed_positions_count` (только force-closed позиции, без marker)
+- **Cycle start balance tracking**: Добавлено поле `cycle_start_balance` для отслеживания реализованного баланса в начале цикла
+
+### Fixed
+- Marker позиции теперь создаются заново для каждого reset (уникальный `position_id`)
+- `closed_positions_count` в `PORTFOLIO_RESET_TRIGGERED` теперь корректно считает только force-closed позиции
+- `reset_id` добавляется в `meta` marker позиций для трассируемости
+
+### Documentation
+- Обновлен `docs/PRUNE_AND_PROFIT_RESET_RULES.md` с описанием новых режимов trigger и allocation
+- Добавлены примеры использования `profit_reset_trigger_basis` и `fixed_then_dynamic_after_profit_reset`
+
+### Tests
+- Создан `tests/domain/test_profit_reset_realized_balance_and_sizing.py` с 6 тестами:
+  - `test_realized_balance_not_triggered_by_floating` — проверка что floating PnL не триггерит reset
+  - `test_realized_balance_triggered_after_normal_exit` — проверка что reset срабатывает после exit
+  - `test_allocation_mode_fixed_preserves_size_after_reset` — проверка что fixed mode сохраняет размер
+  - `test_allocation_mode_hybrid_increases_size_after_reset` — проверка что hybrid mode увеличивает размер
+  - `test_reset_ledger_unique` — проверка уникальности reset_id и marker position_id
+  - `test_marker_no_executions` — проверка что marker не создает лишних executions
+
+---
+
 ## v2.1.9 (Runner-only) — Stable Baseline / Frozen
 
 **Дата:** 2025-01-06  
