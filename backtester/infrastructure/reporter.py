@@ -1355,6 +1355,18 @@ class Reporter:
             if not isinstance(portfolio_result, PortfolioResult):
                 continue
             
+            # Build lookup map: position_id -> POSITION_CLOSED event_id (fallback if close_event_id missing in meta)
+            position_to_close_event_id: Dict[str, str] = {}
+            if hasattr(portfolio_result.stats, 'portfolio_events') and portfolio_result.stats.portfolio_events:
+                from ..domain.portfolio_events import PortfolioEventType
+                for event in portfolio_result.stats.portfolio_events:
+                    if (hasattr(event, 'event_type') and 
+                        hasattr(event, 'position_id') and 
+                        hasattr(event, 'event_id') and
+                        event.event_type == PortfolioEventType.POSITION_CLOSED and
+                        event.position_id):
+                        position_to_close_event_id[event.position_id] = event.event_id
+            
             for pos in portfolio_result.positions:
                 if not pos.entry_time:
                     continue
@@ -1517,6 +1529,9 @@ class Reporter:
                     #   (потому что все exit fees уже учтены в partial exits)
                     fees_final_exit = 0.0
                     final_exit_event_id = pos.meta.get("close_event_id") if pos.meta else None
+                    # Fallback: if close_event_id missing in meta, look it up from portfolio_events
+                    if not final_exit_event_id and pos.position_id in position_to_close_event_id:
+                        final_exit_event_id = position_to_close_event_id[pos.position_id]
                     
                     if has_partial_exits:
                         # Позиция с partial_exits

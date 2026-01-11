@@ -448,6 +448,8 @@ python -m backtester.audit.run_audit --reports-dir output/reports
 
 ## 6. Stage A (Research)
 
+> **Подробная документация:** См. `docs/STAGE_A_B_PRINCIPLES_v2.2.md` для полного описания принципов работы Stage A/B, low-N evolution и debug cookbook.
+
 ### Что считает
 
 **Где:** `backtester/research/strategy_stability.py` — `generate_stability_table_from_portfolio_trades()`
@@ -483,6 +485,7 @@ Stage A не принимает решений:
 1. **`strategy_stability.csv`:**
    - Колонки: `strategy`, `split_count`, `survival_rate`, `worst_window_pnl`, `median_window_pnl`, `pnl_variance`, `windows_total`
    - Для Runner: дополнительные колонки с метриками
+   - **Aggregated:** `strategy_stability_agg.csv` (1 строка на стратегию, агрегировано по всем `split_count`)
 
 2. **`stage_a_summary.csv`:**
    - Детальная таблица со всеми окнами
@@ -495,6 +498,8 @@ Stage A не принимает решений:
 ---
 
 ## 7. Stage B (Decision)
+
+> **Подробная документация:** См. `docs/STAGE_A_B_PRINCIPLES_v2.2.md` для полного описания принципов работы Stage A/B, критериев отбора, low-N evolution и debug cookbook.
 
 ### Criteria V1
 
@@ -628,7 +633,9 @@ if runner_criteria is None:
 | `portfolio_events.csv` | `PortfolioEngine` | Audit, Reporting | Cannot |
 | `portfolio_executions.csv` | `PortfolioEngine` | Audit, Reporting | Cannot |
 | `strategy_stability.csv` | Stage A (`run_stage_a.py`) | Stage B | Cannot (для Stage B) |
+| `strategy_stability_agg.csv` | Stage A (`run_stage_a.py`) | Пользователь | Cannot |
 | `strategy_selection.csv` | Stage B (`run_stage_b.py`) | Пользователь | Can |
+| `strategy_selection_agg.csv` | Stage B (`run_stage_b.py`) | Пользователь | Can (primary decision artifact) |
 | `audit_anomalies.csv` | Audit (`run_audit.py`) | Пользователь | Can |
 | `portfolio_summary.csv` | `Reporter` | Пользователь | Can |
 | `strategy_summary.csv` | `Reporter` | Пользователь | Can |

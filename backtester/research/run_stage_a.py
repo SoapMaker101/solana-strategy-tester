@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Optional
 
 from .window_aggregator import DEFAULT_SPLITS
-from .strategy_stability import generate_stability_table_from_portfolio_trades
+from .strategy_stability import generate_stability_table_from_portfolio_trades, save_stability_table
+from ..decision.selection_aggregator import aggregate_stability
 from ..audit.run_audit import audit_run
 
 
@@ -174,6 +175,14 @@ def main():
         # Печатаем summary
         summary = format_summary(stability_df)
         print(summary)
+        
+        # Generate aggregated stability table
+        if "split_count" in stability_df.columns:
+            stability_agg_df = aggregate_stability(stability_df)
+            agg_output_path = reports_dir / "strategy_stability_agg.csv"
+            if len(stability_agg_df) > 0:
+                save_stability_table(stability_agg_df, agg_output_path)
+                print(f"Aggregated stability table saved to: {agg_output_path}")
         
         print(f"OK: Stage A completed successfully!")
         print(f"Stability table saved to: {reports_dir / 'strategy_stability.csv'}")

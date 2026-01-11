@@ -13,7 +13,7 @@
 #   - use_high_for_targets: true - ориентироваться на HIGH как триггер
 #   - exit остатка по close последней свечи окна (зафиксировано в реализации)
 # -----------------------------
-- name: Runner_Tail_3_7_15_45d
+- name: Runner_Tail_3_7_15_20d
   type: RUNNER
   params:
     take_profit_levels:

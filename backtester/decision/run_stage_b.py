@@ -13,7 +13,9 @@ from .strategy_selector import (
     generate_selection_table_from_stability,
     load_stability_csv,
     select_strategies,
+    save_selection_table,
 )
+from .selection_aggregator import aggregate_selection
 from .selection_rules import DEFAULT_RUNNER_CRITERIA_V1, DEFAULT_CRITERIA_V1
 from ..audit.run_audit import audit_run
 
@@ -151,6 +153,15 @@ def main():
             print("")
         
         output_file = output_path if output_path else stability_csv_path.parent / "strategy_selection.csv"
+        
+        # Generate aggregated selection table
+        if "split_count" in selection_df.columns:
+            selection_agg_df = aggregate_selection(selection_df)
+            agg_output_path = stability_csv_path.parent / "strategy_selection_agg.csv"
+            if len(selection_agg_df) > 0:
+                save_selection_table(selection_agg_df, agg_output_path)
+                print(f"Aggregated selection table saved to: {agg_output_path}")
+        
         print(f"OK: Stage B completed successfully!")
         print(f"Selection table saved to: {output_file}")
         

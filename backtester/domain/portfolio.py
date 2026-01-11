@@ -1787,25 +1787,27 @@ class PortfolioEngine:
                 exec_exit_price = pos.meta.get("exec_exit_price", pos.exit_price) if pos.meta else pos.exit_price
                 
                 # Каноническое событие POSITION_CLOSED (v2.0.1)
-                portfolio_events.append(
-                    PortfolioEvent.create_position_closed(
-                        timestamp=current_time,
-                        strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
-                        signal_id=pos.signal_id,
-                        contract_address=pos.contract_address,
-                        position_id=pos.position_id,
-                        reason=canonical_reason,  # Используем override_reason если задан
-                        raw_price=raw_exit_price,
-                        exec_price=exec_exit_price,
-                        pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах
-                        pnl_sol=pnl_sol,
-                        meta={
-                            "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
-                            "exit_time": current_time.isoformat(),
-                            "fees_total_sol": fees_total,
-                        },
-                    )
+                close_event = PortfolioEvent.create_position_closed(
+                    timestamp=current_time,
+                    strategy=pos.meta.get("strategy", "unknown") if pos.meta else "unknown",
+                    signal_id=pos.signal_id,
+                    contract_address=pos.contract_address,
+                    position_id=pos.position_id,
+                    reason=canonical_reason,  # Используем override_reason если задан
+                    raw_price=raw_exit_price,
+                    exec_price=exec_exit_price,
+                    pnl_pct=pos.pnl_pct * 100.0 if pos.pnl_pct else None,  # В процентах
+                    pnl_sol=pnl_sol,
+                    meta={
+                        "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                        "exit_time": current_time.isoformat(),
+                        "fees_total_sol": fees_total,
+                    },
                 )
+                portfolio_events.append(close_event)
+                # Сохраняем event_id для использования в reporter (final_exit.event_id)
+                if pos.meta:
+                    pos.meta["close_event_id"] = close_event.event_id
 
             state.peak_balance = max(state.peak_balance, state.balance)
             if pos.exit_time:

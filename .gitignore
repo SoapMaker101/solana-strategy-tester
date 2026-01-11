@@ -15,8 +15,13 @@ run_crash.log
 run_full.log
 run_fault.log
 # Выходные данные
+runs/
 output/
 logs/
+runs/**/*.csv
+runs/**/*.json
+runs/**/*.txt
+runs/**/*.xlsx
 
 # Тяжёлые данные (свечки и т.п.)
 data/candles/
