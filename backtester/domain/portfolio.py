@@ -2364,8 +2364,9 @@ class PortfolioEngine:
                 else:
                     # GUARD A: baseline <= 0 → profit reset невозможен
                     # Profit reset — это политика фиксации прибыли, в минусе она не имеет смысла
-                    if state.cycle_start_equity <= 0:
-                        # cycle_start_equity <= 0 → threshold <= 0, условие становится "always true"
+                    baseline = state.cycle_start_equity  # equity_peak mode uses cycle_start_equity
+                    if baseline <= 0:
+                        # baseline <= 0 → threshold <= 0, условие становится "always true"
                         # Пропускаем reset чтобы избежать бесконечной петли
                         profit_reset_triggered_before_exit = False
                     # ANTI-SPAM GUARD (Guard C): нельзя повторно триггерить reset на том же timestamp
@@ -2499,20 +2500,24 @@ class PortfolioEngine:
                     should_trigger = False
                     reset_threshold = 0.0
                     
-                    # GUARD A: baseline <= 0 → profit reset невозможен
+                    # GUARD #1: baseline <= 0 → profit reset невозможен
                     # Profit reset — это политика фиксации прибыли, в минусе она не имеет смысла
                     baseline = 0.0
                     if self.config.profit_reset_trigger_basis == "equity_peak":
                         baseline = state.cycle_start_equity
+                        if baseline <= 0:
+                            # baseline <= 0 → threshold <= 0, условие становится "always true"
+                            # Пропускаем reset чтобы избежать бесконечной петли
+                            should_trigger = False
                     elif self.config.profit_reset_trigger_basis == "realized_balance":
                         baseline = state.cycle_start_balance
+                        if baseline <= 0:
+                            # baseline <= 0 → threshold <= 0, условие становится "always true"
+                            # Пропускаем reset чтобы избежать бесконечной петли
+                            should_trigger = False
                     
-                    if baseline <= 0:
-                        # baseline <= 0 → threshold <= 0, условие становится "always true"
-                        # Пропускаем reset чтобы избежать бесконечной петли
-                        should_trigger = False
-                    # ANTI-SPAM GUARD (Guard C): нельзя повторно триггерить reset на том же timestamp
-                    elif (state.last_portfolio_reset_time is not None 
+                    # ANTI-SPAM GUARD (Guard #3): нельзя повторно триггерить reset на том же timestamp
+                    if baseline > 0 and (state.last_portfolio_reset_time is not None 
                           and state.last_portfolio_reset_time == current_time):
                         # Уже был reset на этом timestamp - skip
                         should_trigger = False
@@ -2659,12 +2664,14 @@ class PortfolioEngine:
                     # multiple <= 1.0 или invalid - reset disabled, skip
                     pass
                 else:
-                    # GUARD A: baseline <= 0 → profit reset невозможен
-                    if state.cycle_start_equity <= 0:
-                        # cycle_start_equity <= 0 → threshold <= 0, условие становится "always true"
+                    # GUARD #1: baseline <= 0 → profit reset невозможен
+                    # Profit reset — это политика фиксации прибыли, в минусе она не имеет смысла
+                    baseline = state.cycle_start_equity  # equity_peak mode uses cycle_start_equity
+                    if baseline <= 0:
+                        # baseline <= 0 → threshold <= 0, условие становится "always true"
                         # Пропускаем reset чтобы избежать бесконечной петли
                         pass
-                    # ANTI-SPAM GUARD (Guard C): нельзя повторно триггерить reset на том же timestamp
+                    # ANTI-SPAM GUARD (Guard #3): нельзя повторно триггерить reset на том же timestamp
                     elif (state.last_portfolio_reset_time is not None 
                           and state.last_portfolio_reset_time == current_time):
                         # Уже был reset на этом timestamp - skip

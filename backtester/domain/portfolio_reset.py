@@ -309,7 +309,12 @@ def apply_portfolio_reset(
         "reset_reason": reset_reason_str,
         "close_reason": reset_reason_str,
     })
-    marker.meta["network_fee_sol"] = marker.meta.get("network_fee_sol", 0.0) + network_fee_exit
+    # MARKER ECONOMICS: marker НЕ списывает network_fee (network_fee_exit = 0 для marker)
+    # Сохраняем в meta только для ledger/traceability, но не влияет на balance
+    if is_marker:
+        marker.meta["network_fee_sol"] = marker.meta.get("network_fee_sol", 0.0)  # Не добавляем network_fee_exit для marker
+    else:
+        marker.meta["network_fee_sol"] = marker.meta.get("network_fee_sol", 0.0) + network_fee_exit
 
     # Добавляем marker в closed_positions
     state.closed_positions.append(marker)
