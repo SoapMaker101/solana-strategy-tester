@@ -1963,6 +1963,53 @@ class PortfolioEngine:
             # Обновляем equity_peak_in_cycle после закрытия позиции
             if self.config.resolved_profit_reset_enabled():
                 state.update_equity_peak()
+                
+                # ВАЖНО: Если balance стал меньше начального после убыточной сделки, обновляем cycle_start_equity
+                # Это должно происходить сразу после обработки EXIT убыточной сделки
+                # (для equity_peak режима)
+                # ВАЖНО: Сохраняем минимальное значение equity после убыточных сделок,
+                # даже если затем equity растет (из-за открытия новых позиций)
+                if self.config.resolved_profit_reset_trigger_basis() == "equity_peak":
+                    current_equity = state.current_equity()
+                    initial_balance = self.config.initial_balance_sol
+                    
+                    # Отслеживаем минимальное значение equity после убыточных сделок
+                    if state.equity_min_after_losses is None:
+                        state.equity_min_after_losses = initial_balance
+                    
+                    # Обновляем минимальное значение equity
+                    if current_equity < state.equity_min_after_losses:
+                        state.equity_min_after_losses = current_equity
+                    
+                    # Обновляем cycle_start_equity если equity стал <= 0
+                    if current_equity <= 0:
+                        state.cycle_start_equity = max(0.0, current_equity)
+                        state.equity_peak_in_cycle = state.cycle_start_equity
+                        logger.debug(
+                            f"[PROFIT_RESET] cycle_start_equity updated to {state.cycle_start_equity} "
+                            f"after equity became <= 0 (current_equity={current_equity})"
+                        )
+                    elif current_equity < initial_balance and state.cycle_start_equity >= initial_balance:
+                        # Equity стал меньше начального (убыточные сделки),
+                        # обновляем cycle_start_equity на текущий equity
+                        # Это предотвращает reset при убыточном балансе после убыточных сделок
+                        # ВАЖНО: обновляем только если cycle_start_equity еще равен initial_balance
+                        # (т.е. еще не было reset'ов в этом цикле)
+                        state.cycle_start_equity = max(0.0, current_equity)
+                        # НЕ обновляем equity_peak_in_cycle здесь - он должен отслеживать пик, а не минимум
+                        logger.debug(
+                            f"[PROFIT_RESET] cycle_start_equity updated to {state.cycle_start_equity} "
+                            f"after equity became less than initial (current_equity={current_equity}, "
+                            f"initial={initial_balance})"
+                        )
+                    elif current_equity < state.cycle_start_equity and state.cycle_start_equity < initial_balance:
+                        # Equity продолжает падать после предыдущего обновления
+                        # Обновляем cycle_start_equity на еще меньшее значение
+                        state.cycle_start_equity = max(0.0, current_equity)
+                        logger.debug(
+                            f"[PROFIT_RESET] cycle_start_equity updated to {state.cycle_start_equity} "
+                            f"after equity continued to drop (current_equity={current_equity})"
+                        )
 
     def _try_open_position(
         self,
@@ -2321,6 +2368,7 @@ class PortfolioEngine:
             cycle_start_equity=initial_balance,  # Начало цикла = начальный баланс
             equity_peak_in_cycle=initial_balance,  # Пик equity в текущем цикле
             cycle_start_balance=initial_balance,  # Реализованный баланс в начале цикла
+            equity_min_after_losses=None,  # Минимальное значение equity после убыточных сделок
         )
 
         # Создаем marker_position для profit reset (если включен)
@@ -2387,6 +2435,12 @@ class PortfolioEngine:
             # Обновляем equity_peak_in_cycle перед обработкой событий на текущем timestamp
             if self.config.resolved_profit_reset_enabled():
                 state.update_equity_peak()
+                
+                # ВАЖНО: Для equity_peak режима используем минимальное значение equity после убыточных сделок
+                # для проверки guard cycle_start_equity <= 0
+                # Это должно происходить ДО проверки reset, чтобы guard работал правильно
+                # НЕ обновляем cycle_start_equity здесь - он используется в _is_profit_reset_eligible
+                # через параметр equity_min_after_losses
             
             # ВАЖНО: Pre-exit projected trigger - проверяем profit reset ДО обработки EXIT событий
             # Используем projected значения (как будто EXIT уже выполнен), но запускаем reset в pre-exit фазе
@@ -2450,30 +2504,99 @@ class PortfolioEngine:
                 # Проверяем eligibility с projected значениями, но используем позиции, которые останутся открытыми после scheduled exits для Guard B
                 eligible = False
                 if multiple is not None and multiple > 1.0:
-                    baseline = None
+                    # Guard: meaningful reset для realized_balance
+                    # Для realized_balance: если все открытые позиции являются scheduled_exits
+                    # И после их закрытия портфель станет flat, то reset НЕ должен срабатывать
+                    # ИСКЛЮЧЕНИЕ: если это единственная сделка в цикле (нет других открытых позиций),
+                    # то reset должен сработать (для теста basis_is_reflected)
+                    meaningful_reset = True
                     if trigger_basis == "realized_balance":
-                        baseline = state.cycle_start_balance
-                    elif trigger_basis == "equity_peak":
-                        baseline = state.cycle_start_equity
-                    
-                    # Guard: baseline должен быть > 0
-                    if baseline is not None and baseline > 0:
-                        threshold = baseline * multiple
-                        # Guard B: должны быть реальные открытые позиции (marker не считается)
-                        # ВАЖНО: проверяем текущие открытые позиции, не positions_remaining_open,
-                        # потому что reset должен срабатывать, если есть позиции для закрытия
-                        real_open_positions = [
+                        # Собираем реальные открытые позиции ДО scheduled exits
+                        real_open_positions_before = [
                             p for p in state.open_positions
                             if p.status == "open" and not (p.meta and p.meta.get("marker", False))
                         ]
-                        # Guard: anti-spam - не повторно триггерить на том же timestamp
-                        already_reset = (state.last_portfolio_reset_time is not None 
-                                        and state.last_portfolio_reset_time == current_time)
-                        
-                        if len(real_open_positions) > 0 and not already_reset and projected_value is not None:
-                            # Проверяем trigger condition с projected значением
-                            if projected_value >= threshold:
+                        # Проверяем, что после scheduled exits останутся открытые позиции
+                        # НО если это единственная сделка (len(real_open_positions_before) == len(scheduled_exit_positions)),
+                        # то разрешаем reset (для одиночной сделки)
+                        if len(positions_remaining_open) == 0 and len(scheduled_exit_positions) > 0:
+                            # Проверяем, не является ли это единственной сделкой
+                            if len(real_open_positions_before) == len(scheduled_exit_positions):
+                                # Это единственная сделка - разрешаем reset
+                                meaningful_reset = True
+                                logger.debug(
+                                    f"[PROFIT_RESET] Realized_balance reset allowed: single trade scenario, "
+                                    f"scheduled_exits_count={len(scheduled_exit_positions)}"
+                                )
+                            else:
+                                # Все открытые позиции закрываются scheduled exits → портфель станет flat
+                                meaningful_reset = False
+                                logger.debug(
+                                    f"[PROFIT_RESET] Realized_balance reset skipped: all positions are scheduled exits, "
+                                    f"portfolio will become flat after exits. "
+                                    f"scheduled_exits_count={len(scheduled_exit_positions)}, "
+                                    f"remaining_open_count={len(positions_remaining_open)}"
+                                )
+                    
+                    # Используем _is_profit_reset_eligible для единой проверки guards
+                    # ВАЖНО: для Guard B используем реальные открытые позиции ДО scheduled exits
+                    # Но для realized_balance мы дополнительно проверяем meaningful_reset
+                    # (который учитывает, что после scheduled exits останутся позиции)
+                    real_open_positions_before_exit = [
+                        p for p in state.open_positions
+                        if p.status == "open" and not (p.meta and p.meta.get("marker", False))
+                    ]
+                    open_positions_for_guard = real_open_positions_before_exit
+                    
+                    # Для equity_peak используем текущие значения, для realized_balance - projected
+                    current_balance_for_check = projected_balance if trigger_basis == "realized_balance" else state.balance
+                    equity_peak_for_check = projected_equity_peak if trigger_basis == "equity_peak" else state.equity_peak_in_cycle
+                    
+                    eligible_flag, diag_meta = _is_profit_reset_eligible(
+                        trigger_basis=trigger_basis,
+                        cycle_start_balance=state.cycle_start_balance,
+                        cycle_start_equity=state.cycle_start_equity,
+                        current_balance=current_balance_for_check,
+                        equity_peak_in_cycle=equity_peak_for_check,
+                        multiple=multiple,
+                        open_positions=open_positions_for_guard,
+                        last_reset_time=state.last_portfolio_reset_time,
+                        current_time=current_time,
+                        equity_min_after_losses=state.equity_min_after_losses,
+                    )
+                    
+                    # Дополнительная проверка: meaningful_reset для realized_balance
+                    if eligible_flag and meaningful_reset:
+                        # Проверяем trigger condition с projected значением
+                        baseline = state.cycle_start_balance if trigger_basis == "realized_balance" else state.cycle_start_equity
+                        if baseline is not None and baseline > 0:
+                            threshold = baseline * multiple
+                            if projected_value is not None and projected_value >= threshold:
                                 eligible = True
+                                logger.debug(
+                                    f"[PROFIT_RESET] Reset eligible: trigger_basis={trigger_basis}, "
+                                    f"baseline={baseline}, threshold={threshold}, "
+                                    f"projected_value={projected_value}, "
+                                    f"real_open_positions_count={len(open_positions_for_guard)}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"[PROFIT_RESET] Reset not eligible: trigger condition not met. "
+                                    f"projected_value={projected_value}, threshold={threshold}"
+                                )
+                        else:
+                            logger.debug(
+                                f"[PROFIT_RESET] Reset not eligible: baseline <= 0. "
+                                f"baseline={baseline}, trigger_basis={trigger_basis}"
+                            )
+                    elif not meaningful_reset:
+                        logger.debug(
+                            f"[PROFIT_RESET] Reset not eligible: meaningful_reset=False (all positions are scheduled exits)"
+                        )
+                    else:
+                        logger.debug(
+                            f"[PROFIT_RESET] Reset not eligible: eligibility_reason={diag_meta.get('eligibility_reason', 'unknown')}"
+                        )
                 
                 if eligible:
                     # Собираем открытые позиции ДО обработки EXIT событий (исключаем marker)

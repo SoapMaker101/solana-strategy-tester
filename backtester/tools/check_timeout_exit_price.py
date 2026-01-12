@@ -240,12 +240,19 @@ def check_all_timeout_positions(
         stored_raw_exit_price = row.get("raw_exit_price", None)
         
         # Пропускаем если нет обязательных полей
-        if not position_id or not contract_address or pd.isna(exit_time_str) or pd.isna(stored_raw_exit_price):
+        if not position_id or not contract_address:
+            continue
+        
+        # Type narrowing для exit_time_str и stored_raw_exit_price
+        if exit_time_str is None or pd.isna(exit_time_str):
+            continue
+        if stored_raw_exit_price is None or pd.isna(stored_raw_exit_price):
             continue
         
         # Парсим exit_time
         try:
-            exit_time_dt = pd.to_datetime(exit_time_str, utc=True)
+            # exit_time_str гарантированно не None после проверки выше
+            exit_time_dt = pd.to_datetime(exit_time_str, utc=True, errors="coerce")
             if pd.isna(exit_time_dt):
                 continue
             exit_time = exit_time_dt.to_pydatetime()
@@ -253,11 +260,17 @@ def check_all_timeout_positions(
             continue
         
         # Проверяем позицию
+        # stored_raw_exit_price гарантированно не None после проверки выше
+        try:
+            stored_price_float = float(stored_raw_exit_price)
+        except (ValueError, TypeError):
+            continue
+        
         result = check_timeout_exit_price(
             position_id=str(position_id),
             contract_address=str(contract_address),
             exit_time=exit_time,
-            stored_raw_exit_price=float(stored_raw_exit_price),
+            stored_raw_exit_price=stored_price_float,
             candles_dir=candles_dir,
             timeframe=timeframe,
         )

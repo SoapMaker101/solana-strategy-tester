@@ -985,7 +985,10 @@ class PortfolioReplay:
             state.equity_peak_in_cycle = equity
         
         # Проверяем условие profit reset: equity >= cycle_start_equity * profit_reset_multiple
-        threshold = state.cycle_start_equity * config.resolved_profit_reset_multiple()
+        multiple = config.resolved_profit_reset_multiple()
+        if multiple is None:
+            return False
+        threshold = state.cycle_start_equity * multiple
         if equity < threshold:
             return False
         

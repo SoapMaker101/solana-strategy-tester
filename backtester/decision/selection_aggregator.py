@@ -49,16 +49,20 @@ def aggregate_stability(stability_df: pd.DataFrame) -> pd.DataFrame:
         
         # Robustness metrics
         if "worst_window_pnl" in group_df.columns:
-            row["worst_case_window_pnl"] = group_df["worst_window_pnl"].min()
+            min_val = group_df["worst_window_pnl"].min()
+            row["worst_case_window_pnl"] = float(min_val) if pd.notna(min_val) else None
         
         if "survival_rate" in group_df.columns:
-            row["median_survival_rate"] = group_df["survival_rate"].median()
+            median_val = group_df["survival_rate"].median()
+            row["median_survival_rate"] = float(median_val) if pd.notna(median_val) else None
         
         if "median_window_pnl" in group_df.columns:
-            row["median_median_window_pnl"] = group_df["median_window_pnl"].median()
+            median_val = group_df["median_window_pnl"].median()
+            row["median_median_window_pnl"] = float(median_val) if pd.notna(median_val) else None
         
         if "pnl_variance" in group_df.columns:
-            row["max_pnl_variance"] = group_df["pnl_variance"].max()
+            max_val = group_df["pnl_variance"].max()
+            row["max_pnl_variance"] = float(max_val) if pd.notna(max_val) else None
         
         # For other numeric columns, take median if varies, keep if constant
         numeric_cols = group_df.select_dtypes(include=[np.number]).columns
@@ -71,10 +75,12 @@ def aggregate_stability(stability_df: pd.DataFrame) -> pd.DataFrame:
                 if len(values) > 0:
                     # Check if constant (all same value within tolerance)
                     if values.nunique() == 1:
-                        row[col] = values.iloc[0]
+                        val = values.iloc[0]
+                        row[col] = float(val) if pd.notna(val) and isinstance(val, (int, float, np.number)) else val
                     else:
                         # Take median for varying values
-                        row[col] = values.median()
+                        median_val = values.median()
+                        row[col] = float(median_val) if pd.notna(median_val) else None
         
         # For non-numeric columns (except strategy), take first value if constant
         non_numeric_cols = group_df.select_dtypes(exclude=[np.number]).columns
@@ -82,7 +88,11 @@ def aggregate_stability(stability_df: pd.DataFrame) -> pd.DataFrame:
             if col != "strategy":
                 values = group_df[col].dropna().unique()
                 if len(values) == 1:
-                    row[col] = values[0]
+                    val = values[0]
+                    # Extract scalar from numpy array if needed
+                    if isinstance(val, np.ndarray):
+                        val = val.item() if val.size > 0 else None
+                    row[col] = val
                 # If varies, don't include (or could concatenate, but for now skip)
         
         aggregated_rows.append(row)
@@ -156,28 +166,37 @@ def aggregate_selection(selection_df: pd.DataFrame) -> pd.DataFrame:
         # Robustness metrics from passed column
         if "passed" in group_df.columns:
             passed_series = group_df["passed"].astype(bool)
-            row["robust_pass_rate"] = passed_series.mean()
-            row["passed_any"] = passed_series.any()
-            row["passed_all"] = passed_series.all()
+            mean_val = passed_series.mean()
+            row["robust_pass_rate"] = float(mean_val) if pd.notna(mean_val) else None
+            any_val = passed_series.any()
+            row["passed_any"] = bool(any_val) if isinstance(any_val, (bool, np.bool_)) else bool(any_val)
+            all_val = passed_series.all()
+            row["passed_all"] = bool(all_val) if isinstance(all_val, (bool, np.bool_)) else bool(all_val)
         
         # Window PnL metrics
         if "worst_window_pnl" in group_df.columns:
-            row["worst_case_window_pnl"] = group_df["worst_window_pnl"].min()
+            min_val = group_df["worst_window_pnl"].min()
+            row["worst_case_window_pnl"] = float(min_val) if pd.notna(min_val) else None
         
         if "survival_rate" in group_df.columns:
-            row["median_survival_rate"] = group_df["survival_rate"].median()
+            median_val = group_df["survival_rate"].median()
+            row["median_survival_rate"] = float(median_val) if pd.notna(median_val) else None
         
         if "median_window_pnl" in group_df.columns:
-            row["median_median_window_pnl"] = group_df["median_window_pnl"].median()
+            median_val = group_df["median_window_pnl"].median()
+            row["median_median_window_pnl"] = float(median_val) if pd.notna(median_val) else None
         
         if "pnl_variance" in group_df.columns:
-            row["max_pnl_variance"] = group_df["pnl_variance"].max()
+            max_val = group_df["pnl_variance"].max()
+            row["max_pnl_variance"] = float(max_val) if pd.notna(max_val) else None
         
         # Selection status metrics (if exists)
         if "selection_status" in group_df.columns:
             status_series = group_df["selection_status"]
-            row["insufficient_data_rate"] = (status_series == "insufficient_data").mean()
-            row["rejected_rate"] = (status_series == "rejected").mean()
+            insufficient_mean = (status_series == "insufficient_data").mean()
+            row["insufficient_data_rate"] = float(insufficient_mean) if pd.notna(insufficient_mean) else None
+            rejected_mean = (status_series == "rejected").mean()
+            row["rejected_rate"] = float(rejected_mean) if pd.notna(rejected_mean) else None
         
         # For other numeric columns, take median if varies, keep if constant
         numeric_cols = group_df.select_dtypes(include=[np.number]).columns
@@ -190,10 +209,12 @@ def aggregate_selection(selection_df: pd.DataFrame) -> pd.DataFrame:
                 if len(values) > 0:
                     # Check if constant
                     if values.nunique() == 1:
-                        row[col] = values.iloc[0]
+                        val = values.iloc[0]
+                        row[col] = float(val) if pd.notna(val) and isinstance(val, (int, float, np.number)) else val
                     else:
                         # Take median for varying values
-                        row[col] = values.median()
+                        median_val = values.median()
+                        row[col] = float(median_val) if pd.notna(median_val) else None
         
         # For non-numeric columns (except strategy, failed_reasons), take first if constant
         non_numeric_cols = group_df.select_dtypes(exclude=[np.number]).columns
@@ -201,7 +222,11 @@ def aggregate_selection(selection_df: pd.DataFrame) -> pd.DataFrame:
             if col not in {"strategy", "failed_reasons", "selection_status"}:
                 values = group_df[col].dropna().unique()
                 if len(values) == 1:
-                    row[col] = values[0]
+                    val = values[0]
+                    # Extract scalar from numpy array if needed
+                    if isinstance(val, np.ndarray):
+                        val = val.item() if val.size > 0 else None
+                    row[col] = val
                 # If varies, skip
         
         # For failed_reasons, we could aggregate but for now skip (could join, but complex)

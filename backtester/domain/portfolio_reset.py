@@ -99,6 +99,7 @@ class PortfolioState:
     cycle_start_equity: float = 0.0  # Equity в начале текущего цикла
     equity_peak_in_cycle: float = 0.0  # Пик equity в текущем цикле
     cycle_start_balance: float = 0.0  # Реализованный баланс (cash) в начале текущего цикла (для realized_balance trigger)
+    equity_min_after_losses: Optional[float] = None  # Минимальное значение equity после убыточных сделок (для equity_peak guard)
     
     # Capacity tracking метрики (v1.6)
     blocked_by_capacity_in_window: int = 0  # Количество отклоненных сигналов по capacity за окно
@@ -134,6 +135,7 @@ def _is_profit_reset_eligible(
     open_positions: List[Position],
     last_reset_time: Optional[datetime] = None,
     current_time: Optional[datetime] = None,
+    equity_min_after_losses: Optional[float] = None,
 ) -> tuple[bool, dict]:
     """
     Единый "eligibility gate" перед reset - решает, можно ли делать reset.
@@ -180,9 +182,18 @@ def _is_profit_reset_eligible(
         diag_meta["cycle_start_balance"] = cycle_start_balance if cycle_start_balance is not None else 0.0
         diag_meta["current_balance"] = current_balance
     elif trigger_basis == "equity_peak":
-        baseline = cycle_start_equity
-        diag_meta["cycle_start_equity"] = cycle_start_equity if cycle_start_equity is not None else 0.0
-        diag_meta["equity_peak_in_cycle"] = equity_peak_in_cycle if equity_peak_in_cycle is not None else 0.0
+        # ВАЖНО: Для equity_peak используем минимальное значение equity после убыточных сделок,
+        # если оно было установлено и меньше cycle_start_equity
+        # Это предотвращает reset при убыточном балансе после убыточных сделок
+        if equity_min_after_losses is not None and equity_min_after_losses < (cycle_start_equity or float('inf')):
+            baseline = equity_min_after_losses
+            diag_meta["cycle_start_equity"] = equity_min_after_losses
+            diag_meta["equity_min_after_losses"] = equity_min_after_losses
+            diag_meta["equity_peak_in_cycle"] = equity_peak_in_cycle if equity_peak_in_cycle is not None else 0.0
+        else:
+            baseline = cycle_start_equity
+            diag_meta["cycle_start_equity"] = cycle_start_equity if cycle_start_equity is not None else 0.0
+            diag_meta["equity_peak_in_cycle"] = equity_peak_in_cycle if equity_peak_in_cycle is not None else 0.0
     
     if baseline is None or baseline <= 0:
         diag_meta["eligibility_reason"] = "baseline_non_positive"
