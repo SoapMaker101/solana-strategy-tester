@@ -6,6 +6,7 @@ Reset - это доменное событие, которое происход�
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -13,6 +14,8 @@ from typing import List, Optional, Dict, Any, TYPE_CHECKING
 
 from .position import Position
 from .execution_model import ExecutionModel
+
+logger = logging.getLogger(__name__)
 
 
 class ResetReason(Enum):
@@ -254,26 +257,43 @@ def apply_portfolio_reset(
     if marker.meta is None:
         marker.meta = {}
     
-    # Закрываем marker через market close (как и остальные позиции)
-    raw_exit_price = get_mark_price_for_position(marker, context.reset_time)
-    effective_exit_price = execution_model.apply_exit(raw_exit_price, "manual_close")
+    # MARKER ECONOMICS: marker НЕ должен влиять на баланс (size=0.0)
+    # Marker — служебный объект только для ledger/traceability
+    # Вариант A (предпочтительно): marker вообще не создаёт executions и не списывает fees
+    # Для marker: fees_total = 0, network_fee_exit = 0, pnl_sol = 0
+    is_marker = marker.meta.get("marker", False) or marker.signal_id == "__profit_reset_marker__"
+    
+    if is_marker:
+        # Marker: нулевая экономика (не влияет на баланс)
+        exit_pnl_pct = 0.0
+        exit_pnl_sol = 0.0
+        fees_total = 0.0
+        network_fee_exit = 0.0
+        notional_after_fees = 0.0
+        raw_exit_price = marker.entry_price if marker.entry_price > 0 else 1.0
+        effective_exit_price = raw_exit_price
+        # НЕ изменяем balance для marker
+    else:
+        # Реальная позиция: нормальная обработка
+        raw_exit_price = get_mark_price_for_position(marker, context.reset_time)
+        effective_exit_price = execution_model.apply_exit(raw_exit_price, "manual_close")
 
-    # Вычисляем PnL на основе исполненных цен (market close)
-    exec_entry_price = marker.meta.get("exec_entry_price", marker.entry_price)
-    exit_pnl_pct = (effective_exit_price - exec_entry_price) / exec_entry_price if exec_entry_price > 0 else 0.0
-    exit_pnl_sol = marker.size * exit_pnl_pct
+        # Вычисляем PnL на основе исполненных цен (market close)
+        exec_entry_price = marker.meta.get("exec_entry_price", marker.entry_price)
+        exit_pnl_pct = (effective_exit_price - exec_entry_price) / exec_entry_price if exec_entry_price > 0 else 0.0
+        exit_pnl_sol = marker.size * exit_pnl_pct
 
-    # Применяем fees к возвращаемому нотионалу
-    notional_returned = marker.size + exit_pnl_sol
-    notional_after_fees = execution_model.apply_fees(notional_returned)
-    fees_total = notional_returned - notional_after_fees
-    network_fee_exit = execution_model.network_fee()
+        # Применяем fees к возвращаемому нотионалу
+        notional_returned = marker.size + exit_pnl_sol
+        notional_after_fees = execution_model.apply_fees(notional_returned)
+        fees_total = notional_returned - notional_after_fees
+        network_fee_exit = execution_model.network_fee()
 
-    # Возвращаем капитал
-    state.balance += notional_after_fees
-    state.balance -= network_fee_exit
+        # Возвращаем капитал
+        state.balance += notional_after_fees
+        state.balance -= network_fee_exit
 
-    # Обновляем позицию
+    # Обновляем позицию (marker или реальная)
     marker.exit_time = context.reset_time
     marker.exit_price = raw_exit_price
     marker.meta.setdefault("exec_exit_price", effective_exit_price)

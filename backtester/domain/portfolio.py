@@ -1140,6 +1140,21 @@ class PortfolioEngine:
             reason: Причина reset
             portfolio_events: Список событий для эмиссии (v1.9)
         """
+        # GUARD B: profit reset не исполняется, если нет реальных открытых позиций
+        # Если len(real_open_positions) == 0, reset не имеет смысла (нечего закрывать)
+        real_open_positions = [
+            p for p in positions_to_force_close
+            if not (p.meta and p.meta.get("marker", False))
+        ]
+        if len(real_open_positions) == 0:
+            # Нет реальных позиций для закрытия → пропускаем reset
+            # НЕ создаем marker, НЕ эмитим portfolio_reset_triggered, НЕ списываем fees
+            logger.warning(
+                f"[PROFIT_RESET] Guard B: Reset skipped - no real open positions to close. "
+                f"reset_time={reset_time}, reason={reason}"
+            )
+            return
+        
         # ВАЖНО: Делаем snapshot open_positions ДО вызова apply_portfolio_reset
         # apply_portfolio_reset изменяет state.open_positions, поэтому нужно сохранить состояние заранее
         open_positions_snapshot = list(state.open_positions)
@@ -2347,9 +2362,15 @@ class PortfolioEngine:
                     # multiple <= 1.0 или invalid - reset disabled, skip
                     profit_reset_triggered_before_exit = False
                 else:
-                    # ANTI-SPAM GUARD: нельзя повторно триггерить reset на том же timestamp
-                    if (state.last_portfolio_reset_time is not None 
-                        and state.last_portfolio_reset_time == current_time):
+                    # GUARD A: baseline <= 0 → profit reset невозможен
+                    # Profit reset — это политика фиксации прибыли, в минусе она не имеет смысла
+                    if state.cycle_start_equity <= 0:
+                        # cycle_start_equity <= 0 → threshold <= 0, условие становится "always true"
+                        # Пропускаем reset чтобы избежать бесконечной петли
+                        profit_reset_triggered_before_exit = False
+                    # ANTI-SPAM GUARD (Guard C): нельзя повторно триггерить reset на том же timestamp
+                    elif (state.last_portfolio_reset_time is not None 
+                          and state.last_portfolio_reset_time == current_time):
                         # Уже был reset на этом timestamp - skip
                         profit_reset_triggered_before_exit = False
                     else:
@@ -2361,46 +2382,51 @@ class PortfolioEngine:
                                 if p.status == "open" and not (p.meta and p.meta.get("marker", False))
                             ]
                             
-                            # Используем marker_position, созданный при старте, или выбираем из открытых
-                            reset_marker_position = marker_position
-                            if reset_marker_position is None:
-                                # Fallback: выбираем marker из открытых позиций
-                                closed_candidates = state.closed_positions
-                                open_candidates = open_positions_before_exit
-                                reset_marker_position = self._select_profit_reset_marker(
-                                    state=state,
-                                    closed_positions_candidates=closed_candidates,
-                                    open_positions_candidates=open_candidates,
-                                )
-                            
-                            # Если marker_position не найден, создаем временный
-                            if reset_marker_position is None:
-                                reset_marker_position = Position(
-                                    signal_id="__profit_reset_marker__",
-                                    contract_address="__profit_reset_marker__",
-                                    entry_time=current_time,
-                                    entry_price=1.0,
-                                    size=0.0,
-                                    status="open",
-                                    meta={"marker": True, "strategy": strategy_name},
-                                )
-                                state.open_positions.append(reset_marker_position)
-                            
-                            # Исключаем marker из списка forced-close, если он открыт
-                            if reset_marker_position.status == "open" and reset_marker_position in open_positions_before_exit:
-                                other_positions_to_force_close = [p for p in open_positions_before_exit if p.signal_id != reset_marker_position.signal_id]
+                            # GUARD B: profit reset не исполняется, если нет реальных открытых позиций
+                            if len(open_positions_before_exit) == 0:
+                                # Нет реальных позиций для закрытия → пропускаем reset
+                                profit_reset_triggered_before_exit = False
                             else:
-                                other_positions_to_force_close = open_positions_before_exit
-                            
-                            self._apply_reset(
-                                state=state,
-                                marker_position=reset_marker_position,
-                                reset_time=current_time,
-                                positions_to_force_close=other_positions_to_force_close,
-                                reason=ResetReason.PROFIT_RESET,
-                                portfolio_events=portfolio_events,
-                            )
-                            profit_reset_triggered_before_exit = True
+                                # Используем marker_position, созданный при старте, или выбираем из открытых
+                                reset_marker_position = marker_position
+                                if reset_marker_position is None:
+                                    # Fallback: выбираем marker из открытых позиций
+                                    closed_candidates = state.closed_positions
+                                    open_candidates = open_positions_before_exit
+                                    reset_marker_position = self._select_profit_reset_marker(
+                                        state=state,
+                                        closed_positions_candidates=closed_candidates,
+                                        open_positions_candidates=open_candidates,
+                                    )
+                                
+                                # Если marker_position не найден, создаем временный
+                                if reset_marker_position is None:
+                                    reset_marker_position = Position(
+                                        signal_id="__profit_reset_marker__",
+                                        contract_address="__profit_reset_marker__",
+                                        entry_time=current_time,
+                                        entry_price=1.0,
+                                        size=0.0,
+                                        status="open",
+                                        meta={"marker": True, "strategy": strategy_name},
+                                    )
+                                    state.open_positions.append(reset_marker_position)
+                                
+                                # Исключаем marker из списка forced-close, если он открыт
+                                if reset_marker_position.status == "open" and reset_marker_position in open_positions_before_exit:
+                                    other_positions_to_force_close = [p for p in open_positions_before_exit if p.signal_id != reset_marker_position.signal_id]
+                                else:
+                                    other_positions_to_force_close = open_positions_before_exit
+                                
+                                self._apply_reset(
+                                    state=state,
+                                    marker_position=reset_marker_position,
+                                    reset_time=current_time,
+                                    positions_to_force_close=other_positions_to_force_close,
+                                    reason=ResetReason.PROFIT_RESET,
+                                    portfolio_events=portfolio_events,
+                                )
+                                profit_reset_triggered_before_exit = True
             
             # Сначала обрабатываем все EXIT события на текущем timestamp
             exit_events = [e for e in events_at_time if e.event_type == EventType.EXIT]
@@ -2473,10 +2499,21 @@ class PortfolioEngine:
                     should_trigger = False
                     reset_threshold = 0.0
                     
-                    # ANTI-SPAM GUARD: нельзя повторно триггерить reset на том же timestamp
-                    # или если cycle_start не изменился с момента последнего reset
-                    if (state.last_portfolio_reset_time is not None 
-                        and state.last_portfolio_reset_time == current_time):
+                    # GUARD A: baseline <= 0 → profit reset невозможен
+                    # Profit reset — это политика фиксации прибыли, в минусе она не имеет смысла
+                    baseline = 0.0
+                    if self.config.profit_reset_trigger_basis == "equity_peak":
+                        baseline = state.cycle_start_equity
+                    elif self.config.profit_reset_trigger_basis == "realized_balance":
+                        baseline = state.cycle_start_balance
+                    
+                    if baseline <= 0:
+                        # baseline <= 0 → threshold <= 0, условие становится "always true"
+                        # Пропускаем reset чтобы избежать бесконечной петли
+                        should_trigger = False
+                    # ANTI-SPAM GUARD (Guard C): нельзя повторно триггерить reset на том же timestamp
+                    elif (state.last_portfolio_reset_time is not None 
+                          and state.last_portfolio_reset_time == current_time):
                         # Уже был reset на этом timestamp - skip
                         should_trigger = False
                     elif self.config.profit_reset_trigger_basis == "equity_peak":
@@ -2501,31 +2538,36 @@ class PortfolioEngine:
                         and not (p.meta and p.meta.get("marker", False))  # Исключаем marker
                     ]
                     
-                    # ВАЖНО: Создаем новый marker для каждого reset (уникальный position_id)
-                    # Не переиспользуем старый marker, чтобы каждый reset имел уникальный marker
-                    reset_marker_position = Position(
-                        signal_id="__profit_reset_marker__",
-                        contract_address="__profit_reset_marker__",
-                        entry_time=current_time,
-                        entry_price=1.0,
-                        size=0.0,
-                        status="open",
-                        meta={"marker": True, "strategy": strategy_name},
-                    )
-                    state.open_positions.append(reset_marker_position)
-                    
-                    self._apply_reset(
-                        state=state,
-                        marker_position=reset_marker_position,
-                        reset_time=current_time,
-                        positions_to_force_close=positions_to_force_close,
-                        reason=ResetReason.PROFIT_RESET,
-                        portfolio_events=portfolio_events,
-                    )
-                    
-                    if reset_marker_position is not None:
-                        self._dbg_meta(reset_marker_position, "AFTER_profit_reset_at_timestamp")
-                    profit_reset_triggered = True  # Profit reset сработал
+                    # GUARD B: profit reset не исполняется, если нет реальных открытых позиций
+                    if len(positions_to_force_close) == 0:
+                        # Нет реальных позиций для закрытия → пропускаем reset
+                        should_trigger = False
+                    else:
+                        # ВАЖНО: Создаем новый marker для каждого reset (уникальный position_id)
+                        # Не переиспользуем старый marker, чтобы каждый reset имел уникальный marker
+                        reset_marker_position = Position(
+                            signal_id="__profit_reset_marker__",
+                            contract_address="__profit_reset_marker__",
+                            entry_time=current_time,
+                            entry_price=1.0,
+                            size=0.0,
+                            status="open",
+                            meta={"marker": True, "strategy": strategy_name},
+                        )
+                        state.open_positions.append(reset_marker_position)
+                        
+                        self._apply_reset(
+                            state=state,
+                            marker_position=reset_marker_position,
+                            reset_time=current_time,
+                            positions_to_force_close=positions_to_force_close,
+                            reason=ResetReason.PROFIT_RESET,
+                            portfolio_events=portfolio_events,
+                        )
+                        
+                        if reset_marker_position is not None:
+                            self._dbg_meta(reset_marker_position, "AFTER_profit_reset_at_timestamp")
+                        profit_reset_triggered = True  # Profit reset сработал
             
             # Проверка capacity reset/prune (только если profit reset не сработал)
             # Важно: profit reset имеет приоритет, capacity проверяется только если profit reset не сработал
@@ -2617,9 +2659,14 @@ class PortfolioEngine:
                     # multiple <= 1.0 или invalid - reset disabled, skip
                     pass
                 else:
-                    # ANTI-SPAM GUARD: нельзя повторно триггерить reset на том же timestamp
-                    if (state.last_portfolio_reset_time is not None 
-                        and state.last_portfolio_reset_time == current_time):
+                    # GUARD A: baseline <= 0 → profit reset невозможен
+                    if state.cycle_start_equity <= 0:
+                        # cycle_start_equity <= 0 → threshold <= 0, условие становится "always true"
+                        # Пропускаем reset чтобы избежать бесконечной петли
+                        pass
+                    # ANTI-SPAM GUARD (Guard C): нельзя повторно триггерить reset на том же timestamp
+                    elif (state.last_portfolio_reset_time is not None 
+                          and state.last_portfolio_reset_time == current_time):
                         # Уже был reset на этом timestamp - skip
                         pass
                     else:
@@ -2635,42 +2682,47 @@ class PortfolioEngine:
                                 and not (p.meta and p.meta.get("marker", False))  # Исключаем marker
                             ]
                             
-                            # Используем marker_position, созданный при старте, или выбираем из закрытых
-                            reset_marker_position = marker_position
-                            if reset_marker_position is None:
-                                # Fallback: выбираем marker из закрытых позиций
-                                closed_candidates = state.closed_positions + [pos]
-                                open_candidates = positions_to_force_close
-                                reset_marker_position = self._select_profit_reset_marker(
+                            # GUARD B: profit reset не исполняется, если нет реальных открытых позиций
+                            if len(positions_to_force_close) == 0:
+                                # Нет реальных позиций для закрытия → пропускаем reset
+                                pass
+                            else:
+                                # Используем marker_position, созданный при старте, или выбираем из закрытых
+                                reset_marker_position = marker_position
+                                if reset_marker_position is None:
+                                    # Fallback: выбираем marker из закрытых позиций
+                                    closed_candidates = state.closed_positions + [pos]
+                                    open_candidates = positions_to_force_close
+                                    reset_marker_position = self._select_profit_reset_marker(
+                                        state=state,
+                                        closed_positions_candidates=closed_candidates,
+                                        open_positions_candidates=open_candidates,
+                                    )
+                                
+                                # Если marker_position не найден, создаем временный
+                                if reset_marker_position is None:
+                                    reset_marker_position = Position(
+                                        signal_id="__profit_reset_marker__",
+                                        contract_address="__profit_reset_marker__",
+                                        entry_time=final_exit_time,
+                                        entry_price=1.0,
+                                        size=0.0,
+                                        status="open",
+                                        meta={"marker": True, "strategy": strategy_name},
+                                    )
+                                    state.open_positions.append(reset_marker_position)
+                                
+                                reset_time_portfolio = final_exit_time
+                                self._apply_reset(
                                     state=state,
-                                    closed_positions_candidates=closed_candidates,
-                                    open_positions_candidates=open_candidates,
+                                    marker_position=reset_marker_position,
+                                    reset_time=reset_time_portfolio,
+                                    positions_to_force_close=positions_to_force_close,
+                                    reason=ResetReason.PROFIT_RESET,
+                                    portfolio_events=portfolio_events,
                                 )
-                            
-                            # Если marker_position не найден, создаем временный
-                            if reset_marker_position is None:
-                                reset_marker_position = Position(
-                                    signal_id="__profit_reset_marker__",
-                                    contract_address="__profit_reset_marker__",
-                                    entry_time=final_exit_time,
-                                    entry_price=1.0,
-                                    size=0.0,
-                                    status="open",
-                                    meta={"marker": True, "strategy": strategy_name},
-                                )
-                                state.open_positions.append(reset_marker_position)
-                            
-                            reset_time_portfolio = final_exit_time
-                            self._apply_reset(
-                                state=state,
-                                marker_position=reset_marker_position,
-                                reset_time=reset_time_portfolio,
-                                positions_to_force_close=positions_to_force_close,
-                                reason=ResetReason.PROFIT_RESET,
-                                portfolio_events=portfolio_events,
-                            )
-                            if reset_marker_position is not None:
-                                self._dbg_meta(reset_marker_position, "AFTER_process_portfolio_level_reset_final_close")
+                                if reset_marker_position is not None:
+                                    self._dbg_meta(reset_marker_position, "AFTER_process_portfolio_level_reset_final_close")
 
         # 5. Сортируем equity curve по времени для корректного расчета drawdown
         state.equity_curve.sort(key=lambda x: x["timestamp"] if x.get("timestamp") else datetime.min)

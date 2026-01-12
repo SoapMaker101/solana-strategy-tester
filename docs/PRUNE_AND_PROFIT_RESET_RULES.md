@@ -135,13 +135,34 @@ elif self.config.profit_reset_trigger_basis == "realized_balance":
 
 **[FOUND]** `backtester/domain/portfolio.py:2245-2248` — собираются только реальные открытые позиции (исключается marker по `meta["marker"]`).
 
-### Anti-Spam Guard (v2.2)
+### Anti-Loop Guards (v2.2.1)
 
-**[FOUND]** `backtester/domain/portfolio.py:2467-2469` — anti-spam guard предотвращает повторные reset на одном timestamp:
+**[FOUND]** `backtester/domain/portfolio.py` — три слоя защиты против reset loop:
 
+**Guard A: baseline <= 0 → profit reset невозможен**
+- Если `cycle_start_equity <= 0` (equity_peak) или `cycle_start_balance <= 0` (realized_balance) — reset пропускается
+- Пояснение: при baseline<=0 threshold<=0, условие становится "always true", начинается бесконечный reset loop
+- Profit reset — это политика фиксации прибыли, в минусе она не имеет смысла
+
+**Guard B: profit reset не исполняется, если нет реальных открытых позиций**
+- Перед вызовом `apply_portfolio_reset` собираются реальные позиции (исключая marker)
+- Если `len(real_open_positions) == 0` — reset пропускается (НЕ создается marker, НЕ эмитится событие, НЕ списываются fees)
+- Это критично, потому что в артефактах были reset'ы с `closed_positions_count=0`
+
+**Guard C: one reset per timestamp (anti-spam guard)**
 - Если `last_portfolio_reset_time == current_time` — reset пропускается (уже был reset на этом timestamp)
 - Это предотвращает множественные reset при неправильной конфигурации или багах
 - **Инвариант**: reset не может срабатывать повторно "сразу же" без изменения цикла/баланса
+
+### Marker Economics (v2.2.1)
+
+**[FOUND]** `backtester/domain/portfolio_reset.py:257-320` — marker НЕ должен влиять на баланс:
+
+- Marker имеет `size=0.0` и не должен списывать `network_fee` и `fees`
+- При forced close marker: `fees_total = 0`, `network_fee_exit = 0`, `pnl_sol = 0`
+- Marker НЕ изменяет `state.balance` (не списывается `network_fee_exit` и `notional_after_fees = 0`)
+- Marker используется ТОЛЬКО как `position_id` в событии `portfolio_reset_triggered` для трассируемости
+- Даже если reset вызван ошибочно, marker не должен "жечь" баланс и усугублять зацикливание
 
 ---
 

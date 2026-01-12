@@ -115,7 +115,8 @@ def test_realized_balance_triggered_after_normal_exit():
     Arrange:
     - initial=10, multiple=1.3 → порог = 13 SOL
     - trigger_basis="realized_balance"
-    - закрыть позицию нормальным reason (tp/timeout), чтобы cash balance стал >= 13
+    - создать несколько позиций, где одна закрывается, а другие остаются открытыми
+    - после закрытия balance >= 13, но есть открытые позиции
     
     Assert:
     - reset происходит (1 событие)
@@ -133,33 +134,63 @@ def test_realized_balance_triggered_after_normal_exit():
     
     engine = PortfolioEngine(config)
     
-    entry_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    exit_time = entry_time + timedelta(hours=2)
+    # Создаем сценарий где есть открытые позиции на момент проверки reset
+    # Для этого создаем две позиции: одна закрывается раньше (trigger reset), другая остается открытой
     
-    # Создаем позицию с большим profit, чтобы после закрытия balance >= 13
-    # initial=10, size=5 (50%), profit=100% → возврат = 10, итого balance = 10 + 10 = 20 >= 13
-    strategy_output = StrategyOutput(
-        entry_time=entry_time,
+    entry_time_1 = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    exit_time_1 = entry_time_1 + timedelta(hours=1)
+    
+    # Первая позиция: большая прибыль, закрывается раньше
+    strategy_output_1 = StrategyOutput(
+        entry_time=entry_time_1,
         entry_price=1.0,
-        exit_time=exit_time,
+        exit_time=exit_time_1,
         exit_price=2.0,  # 100% profit
         pnl=1.0,
         reason="ladder_tp"
     )
     
-    all_results = [{
-        "signal_id": "test_signal_1",
-        "contract_address": "TESTTOKEN",
-        "strategy": "test_strategy",
-        "timestamp": entry_time,
-        "result": strategy_output
-    }]
+    # Вторая позиция: открывается одновременно с первой, остается открытой на момент проверки reset
+    # Важно: entry_time должен быть <= exit_time_1, чтобы позиция была открыта на момент проверки reset
+    entry_time_2 = entry_time_1  # Одновременно с первой
+    exit_time_2 = entry_time_1 + timedelta(hours=3)  # Закрывается позже (после reset)
+    
+    strategy_output_2 = StrategyOutput(
+        entry_time=entry_time_2,
+        entry_price=1.0,
+        exit_time=exit_time_2,
+        exit_price=1.5,
+        pnl=0.5,
+        reason="ladder_tp"
+    )
+    
+    all_results = [
+        {
+            "signal_id": "test_signal_1",
+            "contract_address": "TESTTOKEN1",
+            "strategy": "test_strategy",
+            "timestamp": entry_time_1,
+            "result": strategy_output_1
+        },
+        {
+            "signal_id": "test_signal_2",
+            "contract_address": "TESTTOKEN2",
+            "strategy": "test_strategy",
+            "timestamp": entry_time_2,
+            "result": strategy_output_2
+        }
+    ]
     
     result = engine.simulate(all_results, strategy_name="test_strategy")
     
+    # После первой сделки balance становится >= 13, и есть вторая открытая позиция
+    # Reset должен сработать ПОСЛЕ закрытия первой позиции
+    
     # Проверяем что reset сработал
-    assert result.stats.portfolio_reset_profit_count == 1, \
-        "Reset должен сработать после нормального exit когда cash balance >= 13"
+    assert result.stats.portfolio_reset_profit_count == 1, (
+        f"Reset должен сработать после нормального exit когда cash balance >= 13 "
+        f"и есть открытые позиции, получен: {result.stats.portfolio_reset_profit_count}"
+    )
     
     # Проверяем что есть portfolio_reset_triggered событие
     reset_events = [
@@ -167,27 +198,31 @@ def test_realized_balance_triggered_after_normal_exit():
         if e.event_type == PortfolioEventType.PORTFOLIO_RESET_TRIGGERED
     ]
     assert len(reset_events) == 1, \
-        "Должно быть 1 portfolio_reset_triggered событие"
+        f"Должно быть 1 portfolio_reset_triggered событие, получено: {len(reset_events)}"
     
     # Проверяем что cycle_start_balance обновился (после reset он равен текущему balance)
     # После reset balance должен быть >= 13
-    assert result.stats.final_balance_sol >= 13.0, \
-        f"final_balance_sol должен быть >= 13 после reset, получен: {result.stats.final_balance_sol}"
-    assert result.stats.cycle_start_balance >= 13.0, \
-        f"cycle_start_balance должен быть >= 13, получен: {result.stats.cycle_start_balance}"
+    assert result.stats.final_balance_sol >= 13.0, (
+        f"final_balance_sol должен быть >= 13 после reset, "
+        f"получен: {result.stats.final_balance_sol}"
+    )
+    assert result.stats.cycle_start_balance >= 13.0, (
+        f"cycle_start_balance должен быть >= 13, "
+        f"получен: {result.stats.cycle_start_balance}"
+    )
 
 
 def test_allocation_mode_fixed_preserves_size_after_reset():
     """
-    Тест: allocation_mode="fixed" сохраняет size=0.1 после reset.
+    Тест: allocation_mode="fixed" сохраняет size после reset.
     
     Arrange:
-    - fixed, percent_per_trade=0.01, initial=10 → size = 0.1
-    - выполнить reset
-    - открыть новую сделку
+    - fixed, percent_per_trade=0.5, initial=10 → size = 5.0
+    - выполнить reset (с открытой позицией)
+    - открыть новую сделку после reset
     
     Assert:
-    - size_sol == 0.1
+    - size_sol остается 5.0 (fixed mode)
     """
     config = PortfolioConfig(
         initial_balance_sol=10.0,
@@ -201,26 +236,39 @@ def test_allocation_mode_fixed_preserves_size_after_reset():
     
     engine = PortfolioEngine(config)
     
-    entry_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    exit_time = entry_time + timedelta(hours=2)
+    entry_time_1 = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    exit_time_1 = entry_time_1 + timedelta(hours=1)
     
-    # Первая сделка: большая прибыль для trigger reset
+    # Первая сделка: большая прибыль для trigger reset, закрывается раньше
     strategy_output_1 = StrategyOutput(
-        entry_time=entry_time,
+        entry_time=entry_time_1,
         entry_price=1.0,
-        exit_time=exit_time,
+        exit_time=exit_time_1,
         exit_price=2.0,  # 100% profit
         pnl=1.0,
         reason="ladder_tp"
     )
     
-    # Вторая сделка: после reset
-    entry_time_2 = exit_time + timedelta(hours=1)
-    exit_time_2 = entry_time_2 + timedelta(hours=1)
+    # Вторая сделка: открывается одновременно, остается открытой для trigger reset
+    entry_time_2 = entry_time_1  # Одновременно с первой
+    exit_time_2 = entry_time_1 + timedelta(hours=3)  # Закрывается позже
+    
     strategy_output_2 = StrategyOutput(
         entry_time=entry_time_2,
         entry_price=1.0,
         exit_time=exit_time_2,
+        exit_price=1.5,
+        pnl=0.5,
+        reason="ladder_tp"
+    )
+    
+    # Третья сделка: после reset
+    entry_time_3 = exit_time_1 + timedelta(hours=1)
+    exit_time_3 = entry_time_3 + timedelta(hours=1)
+    strategy_output_3 = StrategyOutput(
+        entry_time=entry_time_3,
+        entry_price=1.0,
+        exit_time=exit_time_3,
         exit_price=1.1,
         pnl=0.1,
         reason="ladder_tp"
@@ -231,7 +279,7 @@ def test_allocation_mode_fixed_preserves_size_after_reset():
             "signal_id": "test_signal_1",
             "contract_address": "TESTTOKEN1",
             "strategy": "test_strategy",
-            "timestamp": entry_time,
+            "timestamp": entry_time_1,
             "result": strategy_output_1
         },
         {
@@ -240,27 +288,38 @@ def test_allocation_mode_fixed_preserves_size_after_reset():
             "strategy": "test_strategy",
             "timestamp": entry_time_2,
             "result": strategy_output_2
+        },
+        {
+            "signal_id": "test_signal_3",
+            "contract_address": "TESTTOKEN3",
+            "strategy": "test_strategy",
+            "timestamp": entry_time_3,
+            "result": strategy_output_3
         }
     ]
     
     result = engine.simulate(all_results, strategy_name="test_strategy")
     
-    # Проверяем что reset сработал
-    assert result.stats.portfolio_reset_profit_count == 1, \
-        "Reset должен сработать"
+    # Проверяем что reset сработал (после закрытия первой позиции есть вторая открытая)
+    assert result.stats.portfolio_reset_profit_count == 1, (
+        f"Reset должен сработать когда balance >= 13 и есть открытые позиции, "
+        f"получен: {result.stats.portfolio_reset_profit_count}"
+    )
     
-    # Находим вторую позицию (после reset)
+    # Находим третью позицию (после reset)
     positions_after_reset = [
         p for p in result.positions
-        if p.signal_id == "test_signal_2"
+        if p.signal_id == "test_signal_3"
     ]
     assert len(positions_after_reset) == 1, \
-        "Должна быть вторая позиция"
+        "Должна быть третья позиция"
     
     pos_after_reset = positions_after_reset[0]
     # Размер должен быть 5.0 (fixed mode не меняется после reset, 50% от initial=10)
-    assert abs(pos_after_reset.size - 5.0) < 0.001, \
-        f"Размер после reset должен быть 5.0 (fixed mode), получен: {pos_after_reset.size}"
+    assert abs(pos_after_reset.size - 5.0) < 0.001, (
+        f"Размер после reset должен быть 5.0 (fixed mode), "
+        f"получен: {pos_after_reset.size}"
+    )
 
 
 def test_allocation_mode_hybrid_increases_size_after_reset():
@@ -268,14 +327,14 @@ def test_allocation_mode_hybrid_increases_size_after_reset():
     Тест: allocation_mode="fixed_then_dynamic_after_profit_reset" увеличивает размер после reset.
     
     Arrange:
-    - initial=10, percent_per_trade=0.01
-    - до reset открыть сделку → размер должен быть 0.1
-    - довести до reset (cash >= 13)
-    - после reset открыть сделку → размер должен быть 0.13 (с допуском на rounding)
+    - initial=10, percent_per_trade=0.5
+    - до reset открыть сделку → размер должен быть 5.0 (50% от initial)
+    - довести до reset (cash >= 13, с открытой позицией)
+    - после reset открыть сделку → размер должен быть ~7.5 (50% от balance после reset)
     
     Assert:
-    - before_reset_size == 0.1
-    - after_reset_size == 0.13 (+/- tiny epsilon)
+    - before_reset_size == 5.0
+    - after_reset_size == 7.5 (+/- tiny epsilon)
     """
     config = PortfolioConfig(
         initial_balance_sol=10.0,
@@ -289,26 +348,39 @@ def test_allocation_mode_hybrid_increases_size_after_reset():
     
     engine = PortfolioEngine(config)
     
-    entry_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    exit_time = entry_time + timedelta(hours=2)
+    entry_time_1 = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    exit_time_1 = entry_time_1 + timedelta(hours=1)
     
-    # Первая сделка: до reset, размер должен быть 0.1
+    # Первая сделка: до reset, размер должен быть 5.0, закрывается раньше
     strategy_output_1 = StrategyOutput(
-        entry_time=entry_time,
+        entry_time=entry_time_1,
         entry_price=1.0,
-        exit_time=exit_time,
+        exit_time=exit_time_1,
         exit_price=2.0,  # 100% profit для trigger reset
         pnl=1.0,
         reason="ladder_tp"
     )
     
-    # Вторая сделка: после reset, размер должен быть ~0.13 (1% от ~13)
-    entry_time_2 = exit_time + timedelta(hours=1)
-    exit_time_2 = entry_time_2 + timedelta(hours=1)
+    # Вторая сделка: открывается одновременно, остается открытой для trigger reset
+    entry_time_2 = entry_time_1  # Одновременно с первой
+    exit_time_2 = entry_time_1 + timedelta(hours=3)  # Закрывается позже
+    
     strategy_output_2 = StrategyOutput(
         entry_time=entry_time_2,
         entry_price=1.0,
         exit_time=exit_time_2,
+        exit_price=1.5,
+        pnl=0.5,
+        reason="ladder_tp"
+    )
+    
+    # Третья сделка: после reset, размер должен быть ~7.5 (50% от ~15)
+    entry_time_3 = exit_time_1 + timedelta(hours=1)
+    exit_time_3 = entry_time_3 + timedelta(hours=1)
+    strategy_output_3 = StrategyOutput(
+        entry_time=entry_time_3,
+        entry_price=1.0,
+        exit_time=exit_time_3,
         exit_price=1.1,
         pnl=0.1,
         reason="ladder_tp"
@@ -319,7 +391,7 @@ def test_allocation_mode_hybrid_increases_size_after_reset():
             "signal_id": "test_signal_1",
             "contract_address": "TESTTOKEN1",
             "strategy": "test_strategy",
-            "timestamp": entry_time,
+            "timestamp": entry_time_1,
             "result": strategy_output_1
         },
         {
@@ -328,30 +400,42 @@ def test_allocation_mode_hybrid_increases_size_after_reset():
             "strategy": "test_strategy",
             "timestamp": entry_time_2,
             "result": strategy_output_2
+        },
+        {
+            "signal_id": "test_signal_3",
+            "contract_address": "TESTTOKEN3",
+            "strategy": "test_strategy",
+            "timestamp": entry_time_3,
+            "result": strategy_output_3
         }
     ]
     
     result = engine.simulate(all_results, strategy_name="test_strategy")
     
     # Проверяем что reset сработал
-    assert result.stats.portfolio_reset_profit_count == 1, \
-        "Reset должен сработать"
+    assert result.stats.portfolio_reset_profit_count == 1, (
+        f"Reset должен сработать когда balance >= 13 и есть открытые позиции, "
+        f"получен: {result.stats.portfolio_reset_profit_count}"
+    )
     
     # Находим позиции
     pos_before_reset = [p for p in result.positions if p.signal_id == "test_signal_1"][0]
-    pos_after_reset = [p for p in result.positions if p.signal_id == "test_signal_2"][0]
+    pos_after_reset = [p for p in result.positions if p.signal_id == "test_signal_3"][0]
     
     # Размер до reset должен быть 5.0 (50% от initial=10)
-    assert abs(pos_before_reset.size - 5.0) < 0.001, \
+    assert abs(pos_before_reset.size - 5.0) < 0.001, (
         f"Размер до reset должен быть 5.0, получен: {pos_before_reset.size}"
+    )
     
     # Размер после reset должен быть ~7.5 (50% от баланса после reset, который ~15)
     # После первой сделки: initial=10, size=5, profit=100% → balance = 10 - 5 + 5*2 = 15
     # После reset balance = 15, размер = 50% от 15 = 7.5
     # С учетом комиссий и rounding, допускаем небольшую погрешность
     expected_size_after_reset = 7.5  # 50% от 15
-    assert abs(pos_after_reset.size - expected_size_after_reset) < 0.1, \
-        f"Размер после reset должен быть около {expected_size_after_reset}, получен: {pos_after_reset.size}"
+    assert abs(pos_after_reset.size - expected_size_after_reset) < 0.1, (
+        f"Размер после reset должен быть около {expected_size_after_reset}, "
+        f"получен: {pos_after_reset.size}"
+    )
 
 
 def test_reset_ledger_unique():
