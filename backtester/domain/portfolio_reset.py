@@ -123,6 +123,114 @@ class PortfolioState:
             self.equity_peak_in_cycle = current
 
 
+def _is_profit_reset_eligible(
+    *,
+    trigger_basis: str,
+    cycle_start_balance: float | None,
+    cycle_start_equity: float | None,
+    current_balance: float,
+    equity_peak_in_cycle: float | None,
+    multiple: float | None,
+    open_positions: List[Position],
+    last_reset_time: Optional[datetime] = None,
+    current_time: Optional[datetime] = None,
+) -> tuple[bool, dict]:
+    """
+    Единый "eligibility gate" перед reset - решает, можно ли делать reset.
+    
+    Жёсткие guards:
+    1. multiple должен быть > 1.0
+    2. baseline должен быть строго > 0 (cycle_start_balance для realized_balance, cycle_start_equity для equity_peak)
+    3. должны быть реальные открытые позиции (marker не считается)
+    4. threshold должен быть > 0 (следствие baseline > 0)
+    5. trigger condition должно быть выполнено
+    6. anti-spam: нельзя повторно триггерить reset на том же timestamp
+    
+    Args:
+        trigger_basis: "equity_peak" или "realized_balance"
+        cycle_start_balance: Реализованный баланс в начале цикла (для realized_balance)
+        cycle_start_equity: Equity в начале цикла (для equity_peak)
+        current_balance: Текущий баланс (для realized_balance)
+        equity_peak_in_cycle: Пик equity в цикле (для equity_peak)
+        multiple: Множитель для порога (должен быть > 1.0)
+        open_positions: Список открытых позиций
+        last_reset_time: Время последнего reset (для anti-spam guard)
+        current_time: Текущее время (для anti-spam guard)
+        
+    Returns:
+        tuple[bool, dict]: (eligible, diag_meta)
+        - eligible: True если reset разрешён
+        - diag_meta: dict с диагностической информацией для meta_json события
+    """
+    diag_meta: dict = {
+        "trigger_basis": trigger_basis,
+        "multiple": multiple if multiple is not None else 0.0,
+    }
+    
+    # Guard 1: multiple должен быть > 1.0
+    if multiple is None or multiple <= 1.0:
+        diag_meta["eligibility_reason"] = "multiple_invalid"
+        diag_meta["multiple"] = multiple if multiple is not None else 0.0
+        return False, diag_meta
+    
+    # Guard 2: baseline должен быть строго > 0
+    baseline = None
+    if trigger_basis == "realized_balance":
+        baseline = cycle_start_balance
+        diag_meta["cycle_start_balance"] = cycle_start_balance if cycle_start_balance is not None else 0.0
+        diag_meta["current_balance"] = current_balance
+    elif trigger_basis == "equity_peak":
+        baseline = cycle_start_equity
+        diag_meta["cycle_start_equity"] = cycle_start_equity if cycle_start_equity is not None else 0.0
+        diag_meta["equity_peak_in_cycle"] = equity_peak_in_cycle if equity_peak_in_cycle is not None else 0.0
+    
+    if baseline is None or baseline <= 0:
+        diag_meta["eligibility_reason"] = "baseline_non_positive"
+        diag_meta["baseline"] = baseline if baseline is not None else 0.0
+        return False, diag_meta
+    
+    # Guard 3: должны быть реальные открытые позиции (marker не считается)
+    real_open_positions = [
+        p for p in open_positions
+        if p.status == "open" and not (p.meta and p.meta.get("marker") is True)
+    ]
+    diag_meta["real_open_positions_count"] = len(real_open_positions)
+    
+    if len(real_open_positions) == 0:
+        diag_meta["eligibility_reason"] = "no_real_open_positions"
+        return False, diag_meta
+    
+    # Guard 4: threshold должен быть > 0 (следствие baseline > 0)
+    threshold = baseline * multiple
+    diag_meta["threshold"] = threshold
+    
+    if threshold <= 0:
+        diag_meta["eligibility_reason"] = "threshold_non_positive"
+        return False, diag_meta
+    
+    # Guard 5: anti-spam - нельзя повторно триггерить reset на том же timestamp
+    if (last_reset_time is not None and current_time is not None 
+        and last_reset_time == current_time):
+        diag_meta["eligibility_reason"] = "already_reset_at_timestamp"
+        return False, diag_meta
+    
+    # Guard 6: trigger condition должно быть выполнено
+    trigger_condition_met = False
+    if trigger_basis == "realized_balance":
+        trigger_condition_met = current_balance >= threshold
+    elif trigger_basis == "equity_peak":
+        if equity_peak_in_cycle is not None:
+            trigger_condition_met = equity_peak_in_cycle >= threshold
+    
+    if not trigger_condition_met:
+        diag_meta["eligibility_reason"] = "trigger_condition_not_met"
+        return False, diag_meta
+    
+    # Все guards пройдены
+    diag_meta["eligibility_reason"] = "eligible"
+    return True, diag_meta
+
+
 def get_mark_price_for_position(pos: Position, reset_time: datetime) -> float:
     """
     Получает текущую цену для позиции на момент reset.
@@ -330,6 +438,7 @@ def apply_portfolio_reset(
     # 3. Обновляем reset tracking переменные в зависимости от типа reset
     if context.reason == ResetReason.PROFIT_RESET:
         # Portfolio-level profit reset
+        # ВАЖНО: cycle_start_balance обновляется ТОЛЬКО при successful profit reset
         state.portfolio_reset_count += 1
         state.portfolio_reset_profit_count = getattr(state, 'portfolio_reset_profit_count', 0) + 1
         if state.last_portfolio_reset_time is None or context.reset_time > state.last_portfolio_reset_time:
@@ -338,11 +447,11 @@ def apply_portfolio_reset(
         state.equity_peak_in_cycle = state.cycle_start_equity
         state.cycle_start_balance = state.balance  # Обновляем cycle_start_balance для realized_balance trigger
     elif context.reason == ResetReason.CAPACITY_PRUNE:
-        # Portfolio-level capacity reset (close-all or prune)
+        # Portfolio-level capacity prune
+        # ВАЖНО: capacity prune НЕ сбрасывает цикл (cycle_start_equity, cycle_start_balance остаются прежними)
+        # Это следует из контракта: prune закрывает часть позиций, но НЕ сбрасывает profit cycle
         state.portfolio_reset_count += 1
         state.portfolio_reset_capacity_count = getattr(state, 'portfolio_reset_capacity_count', 0) + 1
         if state.last_portfolio_reset_time is None or context.reset_time > state.last_portfolio_reset_time:
             state.last_portfolio_reset_time = context.reset_time
-        state.cycle_start_equity = state.balance
-        state.equity_peak_in_cycle = state.cycle_start_equity
-        state.cycle_start_balance = state.balance  # Обновляем cycle_start_balance для consistency
+        # НЕ обновляем cycle_start_equity, equity_peak_in_cycle, cycle_start_balance для capacity prune
