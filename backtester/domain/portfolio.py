@@ -218,6 +218,26 @@ class PortfolioConfig:
                 f"profit reset disabled."
             )
             return None
+    
+    def resolved_profit_reset_trigger_basis(self) -> Literal["equity_peak", "realized_balance"]:
+        """
+        Возвращает значение profit_reset_trigger_basis с валидацией и fallback на дефолт.
+        
+        ВАЛИДАЦИЯ: только "equity_peak" или "realized_balance", при мусоре: warning + fallback на "equity_peak".
+        
+        Returns:
+            "equity_peak" (legacy, default) или "realized_balance" (новый режим)
+        """
+        basis = self.profit_reset_trigger_basis
+        if basis in ("equity_peak", "realized_balance"):
+            return basis
+        
+        # При невалидном значении: warning + fallback на equity_peak
+        logger.warning(
+            f"Invalid profit_reset_trigger_basis='{basis}', "
+            f"falling back to 'equity_peak'. Valid values: 'equity_peak', 'realized_balance'."
+        )
+        return "equity_peak"
 
 
 @dataclass
@@ -1310,10 +1330,11 @@ class PortfolioEngine:
             
             # Получаем threshold и multiple для метаданных события
             multiple = self.config.resolved_profit_reset_multiple()
+            trigger_basis = self.config.resolved_profit_reset_trigger_basis()
             reset_threshold_meta = 0.0
-            if self.config.profit_reset_trigger_basis == "equity_peak":
+            if trigger_basis == "equity_peak":
                 reset_threshold_meta = state.cycle_start_equity * multiple if multiple else 0.0
-            elif self.config.profit_reset_trigger_basis == "realized_balance":
+            elif trigger_basis == "realized_balance":
                 reset_threshold_meta = state.cycle_start_balance * multiple if multiple else 0.0
             
             portfolio_events.append(
@@ -1334,7 +1355,7 @@ class PortfolioEngine:
                         "current_balance": state.balance,
                         "threshold": reset_threshold_meta,  # Явный threshold для диагностики
                         "multiple": multiple if multiple else 0.0,  # Явный multiple для диагностики
-                        "trigger_basis": self.config.profit_reset_trigger_basis or "equity_peak",  # Явный trigger_basis
+                        "trigger_basis": trigger_basis,  # Явный trigger_basis (используем resolved метод)
                     },
                 )
             )
@@ -2362,8 +2383,8 @@ class PortfolioEngine:
             # ВАЖНО: Проверяем profit reset ДО обработки EXIT событий ТОЛЬКО для equity_peak
             # Для realized_balance проверка происходит ПОСЛЕ EXIT событий (чтобы cash balance был обновлен)
             profit_reset_triggered_before_exit = False
-            if (self.config.resolved_profit_reset_enabled() 
-                and self.config.profit_reset_trigger_basis == "equity_peak"):
+            if (self.config.resolved_profit_reset_enabled()
+                and self.config.resolved_profit_reset_trigger_basis() == "equity_peak"):
                 # Используем единую функцию eligibility для проверки всех guards
                 multiple = self.config.resolved_profit_reset_multiple()
                 eligible, diag_meta = _is_profit_reset_eligible(
@@ -2501,7 +2522,7 @@ class PortfolioEngine:
             if not profit_reset_triggered_before_exit and self.config.resolved_profit_reset_enabled():
                 # Используем единую функцию eligibility для проверки всех guards
                 multiple = self.config.resolved_profit_reset_multiple()
-                trigger_basis = self.config.profit_reset_trigger_basis
+                trigger_basis = self.config.resolved_profit_reset_trigger_basis()
                 
                 # Для equity_peak обновляем peak перед проверкой
                 if trigger_basis == "equity_peak":

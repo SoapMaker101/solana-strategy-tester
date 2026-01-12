@@ -406,6 +406,7 @@ class BacktestRunner:
         # Profit reset конфигурация
         profit_reset_enabled = portfolio_cfg.get("profit_reset_enabled")
         profit_reset_multiple = portfolio_cfg.get("profit_reset_multiple")
+        profit_reset_trigger_basis = portfolio_cfg.get("profit_reset_trigger_basis", "equity_peak")
         
         # Capacity reset конфигурация
         capacity_reset_cfg = portfolio_cfg.get("capacity_reset", {}) or {}
@@ -455,6 +456,7 @@ class BacktestRunner:
             ),
             profit_reset_enabled=profit_reset_enabled,
             profit_reset_multiple=float(profit_reset_multiple) if profit_reset_multiple is not None else None,
+            profit_reset_trigger_basis=profit_reset_trigger_basis,
             capacity_reset_enabled=capacity_reset_enabled,
             capacity_window_type=capacity_window_type,
             capacity_window_size=capacity_window_size,
