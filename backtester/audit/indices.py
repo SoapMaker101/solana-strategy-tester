@@ -50,14 +50,14 @@ class AuditIndices:
             
             # Индекс по position_id
             position_id = row.get("position_id")
-            if pd.notna(position_id):
+            if position_id is not None and pd.notna(position_id):
                 position_id_str = str(position_id).strip()
                 if position_id_str:
                     self.events_by_position_id[position_id_str].append(event_dict)
             
             # Индекс по signal_id
             signal_id = row.get("signal_id")
-            if pd.notna(signal_id):
+            if signal_id is not None and pd.notna(signal_id):
                 signal_id_str = str(signal_id).strip()
                 if signal_id_str:
                     self.events_by_signal_id[signal_id_str].append(event_dict)
@@ -65,7 +65,9 @@ class AuditIndices:
             # Индекс по (strategy, signal_id, contract_address)
             strategy = row.get("strategy")
             contract = row.get("contract_address")
-            if pd.notna(strategy) and pd.notna(signal_id) and pd.notna(contract):
+            if (strategy is not None and pd.notna(strategy) and 
+                signal_id is not None and pd.notna(signal_id) and 
+                contract is not None and pd.notna(contract)):
                 key = (str(strategy), str(signal_id), str(contract))
                 self.events_by_strategy_signal_contract[key].append(event_dict)
             
@@ -86,14 +88,14 @@ class AuditIndices:
             
             # Индекс по position_id
             position_id = row.get("position_id")
-            if pd.notna(position_id):
+            if position_id is not None and pd.notna(position_id):
                 position_id_str = str(position_id).strip()
                 if position_id_str:
                     self.executions_by_position_id[position_id_str].append(exec_dict)
             
             # Индекс по signal_id
             signal_id = row.get("signal_id")
-            if pd.notna(signal_id):
+            if signal_id is not None and pd.notna(signal_id):
                 signal_id_str = str(signal_id).strip()
                 if signal_id_str:
                     self.executions_by_signal_id[signal_id_str].append(exec_dict)

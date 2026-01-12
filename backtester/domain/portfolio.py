@@ -1332,10 +1332,13 @@ class PortfolioEngine:
             multiple = self.config.resolved_profit_reset_multiple()
             trigger_basis = self.config.resolved_profit_reset_trigger_basis()
             reset_threshold_meta = 0.0
+            trigger_value_meta = 0.0
             if trigger_basis == "equity_peak":
                 reset_threshold_meta = state.cycle_start_equity * multiple if multiple else 0.0
+                trigger_value_meta = state.equity_peak_in_cycle
             elif trigger_basis == "realized_balance":
                 reset_threshold_meta = state.cycle_start_balance * multiple if multiple else 0.0
+                trigger_value_meta = state.balance
             
             portfolio_events.append(
                 PortfolioEvent.create_portfolio_reset_triggered(
@@ -1354,8 +1357,10 @@ class PortfolioEngine:
                         "cycle_start_balance": state.cycle_start_balance,  # Для realized_balance trigger
                         "current_balance": state.balance,
                         "threshold": reset_threshold_meta,  # Явный threshold для диагностики
+                        "reset_threshold": reset_threshold_meta,  # Дублируем для совместимости
                         "multiple": multiple if multiple else 0.0,  # Явный multiple для диагностики
                         "trigger_basis": trigger_basis,  # Явный trigger_basis (используем resolved метод)
+                        "trigger_value": trigger_value_meta,  # Значение, которое триггерит reset
                     },
                 )
             )

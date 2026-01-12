@@ -190,13 +190,17 @@ def _is_profit_reset_eligible(
         return False, diag_meta
     
     # Guard 3: должны быть реальные открытые позиции (marker не считается)
+    # ИСКЛЮЧЕНИЕ: для realized_balance разрешаем reset даже без открытых позиций,
+    # т.к. проверка происходит ПОСЛЕ EXIT событий, когда прибыль уже реализована в balance
     real_open_positions = [
         p for p in open_positions
         if p.status == "open" and not (p.meta and p.meta.get("marker") is True)
     ]
     diag_meta["real_open_positions_count"] = len(real_open_positions)
     
-    if len(real_open_positions) == 0:
+    # Для equity_peak требуем наличие открытых позиций (reset должен закрывать позиции)
+    # Для realized_balance разрешаем reset даже без открытых позиций (прибыль уже реализована)
+    if trigger_basis == "equity_peak" and len(real_open_positions) == 0:
         diag_meta["eligibility_reason"] = "no_real_open_positions"
         return False, diag_meta
     
