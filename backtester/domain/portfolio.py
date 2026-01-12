@@ -1797,7 +1797,7 @@ class PortfolioEngine:
                         close_reason = "time_stop"
                     elif pos.meta and pos.meta.get("close_reason"):
                         # Используем close_reason из meta (установлен в _process_runner_partial_exits)
-                        close_reason = pos.meta.get("close_reason")
+                        close_reason = pos.meta.get("close_reason") or "ladder_tp"
                     else:
                         # Fallback на ladder_reason
                         close_reason = pos.meta.get("ladder_reason", "ladder_tp") if pos.meta else "ladder_tp"
@@ -2827,12 +2827,12 @@ class PortfolioEngine:
             for pos in state.closed_positions:
                 if pos.position_id in missing_close_events:
                     # Определяем reason для события
-                    close_reason = "time_stop"  # По умолчанию
+                    close_reason: str = "time_stop"  # По умолчанию
                     if pos.meta:
                         if pos.meta.get("closed_by_reset", False):
-                            close_reason = pos.meta.get("reset_reason", "manual_close")
+                            close_reason = pos.meta.get("reset_reason") or "manual_close"
                         elif pos.meta.get("close_reason"):
-                            close_reason = pos.meta.get("close_reason")
+                            close_reason = pos.meta.get("close_reason") or "time_stop"
                         elif pos.meta.get("time_stop_triggered", False):
                             close_reason = "time_stop"
                         elif pos.meta.get("runner_ladder", False):
