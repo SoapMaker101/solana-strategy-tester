@@ -56,7 +56,7 @@ python -m backtester.decision.run_stage_b --stability-csv output/reports/strateg
 
 Stage A/B refuse to run when the audit reports any P0 anomalies.
 
-## Outputs (Runner-only v2.1.9)
+## Outputs (Runner-only v2.2)
 
 All research outputs live in `output/reports/`:
 
@@ -67,20 +67,20 @@ All research outputs live in `output/reports/`:
 - `strategy_selection.csv` (Stage B)
 - `portfolio_summary.csv` / `strategy_summary.csv`
 
-See:
+## Documentation
 
-- `docs/releases/RELEASE_2.1.9.md` — Complete release documentation
-- `docs/architecture/ARCHITECTURE.md` — Domain contracts and event chain
-- `docs/usage/PIPELINE_GUIDE.md` — Configs and Runner ladder fields
-- `docs/releases/RELEASE_NOTES.md` — Release notes and breaking changes
-- `docs/releases/KNOWN_ISSUES_2.1.9.md` — Known issues (deferred to 2.2+)
+📚 **Full documentation index:** [`docs/README.md`](docs/README.md)
 
-## Documentation Structure
+Documentation is organized into:
+- **Architecture** — System design, contracts, event chain
+- **Pipeline** — Backtest → Audit → Stage A → Stage B flow
+- **Policies** — Reset/prune rules, configuration reference
+- **Usage** — User guides, configuration examples, troubleshooting
+- **Testing** — Test baselines, guards, test maps
+- **Releases** — Changelog, release notes, version history
+- **Analysis** ⚠️ — Internal investigation documents (development use only)
 
-Documentation is organized into the following categories:
-
-- **`docs/architecture/`** — Architecture documentation, domain contracts, and event chain specifications
-- **`docs/usage/`** — User guides, configuration examples, and how-to documentation
-- **`docs/releases/`** — Release notes, changelog, implementation status, and known issues
-- **`docs/testing/`** — Testing guides, test maps, and testing-related documentation
-- **`docs/analysis/`** — Internal analysis reports, completion reports, and technical deep-dives
+Quick links:
+- [`docs/pipeline/PIPELINE_GUIDE.md`](docs/pipeline/PIPELINE_GUIDE.md) — Complete pipeline guide
+- [`docs/architecture/ARCHITECTURE.md`](docs/architecture/ARCHITECTURE.md) — System architecture
+- [`docs/releases/RELEASE_2.1.9.md`](docs/releases/RELEASE_2.1.9.md) — v2.1.9 release (frozen baseline)

@@ -244,7 +244,7 @@ class PortfolioReplay:
         stats.final_balance_sol = state.balance
         
         # Сортируем события по timestamp и ordering_rank для обеспечения монотонности
-        # Согласно REPLAY_EVENT_ORDERING.md: сортировка по (timestamp, tie-breaker)
+        # Согласно docs/architecture/EVENT_CHAIN.md: сортировка по (timestamp, tie-breaker)
         portfolio_events = PortfolioReplay._sort_events_by_timestamp_and_type(portfolio_events)
         
         stats.portfolio_events = portfolio_events
@@ -268,7 +268,7 @@ class PortfolioReplay:
         """
         Сортирует события по timestamp и ordering_rank (tie-breaker).
         
-        Порядок tie-breaker (согласно REPLAY_EVENT_ORDERING.md):
+        Порядок tie-breaker (согласно docs/architecture/EVENT_CHAIN.md):
         - POSITION_OPENED -> 10
         - POSITION_PARTIAL_EXIT -> 20
         - POSITION_CLOSED -> 30
