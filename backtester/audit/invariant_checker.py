@@ -179,7 +179,8 @@ class InvariantChecker:
 
         # Find close events using normalized event_type (matches both "position_closed" and "POSITION_CLOSED")
         close_events = events_normalized[events_normalized["_event_type_norm"] == "POSITION_CLOSED"]
-        close_event_ids = set(close_events["_position_id_norm"].dropna())
+        position_id_series = pd.Series(close_events["_position_id_norm"]) if "_position_id_norm" in close_events.columns else pd.Series(dtype=object)
+        close_event_ids = set(position_id_series.dropna())
 
         for _, row in positions_normalized.iterrows():
             if row.get("_status_norm") == "closed":
@@ -189,13 +190,15 @@ class InvariantChecker:
                     position_events = events_normalized[events_normalized["_position_id_norm"] == pid]
                     events_total = len(position_events)
                     close_events_found = len(position_events[position_events["_event_type_norm"] == "POSITION_CLOSED"])
-                    event_types_seen = sorted(position_events["_event_type_norm"].unique().tolist())
+                    event_type_series = pd.Series(position_events["_event_type_norm"]) if "_event_type_norm" in position_events.columns else pd.Series(dtype=object)
+                    event_types_seen = sorted(event_type_series.unique().tolist())
                     
                     # Get timestamps if available
                     first_event_ts = None
                     last_event_ts = None
                     if "timestamp" in position_events.columns and len(position_events) > 0:
-                        timestamps = position_events["timestamp"].dropna()
+                        timestamps_series = pd.Series(position_events["timestamp"])
+                        timestamps = timestamps_series.dropna()
                         if len(timestamps) > 0:
                             first_event_ts = str(timestamps.min())
                             last_event_ts = str(timestamps.max())
@@ -203,7 +206,9 @@ class InvariantChecker:
                     # Check exit_time if available
                     exit_time_info = None
                     if "exit_time" in row.index:
-                        exit_time_info = str(row.get("exit_time")) if pd.notna(row.get("exit_time")) else None
+                        exit_time_val = row.get("exit_time")
+                        if exit_time_val is not None and pd.notna(exit_time_val):
+                            exit_time_info = str(exit_time_val)
                     
                     context = {
                         "position_id": pid,
@@ -226,7 +231,8 @@ class InvariantChecker:
                     )
 
         open_positions = positions_normalized[positions_normalized["_status_norm"] == "open"]
-        open_ids = set(open_positions["_position_id_norm"].dropna())
+        open_position_id_series = pd.Series(open_positions["_position_id_norm"]) if "_position_id_norm" in open_positions.columns else pd.Series(dtype=object)
+        open_ids = set(open_position_id_series.dropna())
         for _, row in close_events.iterrows():
             pid = row.get("_position_id_norm")
             if pid and pid in open_ids:

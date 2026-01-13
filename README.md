@@ -5,7 +5,7 @@ event-driven and uses a single, canonical Runner ladder contract.
 
 **Version 2.2** (CURRENT STABLE) — Stability anchor with typing hardening, zero basedpyright noise, and preserved behavior.
 
-**Previous baseline:** Version 2.1.9 (FROZEN BASELINE) — see `docs/RELEASE_2.1.9.md` for complete release documentation.
+**Previous baseline:** Version 2.1.9 (FROZEN BASELINE) — see `docs/releases/RELEASE_2.1.9.md` for complete release documentation.
 
 ### Current Stable Version
 
@@ -69,8 +69,18 @@ All research outputs live in `output/reports/`:
 
 See:
 
-- `docs/RELEASE_2.1.9.md` — Complete release documentation
-- `docs/ARCHITECTURE.md` — Domain contracts and event chain
-- `docs/PIPELINE_GUIDE.md` — Configs and Runner ladder fields
-- `docs/RELEASE_NOTES.md` — Release notes and breaking changes
-- `docs/KNOWN_ISSUES_2.1.9.md` — Known issues (deferred to 2.2+)
+- `docs/releases/RELEASE_2.1.9.md` — Complete release documentation
+- `docs/architecture/ARCHITECTURE.md` — Domain contracts and event chain
+- `docs/usage/PIPELINE_GUIDE.md` — Configs and Runner ladder fields
+- `docs/releases/RELEASE_NOTES.md` — Release notes and breaking changes
+- `docs/releases/KNOWN_ISSUES_2.1.9.md` — Known issues (deferred to 2.2+)
+
+## Documentation Structure
+
+Documentation is organized into the following categories:
+
+- **`docs/architecture/`** — Architecture documentation, domain contracts, and event chain specifications
+- **`docs/usage/`** — User guides, configuration examples, and how-to documentation
+- **`docs/releases/`** — Release notes, changelog, implementation status, and known issues
+- **`docs/testing/`** — Testing guides, test maps, and testing-related documentation
+- **`docs/analysis/`** — Internal analysis reports, completion reports, and technical deep-dives

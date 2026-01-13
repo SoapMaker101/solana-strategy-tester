@@ -287,12 +287,13 @@ def test_reset_emits_full_event_chain():
     config = PortfolioConfig(
         initial_balance_sol=10.0,
         allocation_mode="dynamic",
-        percent_per_trade=1.0,  # Use full balance per trade to ensure enough equity growth
+        percent_per_trade=0.5,  # 50% per trade to allow two positions to open
         max_exposure=1.0,
         max_open_positions=10,
         fee_model=FeeModel(),
         profit_reset_enabled=True,
         profit_reset_multiple=1.1,  # Reset at 1.1x equity (lower threshold to guarantee reset)
+        profit_reset_trigger_basis="realized_balance",  # Use realized_balance trigger
     )
     
     engine = PortfolioEngine(config)
@@ -304,24 +305,40 @@ def test_reset_emits_full_event_chain():
     # Starting balance: 10.0 SOL
     # Trade 1: 10.0 SOL * (exit/entry - 1) = 10.0 * 1.5 = 15.0 profit -> balance = 25.0 (2.5x, > 1.1x threshold)
     trades = []
-    for i in range(2):  # 2 trades should be enough to trigger reset
-        entry_time = base_time + timedelta(minutes=i * 5)
-        exit_time = entry_time + timedelta(hours=1)
-        
-        trades.append({
-            "signal_id": f"reset_signal_{i+1}",
-            "contract_address": f"TOKEN{i+1}",
-            "strategy": "test_strategy",
-            "timestamp": entry_time,
-            "result": StrategyOutput(
-                entry_time=entry_time,
-                entry_price=1.0,
-                exit_time=exit_time,
-                exit_price=2.5,  # High profit (150%) to trigger reset
-                pnl=1.5,  # 150% profit
-                reason="tp"
-            )
-        })
+    # Первая сделка: закрывается раньше, trigger reset
+    entry_time_1 = base_time
+    exit_time_1 = entry_time_1 + timedelta(hours=1)
+    trades.append({
+        "signal_id": "reset_signal_1",
+        "contract_address": "TOKEN1",
+        "strategy": "test_strategy",
+        "timestamp": entry_time_1,
+        "result": StrategyOutput(
+            entry_time=entry_time_1,
+            entry_price=1.0,
+            exit_time=exit_time_1,
+            exit_price=2.5,  # High profit (150%) to trigger reset
+            pnl=1.5,  # 150% profit
+            reason="tp"
+        )
+    })
+    # Вторая сделка: открывается одновременно, остается открытой для trigger reset
+    entry_time_2 = base_time
+    exit_time_2 = entry_time_1 + timedelta(hours=3)  # Закрывается позже (после reset)
+    trades.append({
+        "signal_id": "reset_signal_2",
+        "contract_address": "TOKEN2",
+        "strategy": "test_strategy",
+        "timestamp": entry_time_2,
+        "result": StrategyOutput(
+            entry_time=entry_time_2,
+            entry_price=1.0,
+            exit_time=exit_time_2,
+            exit_price=1.5,
+            pnl=0.5,
+            reason="tp"
+        )
+    })
     
     result = engine.simulate(trades, strategy_name="test_strategy")
     

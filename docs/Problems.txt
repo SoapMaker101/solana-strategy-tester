@@ -1,0 +1,686 @@
+[{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Unknown | Any | Series\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Unknown | Any | Series\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 52,
+	"startColumn": 13,
+	"endLineNumber": 52,
+	"endColumn": 41,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Series | float | int | Unknown\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Series | float | int | Unknown\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 55,
+	"startColumn": 13,
+	"endLineNumber": 55,
+	"endColumn": 40,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Series | float | int | Unknown\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Series | float | int | Unknown\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 58,
+	"startColumn": 13,
+	"endLineNumber": 58,
+	"endColumn": 44,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Unknown | Any | Series\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Unknown | Any | Series\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 61,
+	"startColumn": 13,
+	"endLineNumber": 61,
+	"endColumn": 36,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Series | float | int | Unknown\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Series | float | int | Unknown\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 77,
+	"startColumn": 25,
+	"endLineNumber": 77,
+	"endColumn": 33,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Any | ndarray[Unknown, dtype[Any]] | Unknown\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Any | ndarray[Unknown, dtype[Any]] | Unknown\" is not assignable to type \"Hashable\"\n    \"ndarray[Unknown, dtype[Any]]\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 85,
+	"startColumn": 21,
+	"endLineNumber": 85,
+	"endColumn": 29,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Series | float | int | Unknown\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Series | float | int | Unknown\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 159,
+	"startColumn": 13,
+	"endLineNumber": 159,
+	"endColumn": 36,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Series | bool | Unknown\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Series | bool | Unknown\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 160,
+	"startColumn": 13,
+	"endLineNumber": 160,
+	"endColumn": 30,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Series | bool | Unknown\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Series | bool | Unknown\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 161,
+	"startColumn": 13,
+	"endLineNumber": 161,
+	"endColumn": 30,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Unknown | Any | Series\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Unknown | Any | Series\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 165,
+	"startColumn": 13,
+	"endLineNumber": 165,
+	"endColumn": 41,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Series | float | int | Unknown\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Series | float | int | Unknown\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 168,
+	"startColumn": 13,
+	"endLineNumber": 168,
+	"endColumn": 40,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Series | float | int | Unknown\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Series | float | int | Unknown\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 171,
+	"startColumn": 13,
+	"endLineNumber": 171,
+	"endColumn": 44,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Unknown | Any | Series\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Unknown | Any | Series\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 174,
+	"startColumn": 13,
+	"endLineNumber": 174,
+	"endColumn": 36,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Series | float | int | Unknown\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Series | float | int | Unknown\" is not assignable to type \"Hashable\"\n    \"Series\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 196,
+	"startColumn": 25,
+	"endLineNumber": 196,
+	"endColumn": 33,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/decision/selection_aggregator.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Any | ndarray[Unknown, dtype[Any]] | Unknown\" cannot be assigned to parameter \"value\" of type \"Hashable\" in function \"__setitem__\"\n  Type \"Any | ndarray[Unknown, dtype[Any]] | Unknown\" is not assignable to type \"Hashable\"\n    \"ndarray[Unknown, dtype[Any]]\" is incompatible with protocol \"Hashable\"\n      \"__hash__\" is an incompatible type\n      \"__hash__\" is not defined as a ClassVar in protocol\n        Type \"None\" is not assignable to type \"() -> int\"",
+	"source": "basedpyright",
+	"startLineNumber": 204,
+	"startColumn": 21,
+	"endLineNumber": 204,
+	"endColumn": 29,
+	"modelVersionId": 1
+}]
+[{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/domain/portfolio_replay.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportOperatorIssue",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportOperatorIssue"
+		}
+	},
+	"severity": 8,
+	"message": "Operator \"*\" not supported for types \"float\" and \"float | None\"\n  Operator \"*\" not supported for types \"float\" and \"None\"",
+	"source": "basedpyright",
+	"startLineNumber": 988,
+	"startColumn": 21,
+	"endLineNumber": 988,
+	"endColumn": 87,
+	"modelVersionId": 1
+}]
+[{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/check_timeout_exit_price.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportGeneralTypeIssues",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportGeneralTypeIssues"
+		}
+	},
+	"severity": 8,
+	"message": "Invalid conditional operand of type \"Unknown | bool | NDFrame\"\n  Method __bool__ for type \"NDFrame\" returns type \"NoReturn\" rather than \"bool\"",
+	"source": "basedpyright",
+	"startLineNumber": 243,
+	"startColumn": 12,
+	"endLineNumber": 243,
+	"endColumn": 111,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/check_timeout_exit_price.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportCallIssue",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportCallIssue"
+		}
+	},
+	"severity": 8,
+	"message": "No overloads for \"to_datetime\" match the provided arguments",
+	"source": "basedpyright",
+	"startLineNumber": 248,
+	"startColumn": 28,
+	"endLineNumber": 248,
+	"endColumn": 67,
+	"relatedInformation": [
+		{
+			"startLineNumber": 662,
+			"startColumn": 5,
+			"endLineNumber": 662,
+			"endColumn": 16,
+			"message": "Overload 3 is the closest match",
+			"resource": "/c:/Прочее/Крипта/Тестер соланы/.venv/Lib/site-packages/pandas/core/tools/datetimes.py"
+		}
+	],
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/check_timeout_exit_price.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Unknown | Any | None\" cannot be assigned to parameter \"arg\" of type \"ArrayLike | list[Unknown] | tuple[Unknown, ...] | Index\" in function \"to_datetime\"\n  Type \"Unknown | Any | None\" is not assignable to type \"ArrayLike | list[Unknown] | tuple[Unknown, ...] | Index\"\n    Type \"None\" is not assignable to type \"ArrayLike | list[Unknown] | tuple[Unknown, ...] | Index\"\n      \"None\" is not assignable to \"list[Unknown]\"\n      \"None\" is not assignable to \"tuple[Unknown, ...]\"\n      \"None\" is not assignable to \"Index\"\n      \"None\" is not assignable to \"ExtensionArray\"\n      \"None\" is not assignable to \"ndarray[Unknown, dtype[Any]]\"",
+	"source": "basedpyright",
+	"startLineNumber": 248,
+	"startColumn": 43,
+	"endLineNumber": 248,
+	"endColumn": 56,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/check_timeout_exit_price.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Unknown | Any | None\" cannot be assigned to parameter \"x\" of type \"ConvertibleToFloat\" in function \"__new__\"\n  Type \"Unknown | Any | None\" is not assignable to type \"ConvertibleToFloat\"\n    Type \"None\" is not assignable to type \"ConvertibleToFloat\"\n      \"None\" is not assignable to \"str\"\n      \"None\" is incompatible with protocol \"Buffer\"\n        \"__buffer__\" is not present\n      \"None\" is incompatible with protocol \"SupportsFloat\"\n        \"__float__\" is not present\n      \"None\" is incompatible with protocol \"SupportsIndex\"\n  ...",
+	"source": "basedpyright",
+	"startLineNumber": 260,
+	"startColumn": 41,
+	"endLineNumber": 260,
+	"endColumn": 62,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/check_timeout_exit_price.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportArgumentType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportArgumentType"
+		}
+	},
+	"severity": 8,
+	"message": "Argument of type \"Unknown | Any | None\" cannot be assigned to parameter \"x\" of type \"ConvertibleToFloat\" in function \"__new__\"\n  Type \"Unknown | Any | None\" is not assignable to type \"ConvertibleToFloat\"\n    Type \"None\" is not assignable to type \"ConvertibleToFloat\"\n      \"None\" is not assignable to \"str\"\n      \"None\" is incompatible with protocol \"Buffer\"\n        \"__buffer__\" is not present\n      \"None\" is incompatible with protocol \"SupportsFloat\"\n        \"__float__\" is not present\n      \"None\" is incompatible with protocol \"SupportsIndex\"",
+	"source": "basedpyright",
+	"startLineNumber": 260,
+	"startColumn": 41,
+	"endLineNumber": 260,
+	"endColumn": 62,
+	"modelVersionId": 1
+}]
+[{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/explain_run.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportAttributeAccessIssue",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportAttributeAccessIssue"
+		}
+	},
+	"severity": 8,
+	"message": "Cannot access attribute \"apply\" for class \"ndarray[Unknown, dtype[Any]]\"\n  Attribute \"apply\" is unknown",
+	"source": "basedpyright",
+	"startLineNumber": 118,
+	"startColumn": 53,
+	"endLineNumber": 118,
+	"endColumn": 58,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/explain_run.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportAttributeAccessIssue",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportAttributeAccessIssue"
+		}
+	},
+	"severity": 8,
+	"message": "Cannot access attribute \"apply\" for class \"ndarray[Unknown, dtype[Any]]\"\n  Attribute \"apply\" is unknown",
+	"source": "basedpyright",
+	"startLineNumber": 129,
+	"startColumn": 51,
+	"endLineNumber": 129,
+	"endColumn": 56,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/explain_run.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportReturnType",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportReturnType"
+		}
+	},
+	"severity": 8,
+	"message": "Type \"DataFrame | Series | Unknown\" is not assignable to return type \"DataFrame\"\n  Type \"DataFrame | Series | Unknown\" is not assignable to type \"DataFrame\"\n    \"Series\" is not assignable to \"DataFrame\"",
+	"source": "basedpyright",
+	"startLineNumber": 133,
+	"startColumn": 12,
+	"endLineNumber": 133,
+	"endColumn": 20,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/explain_run.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportAttributeAccessIssue",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportAttributeAccessIssue"
+		}
+	},
+	"severity": 8,
+	"message": "Cannot access attribute \"isna\" for class \"ndarray[Unknown, dtype[Any]]\"\n  Attribute \"isna\" is unknown",
+	"source": "basedpyright",
+	"startLineNumber": 213,
+	"startColumn": 61,
+	"endLineNumber": 213,
+	"endColumn": 65,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/explain_run.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportAttributeAccessIssue",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportAttributeAccessIssue"
+		}
+	},
+	"severity": 8,
+	"message": "Cannot access attribute \"isna\" for class \"ndarray[Unknown, dtype[Any]]\"\n  Attribute \"isna\" is unknown",
+	"source": "basedpyright",
+	"startLineNumber": 215,
+	"startColumn": 51,
+	"endLineNumber": 215,
+	"endColumn": 55,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/explain_run.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportAttributeAccessIssue",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportAttributeAccessIssue"
+		}
+	},
+	"severity": 8,
+	"message": "Cannot access attribute \"iterrows\" for class \"ndarray[Unknown, dtype[Any]]\"\n  Attribute \"iterrows\" is unknown",
+	"source": "basedpyright",
+	"startLineNumber": 220,
+	"startColumn": 38,
+	"endLineNumber": 220,
+	"endColumn": 46,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/explain_run.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportAttributeAccessIssue",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportAttributeAccessIssue"
+		}
+	},
+	"severity": 8,
+	"message": "Cannot access attribute \"isna\" for class \"ndarray[Unknown, dtype[Any]]\"\n  Attribute \"isna\" is unknown",
+	"source": "basedpyright",
+	"startLineNumber": 236,
+	"startColumn": 55,
+	"endLineNumber": 236,
+	"endColumn": 59,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/explain_run.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportAttributeAccessIssue",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportAttributeAccessIssue"
+		}
+	},
+	"severity": 8,
+	"message": "Cannot access attribute \"isna\" for class \"ndarray[Unknown, dtype[Any]]\"\n  Attribute \"isna\" is unknown",
+	"source": "basedpyright",
+	"startLineNumber": 238,
+	"startColumn": 46,
+	"endLineNumber": 238,
+	"endColumn": 50,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/explain_run.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportAttributeAccessIssue",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportAttributeAccessIssue"
+		}
+	},
+	"severity": 8,
+	"message": "Cannot access attribute \"iterrows\" for class \"ndarray[Unknown, dtype[Any]]\"\n  Attribute \"iterrows\" is unknown",
+	"source": "basedpyright",
+	"startLineNumber": 243,
+	"startColumn": 36,
+	"endLineNumber": 243,
+	"endColumn": 44,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/explain_run.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportGeneralTypeIssues",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportGeneralTypeIssues"
+		}
+	},
+	"severity": 8,
+	"message": "Invalid conditional operand of type \"Series | bool | Unknown\"\n  Method __bool__ for type \"Series\" returns type \"NoReturn\" rather than \"bool\"",
+	"source": "basedpyright",
+	"startLineNumber": 272,
+	"startColumn": 8,
+	"endLineNumber": 272,
+	"endColumn": 26,
+	"modelVersionId": 1
+},{
+	"resource": "/c:/Прочее/Крипта/Тестер соланы/backtester/tools/explain_run.py",
+	"owner": "basedpyright3",
+	"code": {
+		"value": "reportGeneralTypeIssues",
+		"target": {
+			"$mid": 1,
+			"path": "/v1.32.1/configuration/config-files/",
+			"scheme": "https",
+			"authority": "docs.basedpyright.com",
+			"fragment": "reportGeneralTypeIssues"
+		}
+	},
+	"severity": 8,
+	"message": "Invalid conditional operand of type \"bool | Unknown | NDFrame\"\n  Method __bool__ for type \"NDFrame\" returns type \"NoReturn\" rather than \"bool\"",
+	"source": "basedpyright",
+	"startLineNumber": 426,
+	"startColumn": 20,
+	"endLineNumber": 426,
+	"endColumn": 32,
+	"modelVersionId": 1
+}]

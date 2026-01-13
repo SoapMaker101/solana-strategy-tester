@@ -14,8 +14,9 @@ data:
     on_429: "wait"
 
 portfolio:
+  profit_reset_trigger_basis: "realized_balance"
   initial_balance_sol: 10.0
-  allocation_mode: "fixed"
+  allocation_mode: "fixed_then_dynamic_after_profit_reset"
   percent_per_trade: 0.01
   max_exposure: 0.95
   max_open_positions: 100
